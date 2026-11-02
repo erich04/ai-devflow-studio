@@ -17,6 +17,7 @@ export function addChange(f: BuildTestFacts, run: CodingAgentRun, phase: 'initia
   const request: CodingPermissionRequest = { id: `request-${number}`, codingRunId: run.id, runId: f.run.id, nodeId: f.buildNode.id, origin: 'coding_executor', permission: 'patch', title: 'Apply change', changeSetId: id, changeSetDigest: DIGEST, status: 'pending', risk: 'warn', reasons: [], requestedAt: createdAt, expiresAt: '2026-11-02T12:15:00.000Z' }
   f.codingPermissionRequests.push(request); run.status = 'waiting_permission'; run.changeSetId = id
   f.history!.changeSets.push({ id, codingRunId: run.id, phase, digest: DIGEST, verified: true, createdAt, expiresAt: request.expiresAt, changedPaths: ['src/search.ts'], view: { files: [{ path: 'src/search.ts', additions: 1, deletions: 1, rows: [{ kind: 'del', oldLine: 1, text: 'const search = false' }, { kind: 'add', newLine: 1, text: 'const search = true' }] }], additions: 1, deletions: 1 } })
+  f.preview = { id, codingRunId: run.id, changeSetDigest: DIGEST, expiresAt: request.expiresAt }
   return request
 }
 export function approve(f: BuildTestFacts, request: CodingPermissionRequest) { request.status = 'approved'; f.codingPermissionDecisions.push({ id: `decision-${request.id}`, codingRunId: request.codingRunId, requestId: request.id, decision: 'approved', decidedBy: 'user', comment: '', decidedAt: NOW }) }

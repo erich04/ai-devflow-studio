@@ -66,4 +66,27 @@ describe('build/test decision lifecycle', () => {
     const v = project({ facts: f, stage: 'build', reading: p.changeSetId }); expect(v.bar.buttons.map(b => b.id)).toEqual(['returnToCurrent']); expect(v.margin.cards.every(c => !c.actionable)).toBe(true)
     approve(f, p); r.status = 'testing'; expect(project({ facts: f, stage: 'build' }).bar.buttons).toEqual([])
   })
+  it('waits for matching history and preview instead of approving an unseen successor', () => {
+    const f = buildTestFacts(), r = addCoding(f), p = addChange(f, r)
+    p.status = 'superseded'; addChange(f, r); f.history!.changeSets.pop()
+    const stale = project({ facts: f, stage: 'build' })
+    expect(stale.bar.buttons.filter(b => ['approveChange', 'rejectChange', 'rerunSelfCheck'].includes(b.id)).every(b => !b.enabled)).toBe(true)
+    expect(stale.bar.list.actionable).toBe(false)
+    expect(stale.identity.request?.id).toBe(p.id)
+    const fresh = buildTestFacts(), freshRun = addCoding(fresh); addChange(fresh, freshRun)
+    fresh.preview = null
+    expect(button(project({ facts: fresh, stage: 'build' }), 'approveChange')?.enabled).toBe(false)
+  })
+  it('does not expose a revision list for passed evidence or claim a deleted workspace is retained', () => {
+    const f = buildTestFacts(), r = addCoding(f), p = addChange(f, r); approve(f, p); r.status = 'completed'; const e = addReport(f, r); f.freshness.states = { [e.id]: 'current' }
+    const passed = project({ facts: f, stage: 'test' })
+    expect(passed.bar.list.toggleEnabled).toBe(false); expect(passed.bar.list.toggleLabel).toBe('')
+    e.stdout = '# tests 2\n# pass 1\n# fail 0\n# skipped 1'
+    expect(project({ facts: f, stage: 'test' }).material.reports[0]!.result).toBe('1 条测试通过，另 1 条未计为通过')
+    const stopped = buildTestFacts(), cancelled = addCoding(stopped, { status: 'cancelled', managedWorkspaceId: 'ws' })
+    stopped.managedCodingWorkspaces = [{ id: 'ws', projectId: f.run.projectId, codingRunId: cancelled.id, sourcePath: '/source', worktreePath: '/workspace', branchName: 'work', baseBranch: 'main', createdAt: f.now, cleanupStatus: 'deleted', deletedAt: f.now }]
+    const copy = project({ facts: stopped, stage: 'build' }).bar.notes.map(n => n.text).join()
+    expect(copy).toContain('已清理'); expect(copy).not.toContain('保留')
+  })
+
 })

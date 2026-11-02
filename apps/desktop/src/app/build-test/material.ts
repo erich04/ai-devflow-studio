@@ -1,3 +1,4 @@
+import type { CodingPermissionRequest } from '@ai-devflow/shared'
 import type { BlockKey } from '../gate-decision/material'
 import type { BarView, GateDecisionView } from '../gate-decision/projection'
 import { countsText, formatDecisionTime, versionSpacing } from './copy'
@@ -6,7 +7,7 @@ import { buildTestReports, type TestReportView } from './reports'
 import { buildChangeVersions, shownChangeVersion, type ChangeVersion } from './versions'
 export type DiffRowView = { key: BlockKey; kind: 'del' | 'add' | 'gap' | 'note'; oldLine?: number; newLine?: number; text: string; isNew?: true; aria: string }
 export type BuildTestMaterialView = { kind: 'progress' | 'change' | 'report'; header: string; recordedAt?: string; subline?: string; banner?: string; progress?: { intro: string; steps: Array<{ key: BlockKey; text: string; state: 'done' | 'current' | 'paused' }> }; change?: { files: Array<{ path: string; counts: string; rows: DiffRowView[]; note?: string }>; unverified?: string; sameAsNote?: string }; placeholder?: string; reports: TestReportView[]; bars: BarView[]; newBlocks: BlockKey[]; list: Array<{ id: string; text: string; current: boolean }>; signature: string }
-export type BuildTestDecisionView = Omit<GateDecisionView, 'material'> & { material: BuildTestMaterialView }
+export type BuildTestDecisionView = Omit<GateDecisionView, 'material'> & { material: BuildTestMaterialView; identity: { runId: string; request?: CodingPermissionRequest; evidence?: { id: string; runUpdatedAt: string } } }
 const phases: Record<string, string> = { analysis: '读方案和相关代码', initial: '写改动', revision: '按清单修改', change_review: 'AI 自检改动', repair: '生成修复' }
 export function progressText(status: string, phase?: string): string {
   if (['queued', 'preparing'].includes(status)) return '准备受管工作区'

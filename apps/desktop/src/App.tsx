@@ -778,7 +778,7 @@ export function App() {
   const buildTest = useBuildTestController({ api: desktopApi, requestedBy: currentUser?.id, otherWriteBusy: Boolean(pendingInspectorAction || isStartingCodingAgent || isRunningTests || isRunningAgentReview), runtimeBudgetApprovalId,
     applyState: applyLocalExecutionState, reloadReadiness: codingRuntime.refresh, reloadFreshness: testEvidenceFreshness.retry, selectNode: setSelectedNodeId,
     base: selectedRun && buildNode && testNode ? { run: selectedRun, buildNode, testNode, codingRuns, codingEvents, codingPermissionRequests, codingPermissionDecisions, managedCodingWorkspaces, codingDiffArtifacts, testEvidence: scopedTestEvidence,
-      events: scopedEvents, members: teamMembers, freshness: testEvidenceFreshness, testCommand: selectedLocalProject?.testCommand, testBlockedReason: buildTestRunReadiness({ project: selectedLocalProject, run: selectedRun }).blockedReason, readiness: codingRuntime.readiness, readinessError: codingRuntime.error, canDecide: canDecideCodingPermission(desktopPairing, selectedRun.projectId),
+      events: scopedEvents, members: teamMembers, preview: codingChangeSetPreview, freshness: testEvidenceFreshness, testCommand: selectedLocalProject?.testCommand, testBlockedReason: buildTestRunReadiness({ project: selectedLocalProject, run: selectedRun }).blockedReason, readiness: codingRuntime.readiness, readinessError: codingRuntime.error, canDecide: canDecideCodingPermission(desktopPairing, selectedRun.projectId),
       designLabel: `方案 v${numberDesignVersions(selectedRun.id, artifacts).size || 1}`, now: codingRuntimeNow, observedAt: selectedRun.updatedAt,
     } : undefined,
   })

@@ -19,12 +19,14 @@ export function useBuildTestController(input: { api: DevFlowDesktopApi | null; b
   const [costsError, setCostsError] = useState<string>()
   const [writes, setWrites] = useState<BuildTestWrite[]>([])
   const pending = useRef<BuildTestWrite[]>([])
-  const [stopping, setStopping] = useState(false)
+  const [stoppingRunId, setStoppingRunId] = useState<string>()
   const stopLock = useRef(false)
-  const [writeResult, setWriteResult] = useState<BuildTestFacts['writeResult']>()
+  const [notice, setNotice] = useState<{ runId: string; value: BuildTestFacts['writeResult'] }>()
   const [budgetContinuations, setBudgetContinuations] = useState<BuildTestFacts['budgetContinuations']>([])
   const [refresh, setRefresh] = useState(0)
   const runId = input.base?.run.id, projectId = input.base?.run.projectId
+  const writeResult = notice?.runId === runId ? notice?.value : undefined
+  const setWriteResult = (value: BuildTestFacts['writeResult']) => setNotice(value && runId ? { runId, value } : undefined)
   const actualStage = input.base?.run.nodes.find(n => n.id === input.base?.run.currentNodeId)?.stage
   const key = input.base ? input.base.codingPermissionRequests.filter(p => p.runId === runId).map(p => `${p.id}:${p.status}`).join('|') + input.base.codingRuns.filter(r => r.runId === runId).map(r => `${r.id}:${r.status}:${r.revisionInFlight?.previousRequestId ?? ''}`).join('|') : ''
   useEffect(() => {
@@ -54,31 +56,40 @@ export function useBuildTestController(input: { api: DevFlowDesktopApi | null; b
     return () => { active = false; dispose?.() }
   }, [input.api])
   useEffect(() => setWriteResult(undefined), [key, runId])
-  const facts: BuildTestFacts | undefined = input.base ? { ...input.base, history: history?.runId === runId ? history : undefined, historyError, costs: costs && costs.projectId === projectId ? costs.value : undefined, costsError, writes, stopping, writeResult, budgetContinuations } : undefined
+  const facts: BuildTestFacts | undefined = input.base ? { ...input.base, history: history?.runId === runId ? history : undefined, historyError, costs: costs && costs.projectId === projectId ? costs.value : undefined, costsError, writes: writes.filter(w => w.runId === runId), stopping: stoppingRunId === runId, writeResult, budgetContinuations } : undefined
   const current = useRef({ ...input, facts }); current.current = { ...input, facts }
   const reload = useCallback(() => { setRefresh(n => n + 1); current.current.reloadReadiness(); current.current.reloadFreshness() }, [])
   async function write(action: string, target: string, claim: BuildTestWrite['claim'], execute: (api: DevFlowDesktopApi, f: BuildTestFacts) => Promise<void>, allowOther = true) {
     const { api, facts: f, otherWriteBusy } = current.current
     if (!api || !f) { setWriteResult({ tone: 'error', text: '请在桌面应用中操作。' }); return false }
     if (pending.current.some(w => w.target === target || !claimed(w, f)) || (!allowOther && otherWriteBusy)) { setWriteResult({ tone: 'warn', text: '另一个操作正在进行，请稍候。' }); return false }
-    const token: BuildTestWrite = { id: crypto.randomUUID(), action, target, startedAt: new Date().toISOString(), ...(claim ? { claim } : {}) }
+    const token: BuildTestWrite = { id: crypto.randomUUID(), runId: f.run.id, action, target, startedAt: new Date().toISOString(), ...(claim ? { claim } : {}) }
     pending.current = [...pending.current, token]; setWrites(pending.current); setWriteResult(undefined)
     try { await execute(api, f); return true }
-    catch (error) { setWriteResult(describeBuildTestError(error, action)); return false }
+    catch (error) { if (current.current.facts?.run.id === f.run.id) setWriteResult(describeBuildTestError(error, action)); return false }
     finally { pending.current = pending.current.filter(w => w.id !== token.id); setWrites(pending.current); reload() }
   }
   async function sync(api: DevFlowDesktopApi) { current.current.applyState(await api.loadState()) }
   function expected(p: CodingPermissionRequest) { return { runId: p.runId, nodeId: p.nodeId, expiresAt: p.expiresAt, ...(p.changeSetId ? { changeSetId: p.changeSetId, changeSetDigest: p.changeSetDigest! } : {}), ...(p.diffArtifactId ? { diffArtifactId: p.diffArtifactId, diffSourceDigest: p.diffSourceDigest! } : {}) } }
   async function permission(p: CodingPermissionRequest, decision: 'approved' | 'rejected', scope: 'once' | 'session' = 'once', reason = '') {
     return write(decision === 'approved' ? '批准请求' : '拒绝请求', p.id, { kind: 'permission', requestId: p.id }, async (api, f) => {
-      if (!f.canDecide || !current.current.requestedBy) throw new Error('请先完成当前项目的团队配对。')
+      if (p.runId !== f.run.id || !f.canDecide || !current.current.requestedBy) throw new Error('请先完成当前项目的团队配对。')
       await api.replyCodingPermission({ codingRunId: p.codingRunId, requestId: p.id, decidedBy: current.current.requestedBy, decision, comment: reason, scope, expected: expected(p) }); await sync(api)
     }, true)
   }
   async function dispatch(id: GateButtonId, view: BuildTestDecisionView, extra?: { reason?: string }) {
     const f = current.current.facts
-    if (!f || !view.bar.buttons.some(b => b.id === id && b.enabled)) return false
+    if (!f || view.identity.runId !== f.run.id || !view.bar.buttons.some(b => b.id === id && b.enabled)) return false
     const run = effectiveCodingRun(f), request = f.codingPermissionRequests.find(p => p.codingRunId === run?.id && p.status === 'pending')
+    if (['approveChange', 'approveWithout', 'approveRepair', 'rejectChange', 'rejectRepair', 'reviseChange', 'reviseRepair', 'rerunSelfCheck'].includes(id)) {
+      const shown = view.identity.request
+      if (!request || !shown || shown.id !== request.id || shown.codingRunId !== request.codingRunId || JSON.stringify(expected(shown)) !== JSON.stringify(expected(request)) || request.status !== 'pending' || Date.parse(request.expiresAt) <= Date.parse(f.now) || run?.revisionInFlight) {
+        setWriteResult({ tone: 'warn', text: '改动已经更新，请读取当前版本后再决定。' }); reload(); return false
+      }
+    }
+    if (id.startsWith('approve') && request?.changeSetId && (f.preview?.id !== request.changeSetId || f.preview?.changeSetDigest !== request.changeSetDigest || !f.history?.changeSets.some(c => c.id === request.changeSetId && c.digest === request.changeSetDigest && c.verified))) {
+      setWriteResult({ tone: 'warn', text: '当前改动内容还没核对完成，请稍候。' }); return false
+    }
     if (['approveChange', 'approveWithout', 'approveRepair', 'rejectChange', 'rejectRepair'].includes(id) && request) return permission(request, id.startsWith('reject') ? 'rejected' : 'approved', 'once', extra?.reason ?? (view.bar.list.count ? `修订清单中 ${view.bar.list.count} 项未提交，直接批准当前改动。` : ''))
     if (id === 'startCoding' || id === 'redevelop' || id === 'refix') return write(id === 'refix' ? '重新修复' : id === 'redevelop' ? '重新开发' : '开始开发', `start:${f.run.id}`, { kind: 'start', existing: taskCodingRuns(f).map(r => r.id) }, async (api, latest) => {
       const previous = effectiveCodingRun(latest), failed = buildTestReports(latest).filter(r => r.report.codingRunId === previous?.id && r.report.evidence.status !== 'passed').at(-1)
@@ -96,7 +107,7 @@ export function useBuildTestController(input: { api: DevFlowDesktopApi | null; b
     if (id === 'runTests' || id === 'rerunTests') return write(id, `tests:${f.run.id}`, undefined, async api => { if (validateTestCommandSafety(f.testCommand ?? '').level === 'blocked') throw new Error('[test_command_unsafe] Saved test command is blocked'); const result = await api.runProjectTests({ projectId: f.run.projectId, runId: f.run.id, nodeId: f.testNode.id, completeOnPass: false }); current.current.applyState(result.state) })
     if (id === 'confirmEvidence') return write('确认测试证据', `confirm:${f.run.id}`, undefined, async api => {
       const report = buildTestReports(f).at(-1)
-      if (!api.confirmTestEvidence || !report) throw new Error('请重新读取测试证据。')
+      if (!api.confirmTestEvidence || !report || view.identity.evidence?.id !== report.id || view.identity.evidence.runUpdatedAt !== f.run.updatedAt) throw new Error('请重新读取测试证据。')
       const result = await api.confirmTestEvidence({ runId: f.run.id, nodeId: f.testNode.id, evidenceId: report.id, expectedRunUpdatedAt: f.run.updatedAt }); current.current.applyState(result.state)
       if (current.current.facts?.run.id === f.run.id) current.current.selectNode(result.run.currentNodeId)
     })
@@ -105,14 +116,14 @@ export function useBuildTestController(input: { api: DevFlowDesktopApi | null; b
   async function stop(target: 'coding' | 'revision' | 'review') {
     const { api, facts: f } = current.current, run = f && effectiveCodingRun(f)
     if (!api || !f || !run || stopLock.current) return
-    stopLock.current = true; setStopping(true)
+    stopLock.current = true; setStoppingRunId(f.run.id)
     try {
       if (target === 'revision') { if (!api.cancelCodingRevision) throw new Error('当前桌面版本不支持停止修订。'); await api.cancelCodingRevision({ codingRunId: run.id }) }
       else if (target === 'review') { const review = f.history?.reviews.find(r => r.codingRunId === run.id && r.status === 'running'); if (review && api.cancelCodingChangeReview) await api.cancelCodingChangeReview({ codingRunId: run.id, reviewId: review.id }) }
       else await api.cancelCodingAgentRun({ codingRunId: run.id })
       await sync(api)
-    } catch (error) { setWriteResult(describeBuildTestError(error, target === 'review' ? '停止自检' : '停止')) }
-    finally { stopLock.current = false; setStopping(false); reload() }
+    } catch (error) { if (current.current.facts?.run.id === f.run.id) setWriteResult(describeBuildTestError(error, target === 'review' ? '停止自检' : '停止')) }
+    finally { stopLock.current = false; setStoppingRunId(undefined); reload() }
   }
   return { facts, dispatch, permission, stop, reload,
     renew: (p: CodingPermissionRequest) => write('重新请求审批', p.id, undefined, async api => { await api.renewCodingPermission({ requestId: p.id, codingRunId: p.codingRunId, decidedBy: current.current.requestedBy ?? '' }); await sync(api) }, true),

@@ -1,10 +1,11 @@
-import { isActiveCodingAgentRunStatus, type AgentEvent, type TeamMember, type CodingAgentRun, type CodingRuntimeReadiness, type LocalExecutionState, type WorkflowNode, type WorkflowRun } from '@ai-devflow/shared'
+import { isActiveCodingAgentRunStatus, type CodingChangeSetPreview, type AgentEvent, type TeamMember, type CodingAgentRun, type CodingRuntimeReadiness, type LocalExecutionState, type WorkflowNode, type WorkflowRun } from '@ai-devflow/shared'
 import type { CodingActionCosts, CodingChangeHistory } from '../../../electron/build-test-contract'
 import type { StoredRevisionList } from '../gate-decision/revision-list'
-export type BuildTestWrite = { id: string; action: string; target: string; startedAt: string; claim?: { kind: 'start'; existing: string[] } | { kind: 'permission'; requestId: string } | { kind: 'revision'; codingRunId: string; requestId: string } | { kind: 'question'; codingRunId: string; requestId: string } }
+export type BuildTestWrite = { id: string; runId?: string; action: string; target: string; startedAt: string; claim?: { kind: 'start'; existing: string[] } | { kind: 'permission'; requestId: string } | { kind: 'revision'; codingRunId: string; requestId: string } | { kind: 'question'; codingRunId: string; requestId: string } }
 export type BuildTestFacts = Pick<LocalExecutionState, 'codingRuns' | 'codingEvents' | 'codingPermissionRequests' | 'codingPermissionDecisions' | 'managedCodingWorkspaces' | 'codingDiffArtifacts' | 'testEvidence'> & {
   events?: readonly AgentEvent[] | undefined; members?: readonly TeamMember[] | undefined
   run: WorkflowRun; buildNode: WorkflowNode; testNode: WorkflowNode
+  preview?: Pick<CodingChangeSetPreview, 'id' | 'codingRunId' | 'changeSetDigest' | 'expiresAt'> | null | undefined
   history?: CodingChangeHistory | undefined; historyError?: string | undefined
   freshness: { status: 'loading' | 'loaded' | 'failed'; states: Readonly<Record<string, 'current' | 'stale' | 'unavailable' | 'unrecorded'>> }
   testCommand?: string | undefined

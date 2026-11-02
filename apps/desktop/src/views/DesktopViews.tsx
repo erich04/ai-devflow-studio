@@ -1,3 +1,4 @@
+import { buildMaterial } from '../app/build-test/material'
 import type { BuildTestChatPage } from '../app/build-test/chat'
 import { BuildTestDecisionScope } from '../components/build-test/BuildTestDecisionScope'
 import { BuildTestWorkspace } from '../components/build-test/BuildTestWorkspace'
@@ -1777,7 +1778,15 @@ export function Inspector({
   if (buildTest?.facts && selectedRun && revisionLists && (selectedNode.stage === 'build' || selectedNode.stage === 'test') && resolveBuildTestPage(buildTest.facts, selectedNode.stage) !== 'notReached') {
     const currentWork = viewModel.activeTab.tabId === CURRENT_WORK_TAB
     const showCurrent = () => setDocumentId('')
-    const openVersion = (id: string) => { setDocumentId(id); setRequestedTab(CURRENT_WORK_TAB) }
+    const openVersion = (id: string) => {
+      const current = buildMaterial(buildTest.facts!, selectedNode.stage as 'build' | 'test').material
+      const item = current.list.find(item => item.id === id)
+      setDocumentId(item?.current ? '' : id); setRequestedTab(CURRENT_WORK_TAB)
+      if (item?.current) requestAnimationFrame(() => {
+        const material = tabPanelRef.current?.querySelector<HTMLElement>('[data-testid="build-test-material"]')
+        material?.scrollIntoView({ block: 'start' }); material?.animate([{ opacity: .55 }, { opacity: 1 }], { duration: 650 })
+      })
+    }
     return <aside className="inspector inspector--gate-page" data-testid="node-inspector">
       <BuildTestDecisionScope key={`${selectedRun.id}:${selectedNode.stage}`} onChatPage={onBuildTestChatPage} revisionFocus={revisionFocus} focusMessage={onFocusChatMessage} onDiscuss={onDiscussMaterial} controller={buildTest} stage={selectedNode.stage} reading={documentId || undefined} revisionLists={revisionLists}
         showCurrent={showCurrent} showCurrentWork={() => setRequestedTab(CURRENT_WORK_TAB)} openVersion={openVersion} openReport={() => setRequestedTab(MATERIALS_TAB)} openSettings={target => onOpenSettings(target, readingPosition())}>

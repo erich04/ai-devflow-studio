@@ -18,3 +18,8 @@ it('uses the last complete TAP/Node totals and retains Node failure names and As
   expect(parseTestOutput(output, 'failed')).toMatchObject({ counts: { total: 3, passed: 2, failed: 1 }, failures: ['verifies the resulting tree'] })
   expect(parseTestOutput(output, 'failed').keyLines.join('\n')).toContain('AssertionError: wrong tree')
 })
+
+it('deduplicates Node failure details and excludes its summary heading', () => {
+  const output = '✖ 消息符合保存的测试要求 (18.728ms)\nℹ tests 1\nℹ pass 0\nℹ fail 1\n✖ failing tests:\ntest at test.js:1:117\n✖ 消息符合保存的测试要求 (18.728ms)\nAssertionError: expected fixed'
+  expect(parseTestOutput(output, 'failed').failures).toEqual(['消息符合保存的测试要求'])
+})

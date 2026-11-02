@@ -24,7 +24,7 @@ export function parseTestOutput(output: string, status: string): ParsedTestOutpu
   // TAP prints a parent failure after its children; retain leaf failures, not duplicate suites.
   result.failures = tapFailures.filter((item, i) => !tapFailures.slice(0, i).some(child => child.indent > item.indent && !lines.slice(child.i + 1, item.i).some(l => /^\s*# Subtest:/u.test(l) && (l.match(/^\s*/u)?.[0].length ?? 0) <= item.indent)))
     .map(item => item.name).slice(0, 5)
-  if (!result.failures.length) result.failures = lines.filter(l => /^\s*(?:×|✕|✖|FAIL\s)/u.test(l)).map(l => l.trim().replace(/^[×✕✖]\s*/u, '').replace(/\s+\(?[\d.]+\s*ms\)?$/u, '')).slice(0, 5)
+  if (!result.failures.length) result.failures = [...new Set(lines.filter(l => /^\s*(?:×|✕|✖|FAIL\s)/u.test(l) && !/^\s*[×✕✖]\s*failing tests:$/iu.test(l)).map(l => l.trim().replace(/^[×✕✖]\s*/u, '').replace(/\s+\(?[\d.]+\s*ms\)?$/u, '')))].slice(0, 5)
   if (status === 'passed') result.keyLines = lines.filter(Boolean).slice(-6)
   else {
     const chosen = new Set<number>()
