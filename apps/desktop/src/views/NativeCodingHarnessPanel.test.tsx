@@ -1,7 +1,19 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
-import type { CodingHarnessSnapshot } from '@ai-devflow/shared'
+import type { CodingHarnessSnapshot, CodingHarnessCommand } from '@ai-devflow/shared'
 import { NativeCodingHarnessPanel } from './NativeCodingHarnessPanel'
+
+it('surfaces a child permission on the parent and sends a task grant to that exact child', async () => {
+  const parent: CodingHarnessSnapshot = { protocolVersion: 2, codingRunId: 'parent', sessionId: 'parent-session', status: 'waiting_task', version: 4, objectiveVersion: 1, steps: 1, activeMilliseconds: 0, messages: [], evidence: [], children: [{ id: 'child', title: 'Check source', status: 'waiting_permission' }], cost: { inputTokens: 0, outputTokens: 0, costUsd: 0, unknownAttempts: 0, pendingSettlements: 0 } }
+  const child: CodingHarnessSnapshot = { ...parent, codingRunId: 'child', sessionId: 'child-session', version: 7, status: 'waiting_permission', children: [], parent: { codingRunId: 'parent', mode: 'isolated_coding' }, permission: { id: 'child-permission', title: 'Child needs permission', details: 'Run the extra test' } }
+  const api = vi.fn(async (command: CodingHarnessCommand) => command.codingRunId === 'child' ? child : parent)
+  render(<NativeCodingHarnessPanel codingRunId="parent" api={{ codingHarness: api }} />)
+  expect(await screen.findByText('子任务需要授权，请在下方核对并处理。')).toBeTruthy()
+  const button = await screen.findByRole('button', { name: '本子任务内允许' })
+  expect(button.closest('details')?.open).toBe(true)
+  fireEvent.click(button)
+  await waitFor(() => expect(api).toHaveBeenCalledWith(expect.objectContaining({ type: 'permission', codingRunId: 'child', expectedVersion: 7, permissionId: 'child-permission', decision: 'approved', scope: 'task' })))
+})
 
 it('shows an unavailable executor reason with readable history and no actionable approval controls', async () => {
   const snapshot: CodingHarnessSnapshot = { protocolVersion: 2, codingRunId: 'coding', sessionId: 'session', status: 'waiting_permission', version: 1, objectiveVersion: 1,

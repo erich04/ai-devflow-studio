@@ -38,6 +38,7 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
       limits: { maxSteps: session.limits.maxSteps, maxActiveMilliseconds: session.limits.maxActiveMilliseconds },
       acceptance: session.acceptance.map(({ id, text, sourceRef, resolution }) => ({ id, text, sourceRef, resolution })),
       ...(binding.manualValidationPlan ? { manualValidationPlan: binding.manualValidationPlan } : {}),
+      ...(binding.permissionPolicy ? { permissionPolicy: { mode: binding.permissionPolicy.mode, rules: binding.permissionPolicy.rules, humanPrompts: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source !== 'rule').length, 0), automaticDecisions: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source === 'rule').length, 0) } } : {}),
       ...(session.question ? { question: { id: session.question.id, text: session.question.text, options: session.question.options } } : {}),
       ...(pendingCodingPermission(session) ? { permission: { id: pendingCodingPermission(session)!.id, title: '需要额外执行授权', details: pendingCodingPermission(session)!.details } } : {}),
       execution: { testCommand: binding.context.project.testCommand, dependencyCommand: binding.dependencyPlan?.command ?? '', baseline: binding.context.workspace.baseCommitSha ?? 'unknown', ...(binding.input ? { inputDigest: binding.input.digest, dirtyPaths: binding.input.dirtyPaths } : {}), ...(session.taskBudget ? { maxTokens: session.taskBudget.maxTokens, maxCostUsd: session.taskBudget.maxCostUsd } : {}), profiles: [

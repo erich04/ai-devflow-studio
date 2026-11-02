@@ -77,4 +77,5 @@ export * from './model-execution-rollout'
 
 export * from './native-conversation-protocol'
 export * from './coding-harness'
+export * from './coding-command-policy'
 export * from './coding-question'

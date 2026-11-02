@@ -7,7 +7,7 @@ import { CodingCandidateWorkspace, codingDigest } from './coding-candidate-works
 import { createNativeCodingTools } from './native-coding-tools'
 import { CodingCommandRunner } from './coding-command-runner'
 import { createLocalStore } from './local-store'
-import { createNativeCodingSession } from './native-coding-session'
+import { createNativeCodingSession, mutateNativeCodingSession } from './native-coding-session'
 
 const directories: string[] = []
 it('pages beyond the initial files and applies a digest-bound edit through the existing native tool authority', async () => {
@@ -18,7 +18,7 @@ it('pages beyond the initial files and applies a digest-bound edit through the e
   const store = await createLocalStore({ dbPath: path.join(root, 'local.sqlite') }), now = new Date().toISOString()
   await store.upsertProject({ id: 'project', name: 'test', path: delivery, packageManager: 'npm', testCommand: 'npm test', createdAt: now, updatedAt: now })
   const session = createNativeCodingSession({ id: 'session', localProjectId: 'project', codingRunId: 'coding', workflowRunId: 'run', nodeId: 'build', objective: 'Edit late file', providerId: 'deepseek', model: 'deepseek-flash', now })
-  await store.saveNativeCodingSession(session, 0)
+  session.status = 'running'; await store.saveNativeCodingSession(session, 0)
   const tools = createNativeCodingTools({ store, sessionId: session.id, workspace, commands: new CodingCommandRunner(path.join(root, 'commands')),
     authority: { scope: { kind: 'local', organizationId: null, projectId: null, userId: 'user', sessionId: 'auth-session', localProjectId: 'project' }, runVersion: 1, policyVersion: 1, expiresAt: new Date(Date.now() + 60_000).toISOString(), allowCandidateEdits: true, commands: [] },
     assertAuthority: async () => {}, sources: [], testPlanDigest: 'b'.repeat(64) })
@@ -28,6 +28,9 @@ it('pages beyond the initial files and applies a digest-bound edit through the e
   const file = await tools.execute('read_file', { path: '14.txt' }, context('read')) as { hash: string }
   await tools.execute('write_file', { path: '14.txt', content: 'updated', expectedHash: file.hash }, context('write'))
   await expect(tools.execute('write_file', { path: '14.txt', content: 'stale', expectedHash: file.hash }, context('stale'))).rejects.toThrow()
+  const authorized = await tools.authorize!('write_file', { path: '14.txt', content: 'late', expectedHash: codingDigest('updated') }, context('late'))
+  await mutateNativeCodingSession(store, session.id, draft => { draft.status = 'paused' })
+  await expect(authorized()).rejects.toThrow('superseded')
   expect((await workspace.read('14.txt')).bytes.toString()).toBe('updated')
   expect((await store.getNativeCodingSession(session.id))!.toolAuthorities.some(record => record.audit.some(event => event.status === 'succeeded'))).toBe(true)
   await store.close()
@@ -43,7 +46,7 @@ it('lets a task stop its running command while denying another task command and 
   try {
     await store.upsertProject({ id: 'project', name: 'test', path: delivery, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
     const session = createNativeCodingSession({ id: 'session', localProjectId: 'project', codingRunId: 'coding', workflowRunId: 'run', nodeId: 'build', objective: 'Stop my slow command', providerId: 'fake', model: 'test', now })
-    await store.saveNativeCodingSession(session, 0)
+    session.status = 'running'; await store.saveNativeCodingSession(session, 0)
     const tools = createNativeCodingTools({ store, sessionId: session.id, workspace, commands,
       authority: { scope: { kind: 'local', organizationId: null, projectId: null, userId: 'user', sessionId: 'auth', localProjectId: 'project' }, runVersion: 1, policyVersion: 1, expiresAt: new Date(Date.now() + 60000).toISOString(), allowCandidateEdits: true, commands: [] }, assertAuthority: async () => {}, sources: [], testPlanDigest: 'b'.repeat(64) })
     const plan = { executable: process.execPath, args: ['-e', 'setInterval(()=>{},100)'], timeoutMs: 15000, profile: { kind: 'trusted_local' as const } }
@@ -72,7 +75,7 @@ it('distinguishes an empty file scope from no text matches and exposes the actua
   try {
     await store.upsertProject({ id: 'project', name: 'test', path: delivery, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
     const session = createNativeCodingSession({ id: 'search-session', localProjectId: 'project', codingRunId: 'coding', workflowRunId: 'run', nodeId: 'build', objective: 'Find source', providerId: 'fake', model: 'test', now })
-    await store.saveNativeCodingSession(session, 0)
+    session.status = 'running'; await store.saveNativeCodingSession(session, 0)
     const tools = createNativeCodingTools({ store, sessionId: session.id, workspace, commands: new CodingCommandRunner(path.join(root, 'commands')),
       authority: { scope: { kind: 'local', organizationId: null, projectId: null, userId: 'user', sessionId: 'auth', localProjectId: 'project' }, runVersion: 1, policyVersion: 1, expiresAt: new Date(Date.now() + 60000).toISOString(), allowCandidateEdits: true, commands: [] }, assertAuthority: async () => {}, sources: [], testPlanDigest: 'b'.repeat(64) })
     const call = (name: string, input: Record<string, unknown>, operationId: string) => tools.execute(name, input, { session, operationId, signal: new AbortController().signal })
@@ -93,7 +96,7 @@ it('redacts structured tool content without corrupting JSON escapes around quote
   try {
     await store.upsertProject({ id: 'project', name: 'test', path: delivery, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
     const session = createNativeCodingSession({ id: 'json-session', localProjectId: 'project', codingRunId: 'coding', workflowRunId: 'run', nodeId: 'build', objective: 'Inspect sources', providerId: 'fake', model: 'test', now })
-    await store.saveNativeCodingSession(session, 0)
+    session.status = 'running'; await store.saveNativeCodingSession(session, 0)
     const content = 'Compare "alpha"/"beta". API_TOKEN=fixture-private-value'
     const tools = createNativeCodingTools({ store, sessionId: session.id, workspace, commands: new CodingCommandRunner(path.join(root, 'commands')),
       authority: { scope: { kind: 'local', organizationId: null, projectId: null, userId: 'user', sessionId: 'auth', localProjectId: 'project' }, runVersion: 1, policyVersion: 1, expiresAt: new Date(Date.now() + 60000).toISOString(), allowCandidateEdits: true, commands: [] }, assertAuthority: async () => {}, sources: [{ id: 'source', version: '1', title: 'Fixture', content }], testPlanDigest: 'b'.repeat(64) })
@@ -120,7 +123,7 @@ it('authorizes a legitimate read when separate clock observations straddle a mil
   try {
     await store.upsertProject({ id: 'project', name: 'test', path: delivery, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
     const session = createNativeCodingSession({ id: 'clock-session', localProjectId: 'project', codingRunId: 'coding', workflowRunId: 'run', nodeId: 'build', objective: 'Read file', providerId: 'deepseek', model: 'deepseek-flash', now })
-    await store.saveNativeCodingSession(session, 0)
+    session.status = 'running'; await store.saveNativeCodingSession(session, 0)
     const tools = createNativeCodingTools({ store, sessionId: session.id, workspace, commands: new CodingCommandRunner(path.join(root, 'commands')),
       authority: { scope: { kind: 'local', organizationId: null, projectId: null, userId: 'user', sessionId: 'auth-session', localProjectId: 'project' }, runVersion: 1, policyVersion: 1, expiresAt: new Date(instant + 3600000).toISOString(), allowCandidateEdits: true, commands: [] },
       assertAuthority: async () => {}, sources: [], testPlanDigest: 'b'.repeat(64) })

@@ -300,9 +300,9 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
         if (name === 'cancel_command' && !String(input.id).startsWith(`${host.sessionId}:`)) throw new Error('Command is outside this task')
         if (item.permissionClass !== 'read' && name !== 'cancel_command' && host.commands.hasActiveCommands) throw new Error('Wait for the running command before another candidate writer')
         if (codingExtensionNames.includes(name)) await host.extensions!.authorize(name, input, context.operationId)
-        if (name === 'run_command' && input.planIndex === undefined) {
-          const plan = commandPlan(input)
-          await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'command', value: plan, details: `命令：${plan.executable}\n参数：${JSON.stringify(plan.args)}\n目录：本次私有候选目录\n超时：${plan.timeoutMs / 1000} 秒\n执行方式：${plan.profile.kind}` })
+        if (name === 'run_command' || name === 'run_test_plan') {
+          const plan = commandPlan(name === 'run_test_plan' ? { planIndex: 0 } : input)
+          await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'command', value: plan, preapproved: name === 'run_test_plan' || input.planIndex !== undefined, details: `命令：${plan.executable}\n参数：${JSON.stringify(plan.args)}\n目录：本次私有候选目录\n超时：${plan.timeoutMs / 1000} 秒\n执行方式：${plan.profile.kind}` })
         }
         if (name === 'run_test_plan' || (name === 'run_command' && input.planIndex === 0) || name === 'propose_changeset') {
           const session = await host.store.getNativeCodingSession(host.sessionId)
@@ -326,6 +326,8 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
         const grant = await registry.issueGrant({ runtime: requested.runtime, toolId: name, toolVersion: 1, permission: { decision: 'approved', permissionClass: item.permissionClass, decidedAt: now, expiresAt: deadline }, resourceScope: { kind: 'managed_workspace', localProjectId: context.session.localProjectId, workspaceId: host.sessionId }, callLimit: 1 })
         return async () => {
           await host.assertAuthority(); context.signal.throwIfAborted()
+          const latest = await host.store.getNativeCodingSession(host.sessionId)
+          if (latest?.objectiveVersion !== context.session.objectiveVersion || latest.status !== 'running' || latest.pendingInput.length) throw new Error('Coding tool authority was superseded before execution')
           contexts.set(context.operationId, context)
           try {
             const output = await registry.execute({ grant, runtime: requested.runtime, actionId: context.operationId, input, signal: context.signal })

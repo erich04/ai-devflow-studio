@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { CodingHarnessCommand, CodingHarnessSnapshot, CodingHarnessStatus, CodingHarnessDetail, CodingModelRetryReason } from '@ai-devflow/shared'
+import type { CodingHarnessCommand, CodingHarnessSnapshot, CodingHarnessStatus, CodingHarnessDetail, CodingModelRetryReason, CodingPermissionMode } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
 
 type Action<T> = T extends CodingHarnessCommand ? Omit<T, 'protocolVersion' | 'codingRunId' | 'commandId' | 'expectedVersion'> : never
@@ -18,6 +18,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
   const [confirmedCriteria, setConfirmedCriteria] = useState<string[]>([])
   const [manualMode, setManualMode] = useState(false), [manualPlan, setManualPlan] = useState(''), [manualEvidence, setManualEvidence] = useState('')
   const busy = pending > 0
+  const [permissionMode, setPermissionMode] = useState<CodingPermissionMode>('ask')
   useEffect(() => { setConfirmedCriteria([]); setManualEvidence('') }, [snapshot?.revision?.digest])
   const [profile, setProfile] = useState<'trusted_local' | 'container'>('trusted_local')
   const accept = useCallback((next: CodingHarnessSnapshot) => setSnapshot(previous => previous?.codingRunId === next.codingRunId && previous.version > next.version ? previous : next), [])
@@ -72,10 +73,13 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
         {snapshot.execution?.profiles.map(item => <option key={item.kind} value={item.kind} disabled={!item.available}>{item.kind === 'trusted_local' ? '本机可信执行' : '受管容器'}</option>)}
       </select></label>
       <p>{snapshot.execution?.profiles.find(item => item.kind === profile)?.reason}</p>
-      <button disabled={busy || (manualMode ? !manualPlan.trim() : !snapshot.execution?.testCommand.trim())} onClick={() => void command({ type: 'authorize', profile, ...(manualMode ? { manualValidationPlan: manualPlan } : {}) })}>授权并开始</button>
+      <label>额外操作权限 <select value={permissionMode} onChange={event => setPermissionMode(event.target.value as CodingPermissionMode)}><option value="ask">逐条确认</option><option value="sandbox_rules">沙箱内按规则放行</option><option value="unattended">无人值守（需要确认时拒绝）</option></select></label>
+      <p>规则按命令和参数逐项匹配；复合命令需确认。上面已展示的测试和安装计划属于本次开工授权。</p>
+      <button disabled={busy || (manualMode ? !manualPlan.trim() : !snapshot.execution?.testCommand.trim())} onClick={() => void command({ type: 'authorize', profile, permissionMode, ...(manualMode ? { manualValidationPlan: manualPlan } : {}) })}>授权并开始</button>
     </div> : null}
     {!snapshot.controlUnavailableReason && snapshot.permission ? <div className="coding-permission-card"><h4>{snapshot.permission.title}</h4><pre>{snapshot.permission.details}</pre>
       <button disabled={busy} onClick={() => void command({ type: 'permission', permissionId: snapshot.permission!.id, decision: 'approved' })}>允许这次操作</button>
+      <button disabled={busy} onClick={() => void command({ type: 'permission', permissionId: snapshot.permission!.id, decision: 'approved', scope: 'task' })}>{snapshot.parent ? '本子任务内允许' : '本任务内允许'}</button>
       <button disabled={busy} onClick={() => void command({ type: 'permission', permissionId: snapshot.permission!.id, decision: 'rejected' })}>拒绝</button>
     </div> : null}
     {snapshot.question ? <div className="agent-evidence-card"><h4>需要你的回答</h4><p>{snapshot.question.text}</p>
@@ -92,7 +96,9 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
       {snapshot.revisionPage && snapshot.revisionPage.total > 30 ? <p>文件 {snapshot.revisionPage.offset + 1}–{snapshot.revisionPage.offset + snapshot.revision.files.length} / {snapshot.revisionPage.total} <button disabled={snapshot.revisionPage.previous === null} onClick={() => void page('revisionOffset', snapshot.revisionPage!.previous)}>上一页文件</button><button disabled={snapshot.revisionPage.next === null} onClick={() => void page('revisionOffset', snapshot.revisionPage!.next)}>下一页文件</button></p> : null}
     </div> : null}
     {snapshot.evidence.map(evidence => <p key={evidence.id}>{evidence.status} · {evidence.summary}</p>)}
-    {snapshot.children.map(child => <details key={child.id}><summary>{child.title} · {child.status}</summary><NativeCodingHarnessPanel codingRunId={child.id} api={api} /></details>)}
+    {snapshot.children.some(child => child.status === 'waiting_permission') ? <p role="status">子任务需要授权，请在下方核对并处理。</p> : null}
+    {snapshot.children.map(child => <details key={child.id} open={child.status === 'waiting_permission' || child.status === 'waiting_input'}><summary>{child.title} · {child.status}</summary><NativeCodingHarnessPanel codingRunId={child.id} api={api} /></details>)}
+    {snapshot.permissionPolicy ? <details><summary>权限规则与记录 · 已询问 {snapshot.permissionPolicy.humanPrompts} 次，自动判定 {snapshot.permissionPolicy.automaticDecisions} 次</summary><p>{snapshot.permissionPolicy.mode === 'ask' ? '逐条确认' : snapshot.permissionPolicy.mode === 'sandbox_rules' ? '沙箱内按规则放行' : '无人值守'}。拒绝优先于询问，询问优先于允许。任务授权在修改目标或到期后失效。</p>{snapshot.permissionPolicy.rules.length ? snapshot.permissionPolicy.rules.map((rule, index) => <p key={index}>{rule.decision} · <code>{JSON.stringify(rule.prefix)}</code></p>) : <p>尚未配置命令规则，额外操作默认需要确认。</p>}</details> : null}
     {snapshot.modelRetries ? <details><summary>模型请求自动重试（{snapshot.modelRetries.total} 次）</summary>{snapshot.modelRetries.recent.map(item => <p key={item.attemptId}>第 {item.step} 步 · {retryReasons[item.reason]} · 第 {item.number}/{item.limit} 次 · 等待 {Math.ceil(item.delayMs / 1000)} 秒{item.retryAfterMs !== undefined ? '（模型服务指定）' : ''}</p>)}</details> : null}
     {snapshot.diagnostics ? <details><summary>恢复诊断与资料保留</summary><p>检查点 {snapshot.diagnostics.checkpoint} · 目标版本 {snapshot.diagnostics.objectiveVersion} · {snapshot.diagnostics.profile === 'container' ? '受管容器' : '本机可信执行'} · {snapshot.diagnostics.writerActive ? '执行单元尚未退出' : '当前无执行单元'}</p><p>未确定操作：{snapshot.diagnostics.uncertainTotal}。未知请求不会自动重发，未知工具效果须先对账。</p>{snapshot.diagnostics.uncertainOperations.map(item => <p key={item.id}>{item.kind} · {item.id} · {item.status}</p>)}<p>{snapshot.storage?.reason}</p>{!snapshot.controlUnavailableReason && snapshot.storage?.cleanupAllowed ? <button disabled={busy} onClick={() => void command({ type: 'cleanup_scratch' })}>清理可重建工作副本，保留全部证据</button> : null}</details> : null}
     <details><summary>任务对话与工具记录（{snapshot.historyPage?.total ?? snapshot.messages.length}）</summary>{snapshot.messages.map(message => <div key={message.id}><strong>{message.role === 'user' ? '你' : message.role === 'assistant' ? 'Native' : '工具结果'}</strong><pre>{message.text}</pre>{message.truncated ? <button onClick={() => void detail({ kind: 'message', id: message.id, offset: 0 })}>记录较长，逐页查看全文</button> : null}</div>)}

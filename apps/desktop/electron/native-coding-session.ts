@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
-import { validateNativeHistory, type NativeToolMessage, type AgentProviderUsage, type AgentRuntimeState, type CodingModelRetryReason } from '@ai-devflow/shared'
+import { validateNativeHistory, parseCodingCommandRules, type NativeToolMessage, type AgentProviderUsage, type AgentRuntimeState, type CodingModelRetryReason } from '@ai-devflow/shared'
 import type { NativeToolCapabilityGrantRecord, NativeToolAuditRecord } from './native-tool-registry'
 import type { CodingExecutorStartInput } from './coding-executor'
 import type { CodingCommandPlan, CodingExecutionProfile } from './coding-command-runner'
@@ -61,6 +61,7 @@ export type NativeCodingSession = {
     authorizationExpiresAt?: string
     input?: Awaited<ReturnType<typeof import('./coding-input').inspectCodingInput>>
     manualValidationPlan?: string
+    permissionPolicy?: import('@ai-devflow/shared').CodingPermissionPolicy
   }
   deliveryEvidence: CodingDeliveryEvidence[]
   revisions: CodingRevision[]
@@ -139,7 +140,13 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
   if (session.parent && (!identifier(session.parent.sessionId) || !identifier(session.parent.codingRunId) || !digest(session.parent.baseDigest) || !['read_only', 'isolated_coding'].includes(session.parent.mode) || !Array.isArray(session.parent.paths))) throw new Error('Invalid coding delegation')
   if (session.question && (!identifier(session.question.id) || !identifier(session.question.toolCallId) || typeof session.question.text !== 'string' || !session.question.text.trim() ||
     !Array.isArray(session.question.options) || session.question.options.some(option => typeof option !== 'string') || session.question.objectiveVersion !== session.objectiveVersion)) throw new Error('Invalid coding question')
+  if (session.binding?.permissionPolicy) {
+    const policy = session.binding.permissionPolicy
+    if (policy.version !== 1 || !['ask', 'sandbox_rules', 'unattended'].includes(policy.mode)) throw new Error('Invalid saved coding permission policy')
+    parseCodingCommandRules(policy.rules)
+  }
   if (previous) {
+    if (previous.binding?.executionGranted && !isDeepStrictEqual(previous.binding.permissionPolicy, session.binding?.permissionPolicy)) throw new Error('Granted coding permission policy is immutable')
     for (const key of ['schemaVersion', 'executorVersion', 'id', 'localProjectId', 'codingRunId', 'workflowRunId', 'nodeId', 'providerId', 'model', 'createdAt'] as const) {
       if (session[key] !== previous[key]) throw new Error('Coding session identity is immutable')
     }
