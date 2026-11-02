@@ -10873,7 +10873,9 @@ describe('createLocalStore', () => {
     const legacyBytes = Buffer.from(legacy.export()); legacy.close()
     await writeFile(dbPath, legacyBytes)
     store = await createLocalStore({ dbPath })
-    expect(await readFile(`${dbPath}.v41.bak`)).toEqual(legacyBytes)
+    const backupBytes = await readFile(`${dbPath}.v41.bak`)
+    // Compare the complete backup byte-for-byte without deep-walking a megabyte Buffer.
+    expect(backupBytes.equals(legacyBytes)).toBe(true)
     expect(await store.getCodingChangeSet(initial.id)).toEqual(initial)
     const revision = { ...initial, id: 'cs-1', changeSetDigest: 'c'.repeat(64), revision: { index: 1, previous: { id: initial.id, digest: initial.changeSetDigest }, changeRequest: '补充检查', itemCount: 1 } }
     const request = { ...permissionRequest, id: 'revision-request', codingRunId: active.id, runId: active.runId, nodeId: active.nodeId, status: 'pending' as const, changeSetId: revision.id, changeSetDigest: revision.changeSetDigest }
