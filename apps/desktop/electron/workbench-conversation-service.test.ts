@@ -229,13 +229,21 @@ describe('unified conversation execution and boundaries', () => {
     expect(session.messages.at(-1)?.citations?.[0]?.id).toBe('source-1')
   })
 
-  it('rejects the entire legacy native batch before any read if a later path is a symlink', async () => {
+  it.each(['repo_read', 'workspace_read'])('rejects the entire legacy native %s batch before any read if a later path is a symlink', async name => {
     await symlink('tasks.ts', path.join(project.path, 'alias.ts'))
+    if (name === 'workspace_read') {
+      const build = created.run.nodes.find(n => n.stage === 'build')!
+      await store.saveCodingAgentRun({ id: 'workspace-reader', runId: created.run.id, nodeId: build.id, projectId,
+        requestedBy: 'u-test', providerId: 'test', engine: 'native', status: 'completed', managedWorkspaceId: 'reader-workspace',
+        branchName: 'test', userInstruction: '', prompt: '', summary: '', changedPaths: [], startedAt: created.run.createdAt, redacted: true })
+      await store.saveManagedCodingWorkspace({ id: 'reader-workspace', projectId, codingRunId: 'workspace-reader', sourcePath: project.path,
+        worktreePath: project.path, branchName: 'test', baseBranch: 'main', createdAt: created.run.createdAt, cleanupStatus: 'active' })
+    }
     let calls = 0
     const result = harness(async input => {
       calls++
       expect(input.nativeTools?.messages ?? []).toEqual([])
-      const toolCalls = ['tasks.ts', 'alias.ts'].map((path, index) => ({ id: `call-${index}`, type: 'function' as const, function: { name: 'repo_read', arguments: JSON.stringify({ path }) } }))
+      const toolCalls = ['tasks.ts', 'alias.ts'].map((path, index) => ({ id: `call-${index}`, type: 'function' as const, function: { name, arguments: JSON.stringify({ path, ...(name === 'workspace_read' ? { runId: created.run.id } : {}) }) } }))
       return { value: {}, toolCalls, assistantMessage: { role: 'assistant' as const, content: null, tool_calls: toolCalls } }
     })
     result.provider.supportsNativeTools = true

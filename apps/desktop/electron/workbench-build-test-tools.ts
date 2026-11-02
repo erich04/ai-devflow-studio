@@ -1,7 +1,7 @@
 import { buildChangeSetDiffView, numberCodingChangeVersions, redactSensitiveText, type CodingChangeSet } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
 import type { ConversationFocus } from './workbench-conversation-contract.js'
-import { readWorkbenchRepository } from './workbench-repository.js'
+import { readWorkbenchRepository, validateWorkbenchRepositoryPath } from './workbench-repository.js'
 import { verifyCodingChangeSetDisplay } from './coding-change-set.js'
 import { conversationContentPage } from './workbench-requirement-context.js'
 type Store = Pick<LocalStore, 'loadState'> & Partial<Pick<LocalStore, 'listCodingChangeSets'>>
@@ -20,6 +20,15 @@ export async function validateBuildTestRead(store: Store, projectId: string, arg
   if (args.changeSetId !== undefined) return m.changes.some(c => c.id === args.changeSetId && c.projectId === projectId && c.changeSetDigest === args.changeSetDigest && m.requests.some(r => r.changeSetId === c.id && r.changeSetDigest === c.changeSetDigest))
   if (args.diffArtifactId !== undefined) return m.diffs.some(d => d.id === args.diffArtifactId && d.sourceDigest === args.diffSourceDigest && m.requests.some(r => r.origin === 'change_acceptance' && r.diffArtifactId === d.id && r.diffSourceDigest === d.sourceDigest))
   return true
+}
+export async function validateBuildTestWorkspacePath(store: Store, projectId: string, args: Record<string, unknown>) {
+  const m = await materials(store, projectId, String(args.runId))
+  const latest = m.runs.at(-1)
+  const workspace = m.state.managedCodingWorkspaces.find(w => w.id === latest?.managedWorkspaceId && w.projectId === projectId && w.codingRunId === latest?.id)
+  // Missing workspaces produce an ordinary unavailable result; unsafe paths reject the batch.
+  if (workspace && !workspace.deletedAt && workspace.cleanupStatus === 'active') {
+    await validateWorkbenchRepositoryPath(workspace.worktreePath, String(args.path ?? '.'))
+  }
 }
 export async function readBuildTestTool(store: Store, projectId: string, name: string, args: Record<string, unknown>, signal: AbortSignal) {
   const m = await materials(store, projectId, String(args.runId))

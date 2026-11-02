@@ -190,7 +190,7 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
     try {
       const { expiresAt: _, ...focus } = parsePermissionExpected({ ...(record.focus as object), expiresAt: '2000-01-01T00:00:00.000Z' })
       clean.focus = focus
-    } catch { delete clean.focus }
+    } catch { throw new Error('查看位置的格式不正确，请重新选择步骤。') }
   }
   return clean as ConversationCommand
 }

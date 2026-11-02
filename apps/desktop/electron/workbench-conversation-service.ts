@@ -1,4 +1,4 @@
-import { readBuildTestTool, validateBuildTestRead, resolveConversationFocus, conversationViewing } from './workbench-build-test-tools.js'
+import { readBuildTestTool, validateBuildTestRead, validateBuildTestWorkspacePath, resolveConversationFocus, conversationViewing } from './workbench-build-test-tools.js'
 import { summarizeRunBuildTestMaterials } from '@ai-devflow/shared'
 import { investigationAttemptContext, beginInvestigationBatch, canStartInvestigationRequest, investigationBoundary, investigationProgress, advanceInvestigationStep, recordInvestigationRequest, recordInvestigationQuery, investigationQueryKey, investigationCanRevalidate, investigationObservationCurrent, boundInvestigationResult } from './investigation-policy'
 import { pauseWithInvestigationSummary } from './investigation-summary'
@@ -872,6 +872,7 @@ export class WorkbenchConversationService {
             const { run } = await this.target(projectId, entry.args.runId, entry.name === 'node' ? String(entry.args.nodeId) : undefined)
             if (entry.name === 'artifact' && !(await this.readArtifacts(run.id)).some(artifact => artifact.id === entry.args.artifactId)) throw new NativeReadArgumentError('当前任务没有这个材料 ID。')
           }
+          if (entry.name.startsWith('workspace_')) await validateBuildTestWorkspacePath(this.deps.store, projectId, entry.args)
           if (entry.name === 'change_read' && !await validateBuildTestRead(this.deps.store, projectId, entry.args)) throw new NativeReadArgumentError('改动身份不匹配。')
           if (entry.name === 'conversation_read') await this.readConversationSource(projectId, id, entry.args)
         }

@@ -22,7 +22,7 @@ export async function getCodingActionCosts(input: { projectId: string; store: Lo
   const node = run?.nodes.find(n => n.id === coding?.nodeId)
   const project = (await input.store.listProjects()).find(p => p.id === input.projectId)
   if (coding && run && node && project) for (const [key, calls] of [['revise', 2], ['selfCheck', 1], ['repairRevise', 1]] as const) {
-    const decision = await input.guard({ codingRunId: coding.id, engine: 'native', providerId: executor.providerId, model: executor.modelId ?? executor.providerId, project, run, node, requestedBy: coding.requestedBy, estimatedCost: estimate(calls), metered: true })
+    const decision = await input.guard({ codingRunId: coding.id, engine: 'native', providerId: executor.providerId, model: executor.modelId ?? executor.providerId, project, run, node, requestedBy: coding.requestedBy, ...(coding.budgetDecision?.approvalId ? { approvalId: coding.budgetDecision.approvalId } : {}), estimatedCost: estimate(calls), metered: true })
     result.budget[key] = { blocks: decision.blocksRun, status: decision.status, ...(decision.reason ? { reason: decision.reason } : {}) }
   }
   return result

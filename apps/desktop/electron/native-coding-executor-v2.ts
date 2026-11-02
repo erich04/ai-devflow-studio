@@ -1178,11 +1178,13 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
 
     const controller = new AbortController()
     activeRequests.set(call.codingRunId, controller)
+    let dispatched = false
     let completed: NativeV2ModelResult | undefined
     let result: { value: T; usage: ProviderUsage; requestedAt: string; requestId: string }
     try {
       await call.assertContextCurrent?.()
       controller.signal.throwIfAborted()
+      dispatched = true
       completed = await input.decisionProvider.complete({
         operationKey: call.codingRunId, signal: controller.signal,
         phase: call.phase,
@@ -1226,9 +1228,9 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         ? error
         : new AgentProviderRequestError({
             code: 'unknown_provider_failure',
-            deliveryState: completed ? 'response_received' : 'possibly_delivered',
-            billingState: completed ? 'confirmed' : 'unknown',
-            retryable: !completed,
+            deliveryState: completed ? 'response_received' : dispatched ? 'possibly_delivered' : 'not_sent',
+            billingState: completed ? 'confirmed' : dispatched ? 'unknown' : 'not_incurred',
+            retryable: dispatched && !completed,
             sanitizedCause: 'unclassified_provider_failure',
             cause: error,
           })

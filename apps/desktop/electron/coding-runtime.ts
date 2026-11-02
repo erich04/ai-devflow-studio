@@ -2018,7 +2018,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       ...(input.scope ? { scope: input.scope } : {}),
       ...(matchedSessionGrantId ? { sessionGrantId: matchedSessionGrantId } : {}),
     }
-    const codingRun = await findCodingRun(input.codingRunId)
+    // Use the snapshot whose revision guard was checked; a later claim must fail CAS.
+    const codingRun = sourceRun
     let sessionInputsDigest: string | undefined
     if (input.scope === 'session' || matchedSessionGrantId) {
       const rule = codingSessionPermissionRule(request)
@@ -2890,7 +2891,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const node = validateCodingWorkflowContext(run, codingRun)
       if (!deps.budgetGuard) throw new Error('[revise_budget_blocked] 现在核对不了预算。')
       const model = executor.modelId ?? executor.providerId
-      const decision = await deps.budgetGuard({ codingRunId: codingRun.id, engine: 'native', providerId: executor.providerId, model, project, run, node, requestedBy, metered: true,
+      const decision = await deps.budgetGuard({ codingRunId: codingRun.id, engine: 'native', providerId: executor.providerId, model, project, run, node, requestedBy, metered: true, ...(codingRun.budgetDecision?.approvalId ? { approvalId: codingRun.budgetDecision.approvalId } : {}),
         estimatedCost: estimateNativeCodingWorstCaseCost({ runId: run.id, nodeId: node.id, projectId: project.id, requestedBy, providerId: executor.providerId, model, timestamp: now(), providerCallLimit: calls, ...(executor.billingProvider ? { billingProvider: executor.billingProvider } : {}) }) })
       if (decision.blocksRun) throw new Error(`[revise_budget_blocked] ${decision.reason}`)
     },
@@ -2921,12 +2922,14 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
 
       const recovered: CodingAgentRun[] = []
       const codingRuns = await deps.store.listCodingAgentRuns()
-      for (const codingRun of codingRuns) {
+      for (let codingRun of codingRuns) {
         const isOpenCodeRun = recoverOpenCode && codingRun.engine === 'opencode-http'
         const isNativeRun = recoverNative && codingRun.engine !== 'opencode-http'
         if (!isOpenCodeRun && !isNativeRun) continue
         if (isNativeRun) {
-          try { const restored = await changeControl.recover(codingRun); if (restored) { recovered.push(restored); continue } }
+          // A restored pending request still needs normal expiry publication below.
+          await settleInterruptedProviderCalls(codingRun, now())
+          try { const restored = await changeControl.recover(codingRun); if (restored) codingRun = restored }
           catch { recovered.push(await findCodingRun(codingRun.id)); continue }
         }
 

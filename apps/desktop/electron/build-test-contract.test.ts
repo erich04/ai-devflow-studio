@@ -1,3 +1,4 @@
+import { parseConversationCommand } from './workbench-conversation-contract'
 import { expect, it } from 'vitest'
 import { parseConfirmTestEvidence, parsePermissionExpected, parseReviseCodingChangeSet } from './build-test-contract'
 import { parseReplyCodingPermissionInput, parseRunProjectTestsInput } from './ipc-contract'
@@ -18,4 +19,13 @@ it('requires exact run timestamp when confirming evidence and preserves legacy t
   expect(parseRunProjectTestsInput({ projectId: 'p', runId: 'r', nodeId: 'n', completeOnPass: false })).toMatchObject({ completeOnPass: false })
   expect(parseRunProjectTestsInput({ projectId: 'p', runId: 'r', nodeId: 'n' })).not.toHaveProperty('completeOnPass')
   expect(() => parseRunProjectTestsInput({ projectId: 'p', runId: 'r', nodeId: 'n', completeOnPass: 'false' })).toThrow()
+})
+
+it('rejects malformed conversation focus rather than silently sending a different context', () => {
+  const command = { type: 'send', projectId: 'p', conversationId: 'c', providerId: 'deepseek', text: 'Explain the change' }
+  const { expiresAt: _, ...focus } = identity
+  expect(parseConversationCommand({ ...command, focus })).toMatchObject({ focus })
+  for (const bad of [null, 'bad', { ...focus, unexpected: true }, { ...focus, changeSetDigest: 'bad' }]) {
+    expect(() => parseConversationCommand({ ...command, focus: bad })).toThrow()
+  }
 })
