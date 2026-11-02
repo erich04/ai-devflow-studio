@@ -30,6 +30,7 @@ it('does not turn zero completions, a partial sample or false completion into a 
   expect(phase2Score(tasks, rows).qualityGatePassed).toBe(false)
   rows[0] = { ...rows[0]!, claimedCompleted: true, independentPassed: true }
   expect(phase2Score(tasks, rows)).toMatchObject({ qualityGatePassed: true, releaseGatePassed: false })
+  expect(phase2Score(tasks, rows.map((row, i) => i ? row : { ...row, qualityObservationValid: false }))).toMatchObject({ qualityGatePassed: false, invalidObservations: 1 })
   expect(phase2Score(tasks, rows.slice(0, 1)).qualityGatePassed).toBe(false)
   rows[1] = { ...rows[1]!, claimedCompleted: true, independentPassed: false }
   expect(phase2Score(tasks, rows)).toMatchObject({ qualityGatePassed: false, falseCompleted: 1 })

@@ -29,8 +29,9 @@ export function phase2Score(tasks, rows) {
   if (new Set(rows.map(row => row.taskId)).size !== rows.length || rows.some(row => !tasks.some(task => task.id === row.taskId))) throw new Error('Duplicate or foreign phase2 observation')
   const independentPassed = rows.filter(row => row.independentPassed === true).length
   const falseCompleted = rows.filter(row => row.claimedCompleted === true && row.independentPassed !== true).length
+  const invalidObservations = rows.filter(row => row.qualityObservationValid === false).length
   return { planned: tasks.length, observed: rows.length, independentPassed, falseCompleted,
-    qualityGatePassed: rows.length === tasks.length && independentPassed >= 1 && falseCompleted === 0,
+    invalidObservations, qualityGatePassed: rows.length === tasks.length && invalidObservations === 0 && independentPassed >= 1 && falseCompleted === 0,
     releaseGatePassed: false, interpretation: 'Only the original r8 ten-task phase2 gate. OS platform checks and PR CI are separate evidence; this does not complete the 31-task release evaluation.' }
 }
 /** The host copies the report out only after the sandboxed process has stopped. */
@@ -76,7 +77,7 @@ export async function freezePhase2(output, source, maxCostUsd = 3) {
     operatorPolicy: 'System sandbox only; explicitly enable IP network for frozen dependency preparation. Initial saved test/install plans are preapproved. Only the frozen direct-argv allow rules can run additional commands automatically. Reject other root/child permission cards; record each. Do not invent answers. Approve exact revisions only to permit product verification. Unknown requests retain full reservation and are not replayed. Stop on provider refusal or runner failure. No implicit retries or extensions.',
     evaluation: 'Keep original prompts, baselines, public plans and reference acceptance tests unchanged. Independent author sees only B and approved objective; reference tests remain outside all model/agent workspaces. External oracle restores protected baseline config/tests before overlaying exact reference tests, runs in its own OS sandbox, and never feeds failures to the implementer.',
     tasks }
-  await mkdir(output)
+  await mkdir(path.dirname(output), { recursive: true }); await mkdir(output)
   await json(path.join(output, 'experiment.json'), plan, true)
   await json(path.join(output, 'historical-comparison.json'), observations.filter(row => row.engine === 'native-v3'), true)
   console.log(JSON.stringify({ event: 'frozen', candidate: plan.candidateCommit, tasks: tasks.length, maxCostUsd, paidRequests: 0 }))
@@ -126,14 +127,19 @@ async function runPhase2(output, keyFile) {
       if (workspace) await writeFile(path.join(directory, 'candidate.patch'), execFileSync('git', ['diff', '--binary', 'HEAD'], { cwd: workspace, maxBuffer: 64 * 1024 * 1024 }), { mode: 0o600 })
       const independent = await independentCheck(task, baseline, workspace, directory, (...args) => sandboxOracleCommand(path.join(directory, 'oracle-commands'), ...args))
       await json(path.join(directory, 'independent.json'), independent, true)
-      const row = { taskId: task.id, engine: 'native-v3', claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, costUsd: trial.costUsd, durationMs: trial.durationMs, metrics: trial.metrics, status: trial.status, failure: trial.failure ?? null, execution, independent }
+      const qualityObservationValid = !independent.failure && typeof independent.total === 'number' && independent.total > 0
+      const row = { taskId: task.id, engine: 'native-v3', claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, qualityObservationValid, costUsd: trial.costUsd, durationMs: trial.durationMs, metrics: trial.metrics, status: trial.status, failure: trial.failure ?? null, execution, independent }
       await json(path.join(directory, 'row.json'), row, true); rows.push(row)
       await json(path.join(output, 'runs.json'), rows); await json(path.join(output, 'score.json'), phase2Score(plan.tasks, rows))
       console.log(JSON.stringify({ event: 'result', task: task.id, status: trial.status, independentPassed: independent.passed, claimedCompleted: trial.claimedCompleted, costUsd: trial.costUsd }))
       await removeDisposableDependencies(directory); await removeTrialCommandCaches(executionOutput)
+      if (!qualityObservationValid) { await json(path.join(output, 'dispatch-stop.json'), { reason: 'invalid_external_oracle', task: task.id, independent }, true); break }
       const providerReason = providerStopReason(trial.providerUnavailable)
       if (providerReason) { await json(path.join(output, 'dispatch-stop.json'), { reason: providerReason, task: task.id }, true); break }
     }
+  } catch (error) {
+    await json(path.join(output, 'runner-failure.json'), { at: new Date().toISOString(), message: error instanceof Error ? error.message : String(error) })
+    throw error
   } finally {
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop)
     await json(path.join(output, 'runs.json'), rows)
