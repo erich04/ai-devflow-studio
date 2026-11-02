@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { gateCopy } from '../../app/gate-decision/copy'
 import type { ListItemView } from '../../app/gate-decision/projection'
 import { checkItemText, MAX_REVISION_ITEM_CHARACTERS } from '../../app/gate-decision/revision-list'
-import { useGateScope } from './GateDecisionScope'
+import { useDecisionPage } from './DecisionPageContext'
 
 const FLASH_MS = 1_200
 const OWN_DRAFT = 'list:own'
@@ -13,7 +13,7 @@ const editKey = (itemId: string) => `list:edit:${itemId}`
  * The model and cost line with 「更改」 stays beside the generate button only (decision 75).
  */
 export function RevisionListPanel() {
-  const scope = useGateScope()
+  const scope = useDecisionPage()
   const { view, drafts, setDraft, apply, actions } = scope
   const list = view.bar.list
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -44,7 +44,7 @@ export function RevisionListPanel() {
     const key = editKey(item.id)
     const text = drafts[key] ?? ''
     let result
-    if (item.source === 'chat') {
+    if (item.source === 'chat' && item.proposalId) {
       if (text.trim().length > MAX_REVISION_ITEM_CHARACTERS) return fail(key, gateCopy.noteTooLong(text.trim().length))
       result = apply({ type: 'chatNote', proposalId: item.proposalId!, note: text })
     } else {
@@ -56,11 +56,12 @@ export function RevisionListPanel() {
     if (result.ok) setDraft(key, undefined)
   }
   const remove = (item: ListItemView) => {
-    const result = item.source === 'chat' ? apply({ type: 'chatRemove', proposalId: item.proposalId! }) : apply({ type: 'remove', itemId: item.id })
+    const result = item.source === 'chat' && item.proposalId ? apply({ type: 'chatRemove', proposalId: item.proposalId! }) : apply({ type: 'remove', itemId: item.id })
     fail(item.id, result.ok ? undefined : result.message)
   }
   const openSource = (item: ListItemView) => {
-    if (item.source === 'chat' && item.proposalId) actions.onFocusChatItem?.(item.proposalId)
+    if (item.source === 'chat' && item.proposalId && item.proposalId) actions.onFocusChatItem?.(item.proposalId)
+    else if (item.messageId) actions.onFocusChatMessage?.(item.messageId)
     else if (item.cardId) scope.focusCard(item.cardId)
   }
   const ownText = drafts[OWN_DRAFT]
@@ -94,8 +95,8 @@ export function RevisionListPanel() {
                 {errors[key] ? <p role="alert" className="gate-note gate-note--warn">{errors[key]}</p> : null}
                 <button type="submit" className="ghost-button">保存</button>
                 <button type="button" className="text-button" onClick={() => { setDraft(key, undefined); fail(key, undefined) }}>取消</button>
-              </form> : <span className="gate-list-text">{item.source === 'chat' ? item.proposalTitle : item.text}{item.source === 'chat' && item.text ? `（补充说明：${item.text}）` : ''}</span>}
-              {item.source === 'chat' ? <button type="button" className="text-button" aria-expanded={viewing === item.id} onClick={() => setViewing(viewing === item.id ? undefined : item.id)}>{gateCopy.viewButton}</button> : null}
+              </form> : <span className="gate-list-text">{item.source === 'chat' && item.proposalId ? item.proposalTitle : item.text}{item.source === 'chat' && item.proposalId && item.text ? `（补充说明：${item.text}）` : ''}</span>}
+              {item.source === 'chat' && item.proposalId ? <button type="button" className="text-button" aria-expanded={viewing === item.id} onClick={() => setViewing(viewing === item.id ? undefined : item.id)}>{gateCopy.viewButton}</button> : null}
               {list.actionable && !editing ? <>
                 <button type="button" className="text-button" onClick={() => setDraft(key, item.text)}>{gateCopy.editButton}</button>
                 <button type="button" className="text-button" onClick={() => remove(item)}>{gateCopy.removeButton}</button>

@@ -4846,3 +4846,26 @@ body { min-width: 0; }
   width: 100%;
   resize: vertical;
 }
+
+/* Build/test uses the gate page's one scroll container, margin and narrow markers. */
+.change-file { margin: 1rem 0 1.5rem; min-width: 0; }
+.change-file header { padding: .6rem 0; overflow-wrap: anywhere; }
+.change-row { display: flex; align-items: baseline; gap: .4rem; min-width: 0; padding: .2rem .3rem; }
+.change-file-lines { overflow-x: auto; min-width: 0; }
+.change-row { min-width: max-content; }
+.change-row > code { white-space: pre; flex: 1; }
+.change-line-number, .change-line-sign, .change-new-label { user-select: none; }
+.change-row--add { background: color-mix(in srgb, #3a9d67 12%, transparent); }
+.change-row--del { background: color-mix(in srgb, #d15c57 10%, transparent); }
+.change-line-number { min-width: 2.3rem; text-align: right; opacity: .6; font-variant-numeric: tabular-nums; }
+.change-line-sign { min-width: .65rem; }
+.change-new-label { font-size: .7rem; color: var(--accent); }
+.test-report { margin: 1rem 0 2rem; }
+.test-key-lines code, .build-test-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.build-test-workspace fieldset { min-width: 0; border: 0; padding: 0; }
+.gate-card--permission, .gate-card--coding_question { border-inline-start: 3px solid #b18b45; }
+.gate-card--test_failure, .gate-card--stale_evidence { border-inline-start: 3px solid #cd6c63; }
+
+.build-test-term { position: relative; text-decoration: underline dotted; text-underline-offset: .2em; cursor: help; }
+.build-test-term [role="tooltip"] { display: none; position: absolute; z-index: 12; bottom: calc(100% + 8px); left: 0; width: min(280px, 70vw); padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface, white); font-size: 12px; line-height: 1.6; white-space: normal; box-shadow: 0 4px 16px #0002; }
+.build-test-term:hover [role="tooltip"], .build-test-term:focus [role="tooltip"] { display: block; }

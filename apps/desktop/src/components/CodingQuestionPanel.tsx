@@ -1,3 +1,4 @@
+import { CodingQuestionForm } from './CodingQuestionForm'
 import { useEffect, useRef, useState } from 'react'
 import { validateCodingQuestionReply, type CodingQuestionRequest, type CodingQuestionReply } from '@ai-devflow/shared'
 
@@ -33,25 +34,10 @@ export function CodingQuestionPanel({ question, active, busy, onReply }: {
     <strong>{question.status === 'pending' && !pending ? '问题已过期或会话已结束' : statusText[question.status]}</strong>
     <p>回答用于补充需求。命令执行和最终变更仍需单独审批。</p>
     {pending ? <form onSubmit={(event) => { event.preventDefault(); if (valid) send({ kind: 'answer', answers }) }}>
-      {question.questions.map((item, index) => <fieldset key={index} disabled={busy}>
-        <legend>{item.question}</legend>
-        {item.options.map((option) => <label className="coding-question-option" key={option.label}>
-          <input type={item.multiple ? 'checkbox' : 'radio'} name={`${question.id}-${index}`} checked={selections[index]?.includes(option.label) ?? false}
-            onChange={(event) => {
-              setSelections((previous) => previous.map((selected, i) => i !== index ? selected : item.multiple
-                ? event.target.checked ? [...selected, option.label] : selected.filter((value) => value !== option.label)
-                : [option.label]))
-              if (!item.multiple) setCustom((previous) => previous.map((value, i) => i === index ? '' : value))
-            }} />
-          <span><b>{option.label}</b> — {option.description}</span>
-        </label>)}
-        {item.custom !== false && <label className="coding-question-custom">{item.header}：自定义回答
-          <input type="text" maxLength={4000} value={custom[index]} onChange={(event) => {
-            setCustom((previous) => previous.map((value, i) => i === index ? event.target.value : value))
-            if (!item.multiple) setSelections((previous) => previous.map((value, i) => i === index ? [] : value))
-          }} />
-        </label>}
-      </fieldset>)}
+      {question.questions.map((item, index) => <CodingQuestionForm key={index} question={item} name={`${question.id}-${index}`} selected={selections[index] ?? []} custom={custom[index] ?? ''} disabled={busy} onChange={(selected, value) => {
+        setSelections(previous => previous.map((s, i) => i === index ? selected : s))
+        setCustom(previous => previous.map((s, i) => i === index ? value : s))
+      }} />)}
       <div className="button-row">
         <button type="submit" className="primary-button" disabled={busy || !valid}>发送回答</button>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => send({ kind: 'dismiss' })}>跳过这些问题</button>

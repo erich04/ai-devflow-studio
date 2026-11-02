@@ -488,7 +488,7 @@ export function useDesktopWorkspace(input: {
     })
     const unsubscribeEvent = desktopApi.onCodingEventAppended((event) => {
       setCodingEvents((previous) => mergeById(previous, [event]))
-      if (event.kind === 'cleanup') refreshCodingState('刷新 managed workspace 清理状态失败')
+      if (event.kind === 'cleanup' || event.kind === 'test' || event.metadata?.providerCall && typeof event.metadata.providerCall === 'object' && (event.metadata.providerCall as { phase?: string }).phase === 'repair') refreshCodingState('刷新 managed workspace 清理状态失败')
     })
     const unsubscribePermission = desktopApi.onCodingPermissionUpdated((request) => {
       setCodingPermissionRequests((previous) => mergeById(previous, [request]))

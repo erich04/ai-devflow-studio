@@ -1,7 +1,7 @@
 import type { CardView } from '../../app/gate-decision/projection'
 import { DetailPopover } from '../DetailPopover'
 import { FindingCard } from './FindingCard'
-import { useGateScope } from './GateDecisionScope'
+import { useDecisionPage } from './DecisionPageContext'
 import { QuestionCard } from './QuestionCard'
 
 /** Visible label and accessible name of a card's narrow-mode marker (§5.7). */
@@ -22,12 +22,12 @@ export function GateCard(props: Parameters<typeof FindingCard>[0]) {
  * `data-label`), opening the same card in a popover (AC38).
  */
 export function GateMarker({ cardId }: { cardId: string }) {
-  const scope = useGateScope()
+  const scope = useDecisionPage()
   const card = scope.view.margin.cards.find((item) => item.id === cardId)
   if (!card) return null
-  const { label, ariaLabel } = markerLabels(card)
-  return <DetailPopover className={`gate-marker gate-marker--${markerTone(card)} is-${card.status}`} label={null} title={ariaLabel} triggerLabel={ariaLabel}
+  const { label, ariaLabel } = scope.markerLabel(card)
+  return <DetailPopover className={`gate-marker gate-marker--${scope.markerTone(card)} is-${card.status}`} label={null} title={ariaLabel} triggerLabel={ariaLabel}
     restoreFocusOnOutside hideTitle triggerAttributes={{ 'data-label': label, 'data-card-id': card.id }}>
-    <GateCard card={card} />
+    {scope.renderCard(card, {})}
   </DetailPopover>
 }

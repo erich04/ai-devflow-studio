@@ -1,3 +1,9 @@
+import type { BuildTestChatPage } from '../app/build-test/chat'
+import { BuildTestDecisionScope } from '../components/build-test/BuildTestDecisionScope'
+import { BuildTestWorkspace } from '../components/build-test/BuildTestWorkspace'
+import type { BuildTestController } from '../app/useBuildTestController'
+import { displayCurrentStage, resolveBuildTestPage, type BuildTestFacts } from '../app/build-test/facts'
+import { buildTestStageLabels } from '../app/build-test/projection'
 import { CodingQuestionPanel } from '../components/CodingQuestionPanel'
 import { CodingSessionPermissions } from '../components/CodingSessionPermissions'
 import { type Node, type NodeProps } from '@xyflow/react'
@@ -147,6 +153,7 @@ export function AppNode({ data, selected }: NodeProps<Node<{ workflowNode: Workf
 export type WorkflowBoardView = 'compact' | 'flow' | 'list'
 
 export function WorkflowBoard({
+  buildTestFacts,
   view: boardView = 'compact',
   run,
   artifacts,
@@ -158,6 +165,7 @@ export function WorkflowBoard({
   onDiscuss,
 }: {
   /** Chosen in the task menu (plan Y6); the stage row keeps only the six stage items. */
+  buildTestFacts?: BuildTestFacts | undefined
   view?: WorkflowBoardView
   run: WorkflowRun
   artifacts: Artifact[]
@@ -173,6 +181,9 @@ export function WorkflowBoard({
     () => buildWorkflowBoard({ run, artifacts, events, testEvidence }),
     [artifacts, events, run, testEvidence],
   )
+  const semanticLabels = buildTestFacts ? buildTestStageLabels(buildTestFacts) : undefined
+  const semanticStage = buildTestFacts ? displayCurrentStage(buildTestFacts) : undefined
+  const labelFor = (stage: string) => stage === 'build' || stage === 'test' ? semanticLabels?.[stage] : undefined
   const currentNode = run.nodes.find((node) => node.id === run.currentNodeId)
   const browsingStage = run.nodes.find((node) => node.id === selectedNodeId)?.stage ?? currentNode?.stage
   const viewedStage = board.find((stage) => stage.stage === browsingStage)
@@ -192,10 +203,10 @@ export function WorkflowBoard({
           // The browsed stage item is also the sub-step disclosure (plan §5.1, Y6): no separate button.
           const togglesSubSteps = boardView === 'compact' && browsingStage === stage.stage
           return <div className="workflow-stage-step" key={stage.stage}>
-          <button className={`stage-nav--${stage.completionState}`} data-testid="stage-item" aria-current={currentNode?.stage === stage.stage ? 'step' : undefined}
+          <button className={`stage-nav--${stage.completionState}`} data-testid="stage-item" aria-current={(semanticStage ?? currentNode?.stage) === stage.stage ? 'step' : undefined}
             aria-pressed={browsingStage === stage.stage} aria-expanded={togglesSubSteps ? subStepsOpen : undefined}
             aria-controls={`${boardView === 'compact' ? 'workflow-stage-nodes' : `workflow-stage-${stage.stage}`} workbench-node-reader`} disabled={!stage.cards.length}
-            title={`${stage.label}：${stage.completionLabel}，${stage.completedNodeCount}/${stage.cards.length} 个子步骤已完成；${togglesSubSteps ? (subStepsOpen ? '点击收起子步骤' : '点击展开子步骤') : '点击查看本阶段'}`}
+            title={labelFor(stage.stage) ? `${stage.label}：${labelFor(stage.stage)}` : `${stage.label}：${stage.completionLabel}，${stage.completedNodeCount}/${stage.cards.length} 个子步骤已完成；${togglesSubSteps ? (subStepsOpen ? '点击收起子步骤' : '点击展开子步骤') : '点击查看本阶段'}`}
             onClick={() => {
               if (togglesSubSteps) {
                 setSubStepsOpen(!subStepsOpen)
@@ -207,13 +218,13 @@ export function WorkflowBoard({
             <span className="stage-nav-index">{stage.index}</span><strong>{stage.label}</strong>
             {/* Sub-steps are folded into the stage item (plan L2): count on the actual stage, state elsewhere. */}
             <small>
-              {currentNode?.stage === stage.stage && stage.completionState === 'current' ? `${stage.completedNodeCount}/${stage.cards.length}` : stage.completionLabel}
+              {labelFor(stage.stage) ?? (currentNode?.stage === stage.stage && stage.completionState === 'current' ? `${stage.completedNodeCount}/${stage.cards.length}` : stage.completionLabel)}
               {togglesSubSteps ? <ChevronDown size={12} aria-hidden="true" className={`stage-substeps-chevron ${subStepsOpen ? 'expanded' : ''}`} /> : null}
             </small>
           </button>
           {index < board.length - 1 && <div className="stage-progress-link" role="progressbar" aria-label={`${stage.label}阶段进度`}
             aria-valuemin={0} aria-valuemax={100} aria-valuenow={stage.progressPercent}
-            aria-valuetext={`${stage.completedNodeCount}/${stage.cards.length} 个节点已完成${currentNode?.stage === stage.stage ? `，当前：${displayNodeTitle(currentNode)}` : ''}`}>
+            aria-valuetext={labelFor(stage.stage) ?? `${stage.completedNodeCount}/${stage.cards.length} 个节点已完成${currentNode?.stage === stage.stage ? `，当前：${displayNodeTitle(currentNode)}` : ''}`}>
             <span style={{ width: `${stage.progressPercent}%` }} />
           </div>}
         </div>
@@ -344,6 +355,7 @@ export function isDiscussionProposal(artifact: Artifact): boolean {
 const NO_REVIEWS: AgentReviewResult[] = []
 
 export function Inspector({
+  buildTest, onBuildTestChatPage, onFocusChatMessage,
   modelReadinessError,
   selectedRun,
   selectedNode,
@@ -447,6 +459,9 @@ export function Inspector({
   executionEvidence,
   runEvents,
 }: {
+  onBuildTestChatPage?: ((page: BuildTestChatPage | undefined) => void) | undefined
+  onFocusChatMessage?: ((id: string) => void) | undefined
+  buildTest?: BuildTestController | undefined
   /** All events of the run: approval records decide which design was confirmed (plan S4, Z5). */
   runEvents?: AgentEvent[] | undefined
   /** Coding Run evidence for the build step's 执行记录 (plan Y3). */
@@ -533,7 +548,7 @@ export function Inspector({
   onRunTests: () => void
   testRunReadiness: TestRunReadiness
   /** Opens the matching settings section; the reading position is kept for the return (W9, Y1). */
-  onOpenSettings: (target: 'coding' | 'tests' | 'models', position: InspectorReadingPosition | null) => void
+  onOpenSettings: (target: 'coding' | 'tests' | 'models' | 'projects' | 'team', position: InspectorReadingPosition | null) => void
   readingPositionRef?: React.MutableRefObject<(() => InspectorReadingPosition | null) | null> | undefined
   onOpenKnowledgeReference: (referenceId: string, documentId?: string) => void
   onRunCodingAgent: (additionalAttemptAfterCount?: number) => void
@@ -1758,6 +1773,27 @@ export function Inspector({
     }}
   />
 ) : null
+
+  if (buildTest?.facts && selectedRun && revisionLists && (selectedNode.stage === 'build' || selectedNode.stage === 'test') && resolveBuildTestPage(buildTest.facts, selectedNode.stage) !== 'notReached') {
+    const currentWork = viewModel.activeTab.tabId === CURRENT_WORK_TAB
+    const showCurrent = () => setDocumentId('')
+    const openVersion = (id: string) => { setDocumentId(id); setRequestedTab(CURRENT_WORK_TAB) }
+    return <aside className="inspector inspector--gate-page" data-testid="node-inspector">
+      <BuildTestDecisionScope key={`${selectedRun.id}:${selectedNode.stage}`} onChatPage={onBuildTestChatPage} revisionFocus={revisionFocus} focusMessage={onFocusChatMessage} onDiscuss={onDiscussMaterial} controller={buildTest} stage={selectedNode.stage} reading={documentId || undefined} revisionLists={revisionLists}
+        showCurrent={showCurrent} showCurrentWork={() => setRequestedTab(CURRENT_WORK_TAB)} openVersion={openVersion} openReport={() => setRequestedTab(MATERIALS_TAB)} openSettings={target => onOpenSettings(target, readingPosition())}>
+        {view => <>
+          <GateDecisionBar />
+          {tabBar}
+          <div className="inspector-document-scroll" id="workspace-content" data-testid="workspace-tabpanel" role="tabpanel" ref={tabPanelRef} aria-labelledby={`workspace-tab-${viewModel.tabs.indexOf(viewModel.activeTab)}`}>
+            {currentWork ? <BuildTestWorkspace material={view.material} reading={documentId || undefined} openVersion={openVersion} showCurrent={showCurrent} /> : viewModel.activeTab.tabId === MATERIALS_TAB ? <>
+              <section><h3>改动与测试报告</h3><ul>{view.material.list.map(item => <li key={item.id}><button type="button" className="text-button" onClick={() => openVersion(item.id)}>{item.text}</button></li>)}</ul></section>
+              {renderArtifacts()}
+            </> : <>{renderTrace()}{latestCodingRun ? <CodingSessionPermissions codingRunId={latestCodingRun.id} status={latestCodingRun.status} /> : null}{executionEvidence}</>}
+          </div>
+        </>}
+      </BuildTestDecisionScope>
+    </aside>
+  }
 
   if (gatePage && selectedRun && revisionLists) {
     const page = gatePage

@@ -1,3 +1,6 @@
+import { recordDiscussedCards, discussionPlaceholder } from './app/discussed-cards'
+import type { ChangeChatLink } from './app/build-test/chat'
+import type { ConversationFocus } from '../electron/workbench-conversation-contract'
 import { InvestigationControls, InvestigationProgress } from './InvestigationControls'
 import { ConversationUsage } from './components/ConversationUsage'
 import { WorkbenchSplitter } from './WorkbenchSplitter'
@@ -8,7 +11,7 @@ import { PendingComposer, ReferenceChips, type PendingDraft } from './PendingCom
 import { ConversationDetailsDialog, ConversationTabMenu, type ConversationMenuTarget, type ConversationTabTarget } from './ConversationDetails'
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUp, Brain, ChevronDown, History, MessageCircle, MoreHorizontal, PanelRightClose, Pin, Plus, RotateCcw, Square, X } from 'lucide-react'
-import { type WorkflowRun } from '@ai-devflow/shared'
+import { estimateConversationQuestionCost, type WorkflowRun } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from './desktop-api'
 import type { ConversationAction, ConversationCommand, ConversationMessage, WorkbenchConversation } from '../electron/workbench-conversation-contract'
 import {
@@ -48,13 +51,15 @@ const statusCopy: Record<WorkbenchConversation['status'], string> = {
   idle: '可以继续提问', running: '正在调查', awaiting_answer: '等待你的回答', failed: '需要重试', interrupted: '上次调查已中断', cancelled: '已停止',
 }
 
-export function WorkbenchWorkspace({ api, projectId, projectName, runs, providerId, providerName, request, onNavigate, onConfigure, children, splitDetails = false, modelReadinessError, viewContext, revisionLinkFor, onOpenRevisionItem, onReAddChatItem, focusMessage }: {
+export function WorkbenchWorkspace({ providerModel = '', buildTestChat, api, projectId, projectName, runs, providerId, providerName, request, onNavigate, onConfigure, children, splitDetails = false, modelReadinessError, viewContext, revisionLinkFor, onOpenRevisionItem, onReAddChatItem, focusMessage }: {
+  buildTestChat?: BuildTestChatBridge | undefined
   api: Pick<DevFlowDesktopApi, 'workbenchConversation' | 'onWorkbenchConversationUpdated'> | null
   projectId: string | undefined
   projectName: string | undefined
   runs: WorkflowRun[]
   providerId: string
   providerName: string
+  providerModel?: string
   request: WorkbenchOpenRequest
   onNavigate: (action: ConversationAction) => void
   onConfigure: () => void
@@ -62,7 +67,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   modelReadinessError?: string | undefined
   splitDetails?: boolean
   /** "当前：任务 · 步骤 · 版本" / "正在查看：…" (design §5.10). */
-  viewContext?: { label: string } | undefined
+  viewContext?: { label: string; readable?: string; focus?: ConversationFocus } | undefined
   revisionLinkFor?: RevisionLinkFor | undefined
   onOpenRevisionItem?: ((link: AddedRevisionLink, message: ConversationMessage) => void) | undefined
   onReAddChatItem?: ((link: ReAddRevisionLink) => void) | undefined
@@ -269,9 +274,11 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     const id = created.conversationId
     // 3. The model still gets the full reference block; the bubble and the title use `display`.
     const sent = await runCommand({ type: 'send', projectId, conversationId: id, providerId, text: outgoing,
+      ...(viewContext?.focus ? { focus: viewContext.focus } : {}),
       ...(draft.references.length ? { display: { text: typed, references: draft.references.map(referenceChipLabel) } } : {}) })
     if (currentGeneration !== generation.current) return
     // 4. Open it: an empty box and no chip after a success; the typed draft and the chip after a failure.
+    if (sent) recordDiscussedCards(projectId, id, outgoing, draft.references, sent)
     const queued = pendingDraftRef.current?.queued ?? []
     setReferencesFor(id, sent ? queued.reduce(addDiscussionReference, [] as DiscussionReference[]) : queued.reduce(addDiscussionReference, draft.references))
     setPendingDraft(null)
@@ -354,7 +361,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       <button className="workspace-icon" aria-label="会话历史" title="会话历史" aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}><History size={18} /></button>
       {splitDetails && <button className="workspace-icon" aria-label="收起答疑" title="收起答疑；会话、草稿与阅读位置都会保留" onClick={() => rememberDiscussion('closed')}><PanelRightClose size={18} /></button>}
     </div>
-    {viewContext && <p className="conversation-context-chip" data-testid="conversation-context-chip">{viewContext.label}</p>}
+    {viewContext && <p className="conversation-context-chip" data-testid="conversation-context-chip">{viewContext.label}{viewContext.readable ? <><br /><span>{viewContext.readable}</span></> : null}</p>}
     {tabMenu && menuSession && <ConversationTabMenu key={menuSession.id} target={tabMenu} onClose={closeMenu} onDetails={() => { setDetailsTarget(tabMenu); setTabMenu(null) }} />}
     {detailsTarget && detailsSession && <ConversationDetailsDialog key={detailsSession.id} session={detailsSession} projectName={projectName ?? '当前项目'} providerName={providerName} statusLabel={statusCopy[detailsSession.status]} returnFocus={detailsTarget.trigger} onClose={() => setDetailsTarget(null)} onRename={(title) => runCommand({ type: 'update', projectId: detailsSession.localProjectId, conversationId: detailsSession.id, title })} />}
     {creationRequest && creationRequest.projectId === projectId && <NewConversationDialog nativeReadOnlyPilotEnabled={nativeReadOnlyPilotEnabled && !nativeConversationsEnabled} prompt={creationRequest.prompt} providerName={providerName} creating={creating} error={error} onClose={() => { if (!creatingRef.current) { setCreationRequest(null); setError('') } }} onCreate={(executor) => void create(executor)} />}
@@ -380,7 +387,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       onCancel={() => { if (pendingDraftRef.current && !pendingDraftRef.current.sending) { setPendingDraft(null); setError('') } }} />}
     {active !== 'details' && !session && !showHistory && !pendingDraft && <p className="conversation-loading" role="status">{creating ? '正在创建独立对话…' : '正在恢复会话…'}</p>}
     {session && <div id={`chat-panel-${session.id}`} role="tabpanel" aria-labelledby={`chat-tab-${session.id}`} hidden={showHistory} className="workspace-conversation">
-      <ConversationView modelReadinessError={modelReadinessError} key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand}
+      <ConversationView providerModel={providerModel} focus={viewContext?.focus} buildTestChat={buildTestChat} modelReadinessError={modelReadinessError} key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand}
         references={referencesFor(session.id)} onReferencesChange={(next) => setReferencesFor(session.id, next)}
         revisionLinkFor={revisionLinkFor} onOpenRevisionItem={onOpenRevisionItem} onReAddChatItem={onReAddChatItem}
         flashMessageId={flashMessageId?.id} flashSerial={flashMessageId?.serial} />
@@ -395,7 +402,10 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   </DiscussionPaneContext.Provider> : conversationPane
 }
 
-function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure, modelReadinessError, references, onReferencesChange, revisionLinkFor, onOpenRevisionItem, onReAddChatItem, flashMessageId, flashSerial }: {
+function ConversationView({ providerModel, focus, buildTestChat, session, runs, providerId, providerName, command, onNavigate, onConfigure, modelReadinessError, references, onReferencesChange, revisionLinkFor, onOpenRevisionItem, onReAddChatItem, flashMessageId, flashSerial }: {
+  providerModel: string
+  focus?: ConversationFocus | undefined
+  buildTestChat?: BuildTestChatBridge | undefined
   modelReadinessError?: string | undefined
   session: WorkbenchConversation; runs: WorkflowRun[]; providerId: string; providerName: string
   command: (input: ConversationCommand) => Promise<import('../electron/workbench-conversation-contract').ConversationResponse | undefined>
@@ -446,12 +456,13 @@ function ConversationView({ session, runs, providerId, providerName, command, on
     setSending(true)
     // Save the exact pending input first, so a rejected send never loses the draft.
     await command({ type: 'update', ...scope, inputDraft: text })
-    const result = await command({ type: 'send', ...scope, providerId, text: outgoing, ...(answerTo ? { answerToMessageId: answerTo } : {}),
+    const result = await command({ type: 'send', ...scope, providerId, text: outgoing, ...(focus ? { focus } : {}), ...(answerTo ? { answerToMessageId: answerTo } : {}),
       ...(references.length ? { display: { text, references: references.map(referenceChipLabel) } } : {}) })
-    if (result) { updateInput(''); setAnswerTo(null); if (references.length) onReferencesChange([]) }
+    if (result) { recordDiscussedCards(scope.projectId, session.id, outgoing, references, result); updateInput(''); setAnswerTo(null); if (references.length) onReferencesChange([]) }
     setSending(false)
     textarea.current?.focus()
   }
+  const questionCost = estimateConversationQuestionCost({ messages: session.messages, providerId, model: providerModel, now: new Date().toISOString() })
   const visibleMessages = session.messages.filter((message) => message.role !== 'notice' || message.reasoning || message.failure || !message.provider)
   return <>
     <div className="conversation-messages" aria-label="当前会话消息" aria-busy={busy} onScroll={(event) => { const element = event.currentTarget; followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
@@ -459,9 +470,9 @@ function ConversationView({ session, runs, providerId, providerName, command, on
         <div className="conversation-avatar"><MessageCircle /></div><h3>从一个问题开始</h3><p>讨论整个项目，也可以深入任意节点。每个 Tab 保留自己的聊天历史。</p>
         {['现在进行到哪里了，下一步做什么？', '结合项目代码，帮我澄清这次需求。', '哪些测试或审批还没有完成？'].map((suggestion) => <button key={suggestion} onClick={() => { updateInput(suggestion); textarea.current?.focus() }}>{suggestion}<ArrowUp size={14} /></button>)}
       </div>}
-      {visibleMessages.map((message) => <ConversationMessageView key={message.id} message={message} busy={busy} flashing={flashing === message.id}
+      {visibleMessages.map((message) => <div key={message.id}><ConversationMessageView message={message} busy={busy} flashing={flashing === message.id}
         revisionLink={message.draft && revisionLinkFor ? revisionLinkFor(message) : undefined}
-        onOpenRevisionItem={(link) => onOpenRevisionItem?.(link, message)} onReAddChatItem={(link) => onReAddChatItem?.(link)} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} readContent={async (field, offset) => (await command({ type: 'read_content', ...scope, messageId: message.id, field, offset }))?.contentPage} onRetryReview={() => void command({ type: 'retry_review', ...scope, messageId: message.id, providerId })} onPublish={(acknowledgeUnverified) => void command({ type: 'publish', ...scope, messageId: message.id, ...(acknowledgeUnverified ? { acknowledgeUnverified: true } : {}) })} />)}
+        onOpenRevisionItem={(link) => onOpenRevisionItem?.(link, message)} onReAddChatItem={(link) => onReAddChatItem?.(link)} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} readContent={async (field, offset) => (await command({ type: 'read_content', ...scope, messageId: message.id, field, offset }))?.contentPage} onRetryReview={() => void command({ type: 'retry_review', ...scope, messageId: message.id, providerId })} onPublish={(acknowledgeUnverified) => void command({ type: 'publish', ...scope, messageId: message.id, ...(acknowledgeUnverified ? { acknowledgeUnverified: true } : {}) })} />{buildTestChat ? <ChangeSuggestion link={buildTestChat.link(message)} onAction={() => buildTestChat.act(session.id, message)} /> : null}</div>)}
 
       {busy && <p className="conversation-activity" role="status"><span className="conversation-running-dot" />正在调用 {providerName || 'Provider'} 调查；可以停止。</p>}
       {modelReadinessError && <div className="conversation-error" role="status">{modelReadinessError}<button className="text-button" onClick={onConfigure}>打开项目模型设置</button></div>}
@@ -477,8 +488,8 @@ function ConversationView({ session, runs, providerId, providerName, command, on
       <ReferenceChips references={references} onRemove={(id) => onReferencesChange(references.filter((item) => item.id !== id))} />
       {sendError && <p className="conversation-error" role="alert">{sendError}</p>}
       <label className="sr-only" htmlFor={`compose-${session.id}`}>对话内容</label>
-      <textarea ref={textarea} id={`compose-${session.id}`} aria-label="对话内容" value={input} maxLength={12000} onChange={(event) => updateInput(event.target.value)} placeholder="问进度、查代码、讨论需求或回答问题…" onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
-      <div className="conversation-composer-footer"><span title="本会话所选模型；调用可能产生费用，用量可在顶栏查看">{providerName || '未配置模型'}</span>
+      <textarea ref={textarea} id={`compose-${session.id}`} aria-label="对话内容" value={input} maxLength={12000} onChange={(event) => updateInput(event.target.value)} placeholder={discussionPlaceholder(references) ?? "问进度、查代码、讨论需求或回答问题…"} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
+      <div className="conversation-composer-footer"><span title="本会话所选模型；调用可能产生费用，用量可在顶栏查看">{providerName || '未配置模型'} · {questionCost === null ? '每问费用未知' : questionCost < .001 ? '预计每问不到 $0.001' : `预计每问 $${questionCost.toFixed(3)}`}</span>
         {busy ? <button type="button" className="ghost-button" aria-label="停止调查" onClick={() => void command({ type: 'cancel', ...scope })}><Square size={15} />停止</button> : <button className="primary-button" type="submit" aria-label="发送消息" title="Enter 发送 · Shift+Enter 换行" aria-description="Enter 发送；Shift+Enter 换行" disabled={!input.trim() || !providerId || sending || Boolean(modelReadinessError)}><ArrowUp size={18} /></button>}
       </div>
     </form>
@@ -604,4 +615,11 @@ function ContentPages({ field, readContent }: { field: 'text' | 'draft' | 'reaso
   return <details className="conversation-content-pages"><summary onClick={() => { if (!page && !loading) void read(0) }}>预览已省略部分内容 · 分页阅读完整原文</summary>
     {page && <><p>{page.offset + 1}–{page.offset + page.text.length} / {page.total} 字符</p><pre>{page.text}</pre><button disabled={loading || page.offset === 0} onClick={() => void read(Math.max(0, page.offset - 16_384))}>上一页</button><button disabled={loading || page.nextOffset === null} onClick={() => { if (page.nextOffset !== null) void read(page.nextOffset) }}>下一页</button></>}
   </details>
+}
+
+export type BuildTestChatBridge = { link(message: ConversationMessage): ChangeChatLink; act(conversationId: string, message: ConversationMessage): void }
+function ChangeSuggestion({ link, onAction }: { link: ChangeChatLink; onAction(): void }) {
+  if (link.state === 'none') return null
+  if (link.state === 'written') return <p className="meta">{link.text}</p>
+  return <div className="conversation-revision-link"><button type="button" className="ghost-button" disabled={link.state === 'disabled'} title={link.state === 'add' ? link.title : undefined} onClick={onAction}>{link.state === 'disabled' ? '加入修订清单' : link.text}</button>{link.state === 'disabled' ? <p className="meta">{link.text}</p> : null}</div>
 }

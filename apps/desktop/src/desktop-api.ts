@@ -1,3 +1,4 @@
+import type { BuildTestDesktopApi, CodingRetryContext } from '../electron/build-test-contract'
 import type { WorkbenchConversationApi } from '../electron/workbench-conversation-contract.js'
 import type {
   AgentEvent,
@@ -107,6 +108,7 @@ export type ProjectGitStatusInput = {
 export type ValidateTestCommandInput = SaveProjectTestCommandInput
 
 export type RunProjectTestsInput = {
+  completeOnPass?: boolean
   projectId: string
   runId: string
   nodeId: string
@@ -233,6 +235,7 @@ export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {
 }
 
 export type RunCodingAgentInput = {
+  context?: CodingRetryContext
   runId: string
   nodeId: string
   projectId: string
@@ -273,7 +276,7 @@ export type PairDesktopResult = {
   credential: DesktopPairingCredential
 }
 
-export type DevFlowDesktopApi = {
+export type DevFlowDesktopApi = Partial<BuildTestDesktopApi> & {
   getModelCostRecovery: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   retryModelCostSettlements: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>

@@ -23,12 +23,12 @@ describe('useTestEvidenceFreshness', () => {
       .mockResolvedValue([{ evidenceId: 'evidence-1', state: 'current' }])
     // A new API object on every render must not re-read (App passes the same bridge each time).
     const { result } = renderHook(() => useTestEvidenceFreshness({ getTestEvidenceFreshness }, 'run-1', [evidence]))
-    await waitFor(() => expect(result.current).toEqual({ 'evidence-1': 'current' }))
+    await waitFor(() => expect(result.current.states).toEqual({ 'evidence-1': 'current' }))
     expect(getTestEvidenceFreshness).toHaveBeenCalledWith({ runId: 'run-1' })
     act(() => { window.dispatchEvent(new Event('focus')) })
-    await waitFor(() => expect(result.current).toEqual({ 'evidence-1': 'stale' }))
+    await waitFor(() => expect(result.current.states).toEqual({ 'evidence-1': 'stale' }))
     act(() => { window.dispatchEvent(new Event('focus')) })
-    await waitFor(() => expect(result.current).toEqual({}))
+    await waitFor(() => expect(result.current.states).toEqual({}))
     expect(getTestEvidenceFreshness).toHaveBeenCalledTimes(3)
   })
 

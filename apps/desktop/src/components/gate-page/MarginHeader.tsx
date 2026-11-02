@@ -1,5 +1,5 @@
 import { gateCopy } from '../../app/gate-decision/copy'
-import { useGateScope } from './GateDecisionScope'
+import { useDecisionPage } from './DecisionPageContext'
 import { GateMarker } from './GateMarker'
 
 /**
@@ -8,7 +8,7 @@ import { GateMarker } from './GateMarker'
  * and also holds the markers of unlocated cards.
  */
 export function MarginHeader({ narrow, unlocated }: { narrow: boolean; unlocated: readonly string[] }) {
-  const scope = useGateScope()
+  const scope = useDecisionPage()
   const { header, note, cards } = scope.view.margin
   const adoptAll = () => {
     if (!header) return
@@ -22,6 +22,7 @@ export function MarginHeader({ narrow, unlocated }: { narrow: boolean; unlocated
   const mergeButton = (merge: { text: string; cardId: string }) =>
     <button key={merge.cardId + merge.text} type="button" className="text-button" onClick={() => scope.focusCard(merge.cardId)}>{merge.text}</button>
   return <div className={`gate-margin-header${narrow ? ' is-narrow' : ''}`}>
+    {header?.title ? <strong>{header.title}</strong> : null}
     {header ? <>
       <strong>{header.text}</strong>
       {merges.length ? <p className="gate-margin-merges">{merges.slice(0, 2).map(mergeButton)}</p> : null}
