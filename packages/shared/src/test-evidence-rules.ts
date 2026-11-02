@@ -1,5 +1,5 @@
-import type { Artifact, CodingAgentEvent, CodingAgentRun, ManagedCodingWorkspace, TestEvidence, TestEvidenceFreshness, WorkflowRun } from './domain'
-export type TaskTestReportInput = { run: WorkflowRun; testEvidence: readonly TestEvidence[]; codingRuns: readonly CodingAgentRun[]; codingEvents?: readonly CodingAgentEvent[]; workspaces?: readonly ManagedCodingWorkspace[] }
+import type { Artifact, CodingAgentEvent, CodingAgentRun, CodingPermissionDecision, ManagedCodingWorkspace, TestEvidence, TestEvidenceFreshness, WorkflowRun } from './domain'
+export type TaskTestReportInput = { run: WorkflowRun; testEvidence: readonly TestEvidence[]; codingRuns: readonly CodingAgentRun[]; codingEvents?: readonly CodingAgentEvent[]; permissionDecisions?: readonly CodingPermissionDecision[]; workspaces?: readonly ManagedCodingWorkspace[] }
 export type TaskTestReport = { evidence: TestEvidence; number: number; label: string; codingRunId?: string }
 export function isDeliveryTestEvidence(evidence: TestEvidence): boolean { return evidence.sourceCommitSha !== undefined }
 export function listTaskTestReports(input: TaskTestReportInput): TaskTestReport[] {

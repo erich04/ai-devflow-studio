@@ -80,6 +80,7 @@ export function buildGitPatchDiffView(patch: string): ChangeSetDiffView {
       const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/u.exec(line)
       if (hunk) {
         if (remainingOld || remainingNew) { file.unparsed = true; break }
+        if (found) gap(file.rows, newLine, Number(hunk[3]) - 1)
         oldLine = Number(hunk[1]); newLine = Number(hunk[3]); remainingOld = Number(hunk[2] ?? 1); remainingNew = Number(hunk[4] ?? 1)
         if (!found) gap(file.rows, 1, newLine - 1)
         found = true; continue

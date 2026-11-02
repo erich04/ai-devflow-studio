@@ -12,3 +12,9 @@ it('reads Vitest and Jest and keeps failure excerpts bounded', () => {
   expect(result.keyLines.length).toBeLessThanOrEqual(12)
   expect(result.keyLines.join('\n').length).toBeLessThanOrEqual(2000)
 })
+
+it('uses the last complete TAP/Node totals and retains Node failure names and AssertionError context', () => {
+  const output = '# tests 2\n# pass 2\n# fail 0\n✖ verifies the resulting tree 20ms\nAssertionError: wrong tree\nexpected: new\nactual: old\nℹ tests 3\nℹ pass 2\nℹ fail 1\n'
+  expect(parseTestOutput(output, 'failed')).toMatchObject({ counts: { total: 3, passed: 2, failed: 1 }, failures: ['verifies the resulting tree'] })
+  expect(parseTestOutput(output, 'failed').keyLines.join('\n')).toContain('AssertionError: wrong tree')
+})

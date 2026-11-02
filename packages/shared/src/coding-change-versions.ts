@@ -21,7 +21,18 @@ export function summarizeRunBuildTestMaterials(input: CodingChangeVersionInput &
   const workspace = input.workspaces.find(w => w.id === latestCoding?.managedWorkspaceId)
   const report = listTaskTestReports({ ...input, codingRuns }).at(-1)
   const owner = codingRuns.find(c => c.id === report?.codingRunId)
-  const forLabel = versions.get(owner?.changeSetId ?? owner?.diffArtifactId ?? '')?.label
+  const testedEvent = input.codingEvents?.find(e => e.codingRunId === owner?.id && e.metadata?.evidenceId === report?.evidence.id && typeof e.metadata?.changeSetId === 'string')
+  let testedId = testedEvent && input.changeSets.some(c => c.id === testedEvent.metadata?.changeSetId && c.codingRunId === owner?.id && c.changeSetDigest === testedEvent.metadata?.changeSetDigest) ? String(testedEvent.metadata!.changeSetId) : undefined
+  if (!testedId && report && owner) {
+    const approvals = (input.permissionDecisions ?? []).filter(d => d.codingRunId === owner.id && d.decision === 'approved' && d.decidedAt <= report.evidence.createdAt)
+      .flatMap(d => { const request = input.permissionRequests.find(p => p.id === d.requestId && p.codingRunId === owner.id && p.changeSetId); return request ? [{ id: request.changeSetId!, at: d.decidedAt }] : [] })
+      .sort((a, b) => a.at.localeCompare(b.at))
+    const last = approvals.at(-1)
+    if (last && approvals.filter(a => a.at === last.at).length === 1) testedId = last.id
+    // OpenCode's exact acceptance request identifies the report for its final diff.
+    testedId ??= input.permissionRequests.find(p => p.codingRunId === owner.id && p.origin === 'change_acceptance' && p.testEvidenceId === report.evidence.id)?.diffArtifactId
+  }
+  const forLabel = testedId ? versions.get(testedId)?.label : undefined
   return {
     build: { ...(id && version ? { current: { label: version.label, ...(change ? { changeSetId: change.id, changeSetDigest: change.changeSetDigest } : { diffArtifactId: id }), status: request?.status ?? 'pending' } } : {}), workspace: !workspace ? 'none' as const : workspace.deletedAt || workspace.cleanupStatus === 'deleted' ? 'deleted' as const : 'active' as const },
     ...(report ? { test: { latest: { label: report.label, evidenceId: report.evidence.id, status: report.evidence.status, ...(forLabel ? { forLabel } : {}) } } } : {}),

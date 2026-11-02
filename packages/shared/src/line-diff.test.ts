@@ -51,3 +51,8 @@ describe('approved change display', () => {
     ])
   })
 })
+
+it('preserves gaps between separate patch hunks', () => {
+  const patch = 'diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -2 +2 @@\n-b\n+B\n@@ -10 +10 @@\n-j\n+J\n'
+  expect(buildGitPatchDiffView(patch).files[0]!.rows).toContainEqual({ kind: 'gap', from: 3, to: 9 })
+})
