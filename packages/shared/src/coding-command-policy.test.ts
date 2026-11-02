@@ -20,7 +20,7 @@ describe('coding command permission policy', () => {
     expect(decideCodingCommand({ rules, mode, sandboxed: true, executable: '/candidate/git', args: ['status'] })).toBe(result)
   })
   it('does not turn shell, inline code or wrapper prefixes into automatic execution authority', () => {
-    for (const [executable, args] of [['sh', ['-c', 'git status; curl example.test']], ['node', ['-e', 'process.exit()']], ['env', ['git', 'status']], ['powershell.exe', ['-Command', 'Get-Content x']]] as const) {
+    for (const [executable, args] of [['sh', ['-c', 'git status; curl example.test']], ['node', ['-e', 'process.exit()']], ['node', ['-p1']], ['python3', ['-Icpass']], ['perl', ['-weprint 1']], ['env', ['git', 'status']], ['powershell.exe', ['-Command', 'Get-Content x']]] as const) {
       const allow = parseCodingCommandRules([{ prefix: [executable], decision: 'allow' }])
       expect(decideCodingCommand({ rules: allow, mode: 'sandbox_rules', sandboxed: true, executable, args: [...args] })).toBe('ask')
       expect(decideCodingCommand({ rules: allow, mode: 'unattended', sandboxed: true, executable, args: [...args] })).toBe('deny')

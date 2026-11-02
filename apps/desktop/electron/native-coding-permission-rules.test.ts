@@ -47,3 +47,10 @@ it('does not allow policy mutation after execution has been granted', async () =
   const f = await fixture()
   await expect(mutateNativeCodingSession(f.store, 'native-coding', s => { s.binding!.permissionPolicy!.mode = 'unattended' })).rejects.toThrow(/immutable/)
 })
+it('does not reuse an expired task grant for a later identical command', async () => {
+  const f = await fixture()
+  await expect(f.invoke('one')).rejects.toBeInstanceOf(CodingPermissionWait)
+  await mutateNativeCodingSession(f.store, 'native-coding', s => { Object.assign(s.permissions[0]!, { decision: 'approved', scope: 'task', expiresAt: new Date(0).toISOString() }); s.status = 'running' })
+  await expect(f.invoke('two')).rejects.toBeInstanceOf(CodingPermissionWait)
+  expect((await f.store.getNativeCodingSession('native-coding'))!.permissions).toHaveLength(2)
+})

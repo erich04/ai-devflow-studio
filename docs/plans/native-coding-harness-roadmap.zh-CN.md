@@ -116,9 +116,9 @@ Native Coding v3 是 DevFlow 自己写的编码 Agent harness，没有使用 Ope
 | 4 | 读文件提速 | [#287](https://github.com/erich04/ai-devflow-studio/pull/287) | 已合入 v3 |
 | 5 | 预算预留 | [#286](https://github.com/erich04/ai-devflow-studio/pull/286) | 已合入 v3 |
 | 6 | DeepSeek 适配 | [#289](https://github.com/erich04/ai-devflow-studio/pull/289) | 回归测试已合入；记忆脚本改名另行交接 |
-| 7 | 独立验证者 | [#293](https://github.com/erich04/ai-devflow-studio/pull/293) | 已实现；验证与 CI 通过后合入 |
-| 8 | 系统沙箱设为默认 | `codex/native-v3-default-sandbox` | 已实现，组合验证与 CI 中 |
-| 9 | 权限规则 | — | 未开始 |
+| 7 | 独立验证者 | [#293](https://github.com/erich04/ai-devflow-studio/pull/293) | 已合入 V3，完整 verify 与六项 CI 通过 |
+| 8 | 系统沙箱设为默认 | [#294](https://github.com/erich04/ai-devflow-studio/pull/294) | 已实现，组合验证与 CI 中 |
+| 9 | 权限规则 | `codex/native-v3-permission-rules` | 已实现，真实命令与授权测试通过，完整验证中 |
 | 10 | 计划和任务图 | — | 未开始 |
 | 11 | 委派挂到计划节点上 | — | 未开始 |
 | 12 | 后台命令完成后主动唤醒模型 | — | 未开始 |

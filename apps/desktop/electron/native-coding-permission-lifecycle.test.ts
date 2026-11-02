@@ -6,6 +6,16 @@ import { codingHarnessFixture, codingToolReply } from './native-coding-test-fixt
 import { CodingCandidateWorkspace } from './coding-candidate-workspace'
 import type { CodingHarnessCommand } from '@ai-devflow/shared'
 
+it('rejects a denied saved test at authorization before any model call', async () => {
+  let calls = 0
+  const f = await codingHarnessFixture(async () => { calls++; return codingToolReply('stop', 'report_blocked', { reason: 'must not call' }) }, undefined, {}, undefined, { commandRules: [{ prefix: [process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'], decision: 'deny' }] })
+  try {
+    await expect(f.authorize()).rejects.toThrow(/conflicts with a deny rule/)
+    expect(calls).toBe(0)
+    expect((await f.store.getNativeCodingSession('native-coding'))!.binding!.executionGranted).toBe(false)
+  } finally { await f.executor.shutdown(); await f.store.close(); await rm(f.root, { recursive: true, force: true }) }
+})
+
 it.runIf(process.platform !== 'win32').each(['allowed', 'denied'] as const)('applies %s rules to actual sandbox commands without an unattended prompt', async outcome => {
   let turn = 0
   const args = outcome === 'allowed' ? ['--version'] : ['-e', 'require("fs").writeFileSync("should-not-exist","x")']

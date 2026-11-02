@@ -23,8 +23,10 @@ it('selects the system sandbox by default without implicitly enabling networking
   render(<NativeCodingHarnessPanel codingRunId="coding" api={{ codingHarness: command }} />)
   expect(await screen.findByLabelText('命令执行方式')).toHaveValue('os_sandbox')
   expect(screen.getByRole('checkbox', { name: /允许本任务沙箱命令联网/ })).not.toBeChecked()
+  expect(screen.getByLabelText('额外操作权限')).toHaveValue('ask')
+  fireEvent.change(screen.getByLabelText('额外操作权限'), { target: { value: 'unattended' } })
   fireEvent.click(screen.getByRole('button', { name: '授权并开始' }))
-  await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'authorize', profile: 'os_sandbox', network: 'none' })))
+  await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'authorize', profile: 'os_sandbox', network: 'none', permissionMode: 'unattended' })))
 })
 
 it('shows an unavailable executor reason with readable history and no actionable approval controls', async () => {

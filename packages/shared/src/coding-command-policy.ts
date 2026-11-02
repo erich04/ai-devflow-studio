@@ -17,7 +17,10 @@ function opaqueCommand(executable: string, args: string[]): boolean {
   const name = executable.split(/[\\/]/u).at(-1)!.toLowerCase().replace(/\.exe$/u, '')
   if (['sh', 'bash', 'zsh', 'dash', 'fish', 'ksh', 'csh', 'tcsh', 'cmd', 'powershell', 'pwsh', 'env', 'sudo', 'doas', 'xargs', 'nice', 'nohup', 'timeout', 'watch', 'npx'].includes(name)) return true
   if (name === 'git' && args[0]?.startsWith('-')) return true
-  return /^(node|nodejs|python[\d.]*|ruby|perl|php|lua[\d.]*|deno|bun)$/u.test(name) && args.some(arg => /^(?:-[ecp]|--eval|--print|eval)(?:=|$)/u.test(arg))
+  // Interpreters accept attached/combined short options too (node -p1,
+  // python -Icpass, perl -we...). Stay conservative rather than trying to
+  // reimplement each interpreter's option parser inside an allow rule.
+  return /^(node|nodejs|python[\d.]*|ruby|perl|php|lua[\d.]*|deno|bun)$/u.test(name) && args.some(arg => /^(?:--(?:eval|print)(?:=|$)|eval$|-[^-]*[ecp])/u.test(arg))
 }
 
 /** A prefix decision governs this direct invocation, not arbitrary code it may load.
