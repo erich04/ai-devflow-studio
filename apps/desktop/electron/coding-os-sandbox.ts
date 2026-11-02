@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { access, readFile, realpath, stat } from 'node:fs/promises'
+import { access, lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { promisify } from 'node:util'
 import path from 'node:path'
@@ -86,7 +86,13 @@ export async function prepareCodingSandbox(input: CodingSandboxInput): Promise<C
   if (input.linuxBackend !== 'landlock') {
     const bwrap = await runnable('/usr/bin/bwrap') ? '/usr/bin/bwrap' : '/bin/bwrap'
     const prefix = ['--die-with-parent', '--new-session', '--unshare-all', '--unshare-user', '--disable-userns', ...(input.network === 'enabled' ? ['--share-net'] : []), '--cap-drop', 'ALL', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp']
-    for (const root of readonly) prefix.push('--ro-bind', root, root)
+    for (const root of readonly.filter(root => !readonly.some(parent => parent !== root && root.startsWith(`${parent}/`)))) {
+      // A bind mount dereferences a symlink. Preserve the alias instead, or
+      // Node resolves package-relative imports from a synthetic bin/npm file.
+      // Ancestor mounts already preserve all their own descendants and links.
+      if ((await lstat(root)).isSymbolicLink()) prefix.push('--symlink', await realpath(root), root)
+      else prefix.push('--ro-bind', root, root)
+    }
     for (const root of writable) prefix.push('--bind', root, root)
     // Sharing the network namespace also exposes host abstract Unix sockets.
     // Keep the same socket-family and syscall restrictions as the fallback.
