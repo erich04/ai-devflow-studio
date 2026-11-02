@@ -13,7 +13,7 @@ const scenarios: Scenario[] = [
   { name: 'expired tool permission', row: 'B7', stage: 'build', prepare: f => { const r = addCoding(f, { engine: 'opencode-http' }), p = addChange(f, r); delete p.changeSetId; p.status = 'expired'; r.permissionPause = { requestId: p.id, pausedAt: NOW } } },
   { name: 'pending exact change', row: 'B8', stage: 'build', prepare: f => { addChange(f, addCoding(f)) } },
   { name: 'revising', row: 'B9', stage: 'build', prepare: f => { const r = addCoding(f), p = addChange(f, r); r.status = 'running'; r.revisionInFlight = { previousRequestId: p.id, previousChangeSetId: p.changeSetId!, previousChangeSetDigest: p.changeSetDigest!, requestedAt: NOW, itemCount: 1 } } },
-  { name: 'OpenCode final acceptance', row: 'B10', stage: 'build', prepare: f => { const r = addCoding(f, { engine: 'opencode-http' }), p = addChange(f, r); delete p.changeSetId; p.origin = 'change_acceptance'; p.diffArtifactId = 'diff'; addReport(f, r) } },
+  { name: 'OpenCode final acceptance', row: 'B10', stage: 'build', prepare: f => { const r = addCoding(f, { engine: 'opencode-http' }), p = addChange(f, r); delete p.changeSetId; delete p.changeSetDigest; p.origin = 'change_acceptance'; p.diffArtifactId = 'diff'; p.diffSourceDigest = 'd'.repeat(64); f.codingDiffArtifacts.push({ id: 'diff', runId: f.run.id, nodeId: f.buildNode.id, projectId: f.run.projectId, changedPaths: ['src/search.ts'], patch: 'diff --git a/src/search.ts b/src/search.ts\n--- a/src/search.ts\n+++ b/src/search.ts\n@@ -1 +1 @@\n-const search = false\n+const search = true\n', sourceDigest: p.diffSourceDigest, truncated: false, redacted: true, createdAt: NOW }); addReport(f, r) } },
   ...(['cancelled', 'failed', 'timed_out', 'interrupted'] as const).map(status => ({ name: `ended ${status}`, row: 'B11', stage: 'build' as const, prepare: (f: BuildTestFacts) => { addCoding(f, { status }) } })),
   { name: 'completed build', row: 'B1', stage: 'build', prepare: f => { f.run.currentNodeId = f.testNode.id } },
   { name: 'old change', row: 'B2', stage: 'build', prepare: f => addChange(f, addCoding(f)).changeSetId! },
@@ -33,6 +33,14 @@ it.each(scenarios)('$name uses truthful first-layer prose and keeps unsafe decis
   const f = buildTestFacts(), reading = prepare(f) || undefined
   const view = projectBuildTestDecision({ facts: f, stage, reading })
   expect(view.bar.row).toBe(row)
+  if (row === 'B10') {
+    expect(view.material.kind).toBe('change')
+    expect(view.material.change?.files[0]?.rows.some(r => r.text === 'const search = true')).toBe(true)
+    expect(view.identity.request?.diffSourceDigest).toBe('d'.repeat(64))
+    expect(view.bar.buttons.filter(b => ['approveChange', 'rejectChange'].includes(b.id)).map(b => b.enabled)).toEqual([true, true])
+    expect(view.bar.list.actionable).toBe(false)
+    expect(view.margin.cards.some(c => c.kind === 'finding')).toBe(false)
+  }
   const { bar, margin, material } = view
   const prose = [bar.title, bar.progress?.text, bar.meta.deadline?.text, bar.meta.freshness,
     ...bar.notes.filter(n => !n.raw?.length).map(n => n.text), ...bar.buttons.flatMap(b => [b.label, b.disabledReason, b.confirmBefore]),
@@ -46,4 +54,12 @@ it.each(scenarios)('$name uses truthful first-layer prose and keeps unsafe decis
   if (['T9', 'T10'].includes(row)) expect(bar.buttons.find(b => b.id === 'confirmEvidence')?.enabled).toBe(false)
   if (['B1', 'T1'].includes(row)) expect(bar.buttons).toEqual([])
   if (reading) expect(bar.buttons.map(b => b.id)).toEqual(['returnToCurrent'])
+})
+
+it('keeps unloaded final acceptance disabled until its exact diff arrives', () => {
+  const f = buildTestFacts()
+  scenarios.find(s => s.row === 'B10')!.prepare(f)
+  f.codingDiffArtifacts = []
+  const view = projectBuildTestDecision({ facts: f, stage: 'build' })
+  expect(view.bar.buttons.filter(b => ['approveChange', 'rejectChange'].includes(b.id)).map(b => b.enabled)).toEqual([false, false])
 })

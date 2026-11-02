@@ -26,6 +26,7 @@ const sessionSecret = 'native-coding-electron-smoke-session-secret-32'
 const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-native-coding-electron-'))
 const repositoryPath = path.join(tempRoot, 'fixture-repository')
 const userDataDir = path.join(tempRoot, 'user-data')
+const testCounterPath = path.join(tempRoot, 'test-command-count')
 const modelRequests = []
 
 function browserSessionHeaders(authAccountId) {
@@ -355,7 +356,7 @@ try {
     "const fs = require('node:fs'); if (fs.readFileSync('src/message.js', 'utf8') !== 'export const message = \\\"new\\\"\\n') process.exit(1)\n",
     'utf8',
   )
-  if (buildTestSmoke) await writeFile(path.join(repositoryPath, 'test.js'), `const { test } = require('node:test'); const assert = require('node:assert/strict'); const fs = require('node:fs'); test('消息符合保存的测试要求', () => assert.equal(fs.readFileSync('src/message.js', 'utf8'), 'export const message = \"fixed\"\\n'))\n`)
+  if (buildTestSmoke) await writeFile(path.join(repositoryPath, 'test.js'), `require('node:fs').writeFileSync(${JSON.stringify(testCounterPath)}, String(Number(require('node:fs').existsSync(${JSON.stringify(testCounterPath)}) ? require('node:fs').readFileSync(${JSON.stringify(testCounterPath)}, 'utf8') : 0) + 1)); const { test } = require('node:test'); const assert = require('node:assert/strict'); const fs = require('node:fs'); test('消息符合保存的测试要求', () => assert.equal(fs.readFileSync('src/message.js', 'utf8'), 'export const message = \"fixed\"\\n'))\n`)
   await writeFile(path.join(repositoryPath, 'package.json'), JSON.stringify({
     name: 'native-coding-electron-smoke',
     version: '1.0.0',
@@ -500,7 +501,7 @@ try {
   })
 
   if (buildTestSmoke) {
-    await runBuildTestScenario({ page, run, buildNode, project, modelRequests, repositoryPath })
+    await runBuildTestScenario({ page, run, buildNode, project, modelRequests, repositoryPath, testCounterPath })
   } else {
   const started = await page.evaluate(async (input) => {
     return window.aiDevFlowDesktop.runCodingAgent(input)
