@@ -38,4 +38,3 @@ export function describeProviderFailure(trace: { errorCode?: AgentProviderErrorC
     codeDescriptions.unknown_provider_failure
   return trace.httpStatus === undefined ? description : `${description}，HTTP ${trace.httpStatus}`
 }
-
