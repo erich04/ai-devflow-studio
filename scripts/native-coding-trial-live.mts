@@ -16,8 +16,9 @@ import { createWorkflowRuntime } from '../apps/desktop/electron/workflow-runtime
 import { createEvaluationLedger, evaluationUsage, saveJson, digest } from './native-coding-live-support.ts'
 import { historicalPrefixSystem, legacyPrefixRequest } from './native-coding-cache-probe.ts'
 import { handleEvaluationChildControls } from './native-coding-live-operator.ts'
+import { parseCodingCommandRules, type CodingCommandRule, type CodingPermissionMode } from '../packages/shared/src/index.ts'
 
-export type TrialInput = { requestLayout?: 'legacy' | 'fixed'; id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; roundRoot?: string; scopeId?: string }
+export type TrialInput = { requestLayout?: 'legacy' | 'fixed'; id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; roundRoot?: string; scopeId?: string; execution?: { profile: 'os_sandbox'; network: 'none' | 'enabled'; permissionMode: CodingPermissionMode; commandRules: CodingCommandRule[] } }
 export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const start = Date.now(), now = () => new Date().toISOString(), projectId = 'evaluation-project', providerId = 'deepseek-evaluation'
   const ledger = await createEvaluationLedger({ file: path.join(input.output, 'ledger.json'), projectId, maxCalls: input.maxCalls, maxCostUsd: input.maxCostUsd,
@@ -66,7 +67,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const manager = createOpencodeProcessManager()
   let engine: ReturnType<typeof createOpencodeHttpCodingEngineAdapter> | undefined
   let executor: ReturnType<typeof createNativeCodingExecutorV2> | ReturnType<typeof createNativeCodingExecutorV3> | undefined
-  if (input.engine === 'native-v3') executor = native = createNativeCodingExecutorV3({ store, provider, root: path.join(input.output, 'harness'), configVersion: 1 })
+  if (input.engine === 'native-v3') executor = native = createNativeCodingExecutorV3({ store, provider, root: path.join(input.output, 'harness'), configVersion: 1, ...(input.execution ? { commandRules: parseCodingCommandRules(input.execution.commandRules) } : {}) })
   else if (input.engine === 'native-v2') executor = createNativeCodingExecutorV2({ store, decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(provider), configVersion: 1, runSavedTest: runBoundedTest, testTimeoutMs: 300000 })
   else {
     relay = await createGovernedOpencodeProxy({ binding: { providerId, modelId: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey, fingerprint: digest('frozen-deepseek-flash-high') }, projectId, governance: ledger, maxOutputTokens: input.maxOutputTokens,
@@ -115,7 +116,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     if (native) {
       const get = (target = codingRunId!) => coding.codingHarnessCommand({ protocolVersion: 2, type: 'get', codingRunId: target })
       const command = async (body: Record<string, unknown>, target = codingRunId!) => { const snapshot = await get(target); const value = { protocolVersion: 2, codingRunId: target, commandId: `operator-${actions.length}`, expectedVersion: snapshot.version, ...body } as CodingHarnessCommand; await recordAction({ command: value }); return coding.codingHarnessCommand(value) }
-      await command({ type: 'authorize', profile: 'trusted_local' })
+      await command({ type: 'authorize', ...(input.execution ? { profile: input.execution.profile, network: input.execution.network, permissionMode: input.execution.permissionMode } : { profile: 'trusted_local' }) })
       let answered = false
       while (!deadlineExpired) {
         await native.settled(codingRunId)
@@ -154,12 +155,22 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     codingRunId ??= current?.id
     const workspace = current ? (await store.listManagedCodingWorkspaces(projectId)).find(item => item.id === current.managedWorkspaceId) : undefined
     const session = codingRunId ? await store.getNativeCodingSession(`native-${codingRunId}`) : undefined
+    const sessions = session ? [session] : []
+    for (let i = 0; i < sessions.length; i++) for (const child of sessions[i]!.children) {
+      if (sessions.some(row => row.id === child.sessionId)) continue
+      const saved = await store.getNativeCodingSession(child.sessionId); if (saved) sessions.push(saved)
+    }
+    const permissions = sessions.flatMap(row => row.permissions)
     const events = codingRunId ? await store.listCodingAgentEvents(codingRunId) : []
     const usage = evaluationUsage(ledger.records())
     const report = { id: input.id, engine: input.engine, provider: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', claimedCompleted: current?.status === 'completed', status: session?.status ?? current?.status ?? 'not_started', failure: deadlineExpired ? failure ?? 'evaluation_wall_time_limit' : failure, providerUnavailable, deadlineExpired, durationMs: Date.now() - start, ...usage,
       codingRun: current, workspace: workspace?.worktreePath, finalSnapshot, metrics: { humanInterventions: actions.filter(action => (action.command as { type?: string })?.type === 'reply').length, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, peakContextTokens: usage.peakContextTokens,
         effectiveInvestigationSteps: session ? session.toolReceipts.filter(row => row.effect === 'read' && row.status === 'completed').length : input.engine === 'native-v2' ? observations.filter(row => row.kind === 'structured').length : null,
-        repairAttempts: session ? session.revisions.length - Math.min(1, session.revisions.length) : null, recoveryAttempts: 0, recoverySuccesses: 0 } }
+        repairAttempts: session ? session.revisions.length - Math.min(1, session.revisions.length) : null, recoveryAttempts: 0, recoverySuccesses: 0,
+        humanPermissionPrompts: permissions.filter(row => row.source !== 'rule').length,
+        automaticPermissionAllows: permissions.filter(row => row.source === 'rule' && row.decision === 'approved').length,
+        automaticPermissionDenials: permissions.filter(row => row.source === 'rule' && row.decision === 'rejected').length,
+        executionProfile: session?.binding?.profile, independentVerification: session?.deliveryEvidence.map(row => row.result?.independentVerification ?? null) } }
     await saveJson(path.join(input.output, 'trial.json'), report)
     await saveJson(path.join(input.output, 'events.json'), events)
     if (session) await saveJson(path.join(input.output, 'session.json'), session)

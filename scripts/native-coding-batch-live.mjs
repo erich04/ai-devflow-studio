@@ -51,7 +51,7 @@ export function protectedEvaluationPath(file) {
   return /(?:^|\/)(?:package\.json|pnpm-lock\.yaml|package-lock\.json|pnpm-workspace\.yaml|\.npmrc|vitest[^/]*|vite\.config\.[^/]+|tsconfig[^/]*)$/u.test(file) || /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)
 }
 async function json(file, value, exclusive = false) { await writeFile(file, JSON.stringify(value, null, 2) + '\n', { flag: exclusive ? 'wx' : 'w', mode: 0o600 }) }
-async function removeDisposableDependencies(root) {
+export async function removeDisposableDependencies(root) {
   for (const item of await readdir(root, { withFileTypes: true })) {
     if (!item.isDirectory() || item.name === '.git') continue
     const directory = path.join(root, item.name)
@@ -59,7 +59,7 @@ async function removeDisposableDependencies(root) {
     else await removeDisposableDependencies(directory)
   }
 }
-async function removeTrialCommandCaches(execution) {
+export async function removeTrialCommandCaches(execution) {
   const harness = path.join(execution, 'harness')
   const entries = await readdir(harness, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error })
   const removed = []
@@ -97,7 +97,7 @@ export function bindPublicTestPlans(tasks, publicPlans, qualification, taskManif
   })
 }
 
-async function prepare(task, directory) {
+export async function prepare(task, directory) {
   await mkdir(directory)
   const baseline = path.join(directory, 'baseline'), archive = path.join(directory, 'baseline.tar')
   await mkdir(baseline); git(['archive', '--format=tar', `--output=${archive}`, task.baseSha])
@@ -105,7 +105,7 @@ async function prepare(task, directory) {
   for (const args of [['init', '-b', 'main'], ['config', 'user.name', 'Evaluation'], ['config', 'user.email', 'evaluation@example.invalid'], ['add', '.'], ['commit', '-m', 'Blinded isolated baseline']]) git(args, baseline)
   return baseline
 }
-async function independentCheck(task, baseline, worktree, directory) {
+export async function independentCheck(task, baseline, worktree, directory, execute = runProcess) {
   const destination = path.join(directory, 'independent'); await mkdir(destination)
   const ignore = new Set(['node_modules', '.git', '.next', 'out', 'dist', 'coverage', '.cache'])
   await cp(worktree || baseline, destination, { recursive: true, filter: source => !path.relative(worktree || baseline, source).split(path.sep).some(part => ignore.has(part)) })
@@ -113,10 +113,10 @@ async function independentCheck(task, baseline, worktree, directory) {
   const files = git(['ls-tree', '-r', '--name-only', 'HEAD'], baseline).toString().trim().split('\n')
   for (const file of files.filter(protectedEvaluationPath)) { await mkdir(path.dirname(path.join(destination, file)), { recursive: true }); await writeFile(path.join(destination, file), git(['show', `HEAD:${file}`], baseline)) }
   for (const file of task.acceptanceTests) { await mkdir(path.dirname(path.join(destination, file)), { recursive: true }); await writeFile(path.join(destination, file), git(['show', `${task.referenceSha}:${file}`])) }
-  const install = await runProcess(corepack, ['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts'], destination, path.join(directory, 'independent-install.log'))
+  const install = await execute(corepack, ['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts'], destination, path.join(directory, 'independent-install.log'))
   if (install.code !== 0 || install.timedOut) return { passed: false, install, failure: 'independent_install' }
   const reportFile = path.join(directory, 'independent-tests.json')
-  const process = await runProcess(corepack, ['pnpm', 'exec', 'vitest', 'run', ...task.acceptanceTests, '--reporter=json', '--outputFile', reportFile], destination, path.join(directory, 'independent-tests.log'))
+  const process = await execute(corepack, ['pnpm', 'exec', 'vitest', 'run', ...task.acceptanceTests, '--reporter=json', '--outputFile', reportFile], destination, path.join(directory, 'independent-tests.log'))
   let report; try { report = JSON.parse(await readFile(reportFile, 'utf8')) } catch {}
   const passed = process.code === 0 && !process.timedOut && report?.numTotalTests > 0 && report.numPassedTests === report.numTotalTests && !report.numFailedTests && !report.numUnhandledErrors
   return { passed, process, total: report?.numTotalTests ?? null, passedAssertions: report?.numPassedTests ?? null, failedAssertions: report?.numFailedTests ?? null, reportDigest: report ? digest(JSON.stringify(report)) : null }
