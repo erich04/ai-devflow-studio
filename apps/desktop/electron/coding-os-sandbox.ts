@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { access, realpath, stat } from 'node:fs/promises'
+import { access, readFile, realpath, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { promisify } from 'node:util'
 import path from 'node:path'
@@ -26,6 +26,25 @@ async function readableRoots(platform: NodeJS.Platform, executable: string): Pro
   // Only this binary is added for a host-installed tool outside system roots.
   // Its containing user directory is never made visible.
   if (path.isAbsolute(executable)) { try { roots.push(await realpath(executable)) } catch {} }
+  // Shell test/install plans also launch the host's Node package managers. CI
+  // and nvm install them outside system roots. Expose only the resolved binary
+  // and a verified package-manager package, never its containing home/toolcache.
+  for (const name of ['node', 'npm', 'corepack', 'pnpm']) {
+    for (const directory of (process.env.PATH ?? '').split(path.delimiter).filter(path.isAbsolute)) {
+      const candidate = path.join(directory, name)
+      if (!await runnable(candidate)) continue
+      const resolved = await realpath(candidate); roots.push(candidate, resolved)
+      if (name !== 'node') {
+        let parent = path.dirname(resolved)
+        for (let depth = 0; depth < 4 && parent !== path.parse(parent).root; depth++, parent = path.dirname(parent)) {
+          try {
+            if (path.basename(parent) === name && JSON.parse(await readFile(path.join(parent, 'package.json'), 'utf8')).name === name) { roots.push(parent); break }
+          } catch { /* This ancestor is not the installed package. */ }
+        }
+      }
+      break
+    }
+  }
   return [...new Set(roots)]
 }
 
@@ -37,6 +56,7 @@ export function codingSeatbeltPolicy(readable: string[], writable: string[], net
     '(allow file-read* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))',
     '(allow file-write-data (literal "/dev/null"))', `(allow file-write* ${writable.map(root => `(subpath ${sb(root)})`).join(' ')})`]
   if (network === 'enabled') forms.push('(allow network-bind (local ip "*:*"))', '(allow network-inbound (local ip "*:*"))', '(allow network-outbound (remote ip "*:*"))',
+    '(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))',
     '(allow mach-lookup (global-name "com.apple.SystemConfiguration.DNSConfiguration") (global-name "com.apple.SystemConfiguration.configd"))')
   return forms.join('\n')
 }

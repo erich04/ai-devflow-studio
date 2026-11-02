@@ -35,6 +35,8 @@ jobs:
       - run: node scripts/ensure-electron-install.mjs
       - run: corepack pnpm exec playwright install chromium
       - run: corepack pnpm verify
+        env:
+          DEVFLOW_REQUIRE_PUBLIC_DNS: '1'
       - name: V2.0 candidate-bound evaluator
         run: corepack pnpm test:v20-agent-runtime-evaluator -- --candidate-sha "${GITHUB_SHA}" --output "out/v20-evaluation/${GITHUB_SHA}.json"
       - name: V2.1 candidate-bound evaluator

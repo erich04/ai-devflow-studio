@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { copyFile, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -18,7 +18,35 @@ async function fixture() {
   return { root, cwd, temporaryDirectory, secret }
 }
 const supported = process.platform === 'darwin' || process.platform === 'linux'
+it.runIf(process.platform === 'darwin' && process.env.DEVFLOW_REQUIRE_PUBLIC_DNS === '1')('permits the OS DNS resolver only with explicit network authorization', async () => {
+  const f = await fixture()
+  const script = 'require("dns").lookup("registry.npmjs.org",(e)=>{console.log(e?"denied":"resolved")})'
+  for (const network of ['none', 'enabled'] as const) {
+    const command = await prepareCodingSandbox({ ...f, executable: process.execPath, args: ['-e', script], network })
+    expect((await exec(command.executable, command.args, { cwd: f.cwd, timeout: 10000 })).stdout.trim()).toBe(network === 'enabled' ? 'resolved' : 'denied')
+  }
+})
 const backends = process.platform === 'linux' ? [undefined, 'landlock' as const, ...(process.env.DEVFLOW_REQUIRE_BUBBLEWRAP === '1' ? ['bubblewrap' as const] : [])] : [undefined]
+it.runIf(supported)('runs a shell package-manager child from a private Node installation without exposing adjacent private files', async () => {
+  const f = await fixture(), bin = path.join(f.root, 'host-toolchain', 'bin')
+  await mkdir(bin, { recursive: true }); await copyFile(process.execPath, path.join(bin, 'node'))
+  // Homebrew Node uses a sibling libnode; keep that existing system runtime
+  // accessible so this fixture isolates executable permissions, not linking.
+  const installed = await realpath(process.execPath)
+  if (installed.startsWith('/opt/homebrew/')) await symlink(path.join(path.dirname(path.dirname(installed)), 'lib'), path.join(bin, '..', 'lib'))
+  const npm = path.join(f.root, 'node-packages', 'npm')
+  await mkdir(path.join(npm, 'bin'), { recursive: true })
+  await writeFile(path.join(npm, 'package.json'), JSON.stringify({ name: 'npm' }))
+  await writeFile(path.join(npm, 'bin', 'npm-cli.js'), `#!/usr/bin/env node\nrequire('../entry.cjs')\n`, { mode: 0o755 })
+  await writeFile(path.join(npm, 'entry.cjs'), `const fs=require('fs'); require('assert/strict').throws(()=>fs.readFileSync(${JSON.stringify(f.secret)})); console.log('private runtime works')`)
+  await symlink(path.join(npm, 'bin', 'npm-cli.js'), path.join(bin, 'npm'))
+  const previous = process.env.PATH
+  try {
+    process.env.PATH = `${bin}${path.delimiter}/usr/bin${path.delimiter}/bin`
+    const command = await prepareCodingSandbox({ ...f, executable: '/bin/sh', args: ['-c', 'exec npm'], network: 'none' })
+    expect((await exec(command.executable, command.args, { cwd: f.cwd, env: { PATH: process.env.PATH }, timeout: 10000 })).stdout).toContain('private runtime works')
+  } finally { process.env.PATH = previous }
+})
 describe.each(backends)('sandbox backend %s', linuxBackend => {
 it.runIf(supported)('allows workspace edits while rejecting outside writes, symlink escapes and private host reads', async () => {
   const f = await fixture(); await symlink(f.root, path.join(f.cwd, 'escape'))
