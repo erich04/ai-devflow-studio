@@ -43,6 +43,7 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
       limits: { maxSteps: session.limits.maxSteps, maxActiveMilliseconds: session.limits.maxActiveMilliseconds },
       acceptance: session.acceptance.map(({ id, text, sourceRef, resolution }) => ({ id, text, sourceRef, resolution })),
       ...(binding.manualValidationPlan ? { manualValidationPlan: binding.manualValidationPlan } : {}),
+      ...(binding.permissionPolicy ? { permissionPolicy: { mode: binding.permissionPolicy.mode, rules: binding.permissionPolicy.rules, humanPrompts: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source !== 'rule').length, 0), automaticDecisions: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source === 'rule').length, 0) } } : {}),
       ...(binding.independentVerificationRequired && !binding.manualValidationPlan && !session.parent ? { independentVerification: {
         status: independentPlan ? 'frozen' as const : 'preparing' as const, criteriaCount: independentPlan?.criteria.length ?? session.acceptance.length,
         repairRounds: Math.min(2, objectiveEvidence.filter(item => item.status === 'test_failed' && item.result?.status !== 'cancelled').length),

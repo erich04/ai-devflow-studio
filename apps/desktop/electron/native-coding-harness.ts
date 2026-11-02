@@ -1,7 +1,7 @@
 import { codingHarnessSnapshot, markCodingDeliveryConflict, currentCodingDeliveryDigest } from './native-coding-projection'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { parseCodingHarnessCommand, sanitizeCodingDiffArtifact, redactSensitiveText, type AgentProvider, type CodingAgentRun, type CodingHarnessCommand, type CodingHarnessSnapshot, type CodingHarnessPage, type TestEvidence, type ModelCostRecord } from '@ai-devflow/shared'
+import { parseCodingHarnessCommand, parseCodingCommandRules, decideCodingCommand, sanitizeCodingDiffArtifact, redactSensitiveText, type AgentProvider, type CodingAgentRun, type CodingHarnessCommand, type CodingHarnessSnapshot, type CodingHarnessPage, type TestEvidence, type ModelCostRecord } from '@ai-devflow/shared'
 import type { CodingExecutor, CodingExecutorHarnessResult, CodingExecutorStartInput } from './coding-executor'
 import type { LocalStore } from './local-store'
 import { createNativeCodingSession, mutateNativeCodingSession, type NativeCodingSession } from './native-coding-session'
@@ -30,7 +30,7 @@ function shellPlan(command: string, profile: CodingExecutionProfile): CodingComm
   return codingShellPlan(command, profile)
 }
 
-type HarnessHost = { store: LocalStore; provider: AgentProvider; root: string; configVersion: number; containerProfile?: Extract<CodingExecutionProfile, { kind: 'container' }>; network?: NativeCodingProfile['network']; changed?: (codingRunId: string) => void; costRecords?(projectId: string): Promise<ModelCostRecord[]> }
+type HarnessHost = { store: LocalStore; provider: AgentProvider; root: string; configVersion: number; containerProfile?: Extract<CodingExecutionProfile, { kind: 'container' }>; network?: NativeCodingProfile['network']; commandRules?: NativeCodingProfile['commandRules']; changed?: (codingRunId: string) => void; costRecords?(projectId: string): Promise<ModelCostRecord[]> }
 type Harness = CodingExecutor & { settled(codingRunId: string): Promise<void>; shutdown(): Promise<void> }
 const services = new WeakMap<LocalStore, Map<string, Harness>>()
 export async function shutdownNativeCodingHarnesses(store: LocalStore): Promise<void> {
@@ -41,7 +41,7 @@ export async function shutdownNativeCodingHarnesses(store: LocalStore): Promise<
 export function createNativeCodingExecutorV3(host: HarnessHost): Harness {
   let cache = services.get(host.store)
   if (!cache) { cache = new Map(); services.set(host.store, cache) }
-  const key = JSON.stringify([host.root, host.configVersion, host.provider.id, host.provider.model, host.containerProfile, host.network])
+  const key = JSON.stringify([host.root, host.configVersion, host.provider.id, host.provider.model, host.containerProfile, host.network, host.commandRules])
   const existing = cache.get(key)
   if (existing) return existing
   const service = createHarnessService(host); cache.set(key, service); return service
@@ -383,10 +383,13 @@ function createHarnessService(host: HarnessHost): Harness {
       if (input.digest !== session.binding!.input?.digest) throw new Error('Input files changed after the authorization was presented; start a fresh run with the new baseline')
       const dependencyPlan = await codingDependencyPlan(session.binding!.context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'])
       if (dependencyPlan.inputDigest !== session.binding!.dependencyPlan?.inputDigest || dependencyPlan.command !== session.binding!.dependencyPlan?.command) throw new Error('Dependency plan changed since execution was presented')
+      for (const plan of [shellPlan(session.binding!.context.project.testCommand, profile), dependencyPlan.plan].filter(Boolean)) {
+        if (decideCodingCommand({ rules: session.binding!.permissionPolicy?.rules ?? [], mode: 'ask', sandboxed: profile.kind !== 'trusted_local', executable: plan!.executable, args: plan!.args }) === 'deny') throw new Error('Initial test or dependency plan conflicts with a deny rule')
+      }
       await mkdir(host.root, { recursive: true, mode: 0o700 })
       const created = await CodingCandidateWorkspace.create({ root: session.binding!.workspaceRoot, delivery: session.binding!.context.workspace.worktreePath, baseCommitSha: session.binding!.context.workspace.baseCommitSha!, excludedPaths: ['node_modules', '.cache', 'coverage'] })
       if (created.identity.base.digest !== input.digest) throw new Error('Input changed while creating the immutable candidate')
-      session = await mutate(id, draft => { draft.binding!.executionGranted = true; draft.binding!.profile = profile; draft.binding!.dependencyPlan = dependencyPlan; draft.binding!.authorizationExpiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString(); draft.binding!.testPlan = shellPlan(draft.binding!.context.project.testCommand, profile); draft.binding!.testPlanDigest = codingDigest(JSON.stringify(command.manualValidationPlan ? { manualValidationPlan: command.manualValidationPlan } : draft.binding!.testPlan)); if (command.manualValidationPlan) { draft.binding!.manualValidationPlan = command.manualValidationPlan; draft.transcript.push({ role: 'user', content: `本任务事先选择人工验收，自动测试不会被记为通过。人工计划：${command.manualValidationPlan}` }) }; draft.status = 'ready'; draft.commands.push({ id: command.commandId, digest: fingerprint }) })
+      session = await mutate(id, draft => { draft.binding!.permissionPolicy = { version: 1, mode: command.permissionMode ?? 'ask', rules: draft.binding!.permissionPolicy?.rules ?? parseCodingCommandRules(host.commandRules ?? []) }; draft.binding!.executionGranted = true; draft.binding!.profile = profile; draft.binding!.dependencyPlan = dependencyPlan; draft.binding!.authorizationExpiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString(); draft.binding!.testPlan = shellPlan(draft.binding!.context.project.testCommand, profile); draft.binding!.testPlanDigest = codingDigest(JSON.stringify(command.manualValidationPlan ? { manualValidationPlan: command.manualValidationPlan } : draft.binding!.testPlan)); if (command.manualValidationPlan) { draft.binding!.manualValidationPlan = command.manualValidationPlan; draft.transcript.push({ role: 'user', content: `本任务事先选择人工验收，自动测试不会被记为通过。人工计划：${command.manualValidationPlan}` }) }; draft.status = 'ready'; draft.commands.push({ id: command.commandId, digest: fingerprint }) })
       schedule(id, assertAuthority)
     } else {
       const core = await loadCore(session, assertAuthority)
@@ -431,7 +434,7 @@ function createHarnessService(host: HarnessHost): Harness {
         await mutate(id, draft => {
           const current = pendingCodingPermission(draft)
           if (draft.status !== 'waiting_permission' || current?.id !== command.permissionId || current.objectiveVersion !== draft.objectiveVersion) throw new Error('Permission changed')
-          current.decision = command.decision; current.expiresAt = new Date(Date.now() + 60 * 60_000).toISOString(); draft.status = 'ready'
+          current.decision = command.decision; current.scope = command.scope ?? 'once'; current.expiresAt = command.scope === 'task' ? draft.binding!.authorizationExpiresAt ?? new Date(Date.now() + 60 * 60_000).toISOString() : new Date(Date.now() + 60 * 60_000).toISOString(); draft.status = 'ready'
         })
         schedule(id, assertAuthority)
       }
@@ -515,7 +518,7 @@ function createHarnessService(host: HarnessHost): Harness {
       const session = createNativeCodingSession({ id: sessionId(input.request.id), codingRunId: input.request.id, workflowRunId: context.run.id, nodeId: context.node.id,
         localProjectId: context.project.id, providerId: host.provider.id, model: host.provider.model, objective: context.userInstruction, now: new Date().toISOString() })
       const profile: CodingExecutionProfile = { kind: 'os_sandbox', network: 'none' }, testPlan = shellPlan(context.project.testCommand, profile)
-      session.binding = { request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage']) }
+      session.binding = { permissionPolicy: { version: 1, mode: 'ask', rules: parseCodingCommandRules(host.commandRules ?? []) }, request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage']) }
       session.binding.input = await inspectCodingInput(context.workspace.worktreePath, context.workspace.baseCommitSha)
       session.binding.independentVerificationRequired = true
       session.independentVerification = { plans: [], humanInputs: [] }

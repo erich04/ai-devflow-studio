@@ -1,4 +1,5 @@
 /** Harness turn protocol is versioned independently of executor implementation and file patches. */
+import type { CodingCommandRule, CodingPermissionMode } from './coding-command-policy'
 export const CODING_HARNESS_PROTOCOL_VERSION = 2 as const
 export const NATIVE_CODING_EXECUTOR_UNAVAILABLE = 'Native v3 任务尚未结算；请在模型与执行方式中切回 Native v3，再重新打开任务或重启应用继续恢复。'
 export type CodingHarnessStatus = 'ready' | 'running' | 'waiting_input' | 'waiting_task' | 'waiting_permission' | 'review' | 'paused' | 'reconciling' | 'applying' | 'verifying' | 'completed' | 'cancelled' | 'failed' | 'delivery_conflict'
@@ -8,7 +9,7 @@ export type CodingHarnessDetail = { kind: 'message' | 'diff'; id: string; offset
 export type CodingHarnessPage = { historyOffset?: number; revisionOffset?: number; detail?: CodingHarnessDetail }
 export type CodingHarnessCommand =
   | (CommandBase & CodingHarnessPage & { type: 'get' })
-  | (Mutation & { type: 'authorize'; profile: 'os_sandbox' | 'trusted_local' | 'container'; network?: 'none' | 'enabled'; manualValidationPlan?: string })
+  | (Mutation & { type: 'authorize'; profile: 'os_sandbox' | 'trusted_local' | 'container'; network?: 'none' | 'enabled'; permissionMode?: CodingPermissionMode; manualValidationPlan?: string })
   | (Mutation & { type: 'pause' | 'resume' | 'cancel' | 'retry_unknown' | 'renew_authorization' })
   | (Mutation & { type: 'cleanup_scratch' })
   | (Mutation & { type: 'steer'; text: string })
@@ -16,7 +17,7 @@ export type CodingHarnessCommand =
   | (Mutation & { type: 'approve'; revisionDigest: string; objectiveVersion: number; confirmedCriteria?: string[]; manualValidationEvidence?: string })
   | (Mutation & { type: 'reject'; revisionDigest: string; objectiveVersion: number })
   | (Mutation & { type: 'extend_limits'; maxSteps: number; maxActiveMilliseconds: number })
-  | (Mutation & { type: 'permission'; permissionId: string; decision: 'approved' | 'rejected' })
+  | (Mutation & { type: 'permission'; permissionId: string; decision: 'approved' | 'rejected'; scope?: 'once' | 'task' })
 /** Why the host re-sent a model step on its own: the earlier request was refused unbilled, failed on the server, or never left this machine. */
 export type CodingModelRetryReason = 'rate_limited' | 'overloaded' | 'server_error' | 'connection_not_sent'
 export type CodingHarnessSummary = { protocolVersion: 2; sessionId: string; status: CodingHarnessStatus; version: number }
@@ -41,6 +42,7 @@ export type CodingHarnessSnapshot = CodingHarnessSummary & {
   diagnostics?: { checkpoint: number; objectiveVersion: number; writerActive: boolean; uncertainOperations: Array<{ id: string; kind: string; status: string }>; uncertainTotal: number; profile: string }
   modelRetries?: { total: number; recent: Array<{ attemptId: string; step: number; number: number; limit: number; reason: CodingModelRetryReason; delayMs: number; retryAfterMs?: number; pending: boolean }> }
   manualValidationPlan?: string
+  permissionPolicy?: { mode: CodingPermissionMode; rules: CodingCommandRule[]; humanPrompts: number; automaticDecisions: number }
   independentVerification?: { status: 'preparing' | 'frozen'; criteriaCount: number; repairRounds: number; lastResult?: 'passed' | 'failed' | 'timed_out' | 'cancelled' }
 }
 
@@ -52,7 +54,7 @@ export function parseCodingHarnessCommand(value: unknown): CodingHarnessCommand 
     reply: ['questionId', 'objectiveVersion', 'text'], approve: ['revisionDigest', 'objectiveVersion'], reject: ['revisionDigest', 'objectiveVersion'], permission: ['permissionId', 'decision'], extend_limits: ['maxSteps', 'maxActiveMilliseconds'],
   }
   if (typeof type !== 'string' || !Object.hasOwn(fields, type) || input.protocolVersion !== 2) throw new Error('Unsupported coding harness protocol')
-  const optional = type === 'get' ? ['historyOffset', 'revisionOffset', 'detail'] : type === 'approve' ? ['confirmedCriteria', 'manualValidationEvidence'] : type === 'authorize' ? ['manualValidationPlan', 'network'] : []
+  const optional = type === 'get' ? ['historyOffset', 'revisionOffset', 'detail'] : type === 'approve' ? ['confirmedCriteria', 'manualValidationEvidence'] : type === 'authorize' ? ['manualValidationPlan', 'permissionMode', 'network'] : type === 'permission' ? ['scope'] : []
   const expected = ['protocolVersion', 'type', 'codingRunId', ...(type === 'get' ? [] : ['commandId', 'expectedVersion']), ...fields[type]!, ...optional.filter(key => Object.hasOwn(input, key))]
   if (Object.keys(input).length !== expected.length || expected.some(key => !Object.hasOwn(input, key))) throw new Error('Unexpected coding command fields')
   for (const field of ['codingRunId', 'commandId', 'questionId', 'permissionId']) if (field in input && (typeof input[field] !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/u.test(input[field]))) throw new Error('Invalid coding command identity')
@@ -63,6 +65,8 @@ export function parseCodingHarnessCommand(value: unknown): CodingHarnessCommand 
   if ('profile' in input && !['os_sandbox', 'trusted_local', 'container'].includes(String(input.profile))) throw new Error('Invalid coding execution profile')
   if ('network' in input && (input.type !== 'authorize' || input.profile !== 'os_sandbox' || !['none', 'enabled'].includes(String(input.network)))) throw new Error('Invalid sandbox network authorization')
   if ('decision' in input && !['approved', 'rejected'].includes(String(input.decision))) throw new Error('Invalid coding permission decision')
+  if ('permissionMode' in input && !['ask', 'sandbox_rules', 'unattended'].includes(String(input.permissionMode))) throw new Error('Invalid coding permission mode')
+  if ('scope' in input && (input.decision !== 'approved' || !['once', 'task'].includes(String(input.scope)))) throw new Error('Invalid coding permission scope')
   for (const field of ['historyOffset', 'revisionOffset']) if (field in input && (!Number.isSafeInteger(input[field]) || Number(input[field]) < 0)) throw new Error('Invalid coding page')
   if ('confirmedCriteria' in input && (!Array.isArray(input.confirmedCriteria) || input.confirmedCriteria.length > 100 || input.confirmedCriteria.some(item => typeof item !== 'string' || !/^[a-zA-Z0-9_.:-]{1,200}$/u.test(item)))) throw new Error('Invalid criterion confirmation')
   if (type === 'extend_limits' && (!Number.isSafeInteger(input.maxSteps) || Number(input.maxSteps) < 1 || Number(input.maxSteps) > 10000 || !Number.isSafeInteger(input.maxActiveMilliseconds) || Number(input.maxActiveMilliseconds) < 1 || Number(input.maxActiveMilliseconds) > 24 * 60 * 60_000)) throw new Error('Invalid task limits')

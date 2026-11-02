@@ -1,13 +1,15 @@
 import { readFile } from 'node:fs/promises'
 import type { CodingExecutionProfile } from './coding-command-runner'
+import { parseCodingCommandRules, type CodingCommandRule } from '@ai-devflow/shared'
 
 export type CodingNetworkProfile = { allowedOrigins: string[]; searchEndpoint?: string; apiKeyEnvironment?: string }
-export type NativeCodingProfile = { version: 1; container?: Extract<CodingExecutionProfile, { kind: 'container' }>; network?: CodingNetworkProfile }
+export type NativeCodingProfile = { version: 1; container?: Extract<CodingExecutionProfile, { kind: 'container' }>; network?: CodingNetworkProfile; commandRules?: CodingCommandRule[] }
 /** Host configuration, never model input. No wildcard origins, arbitrary request headers or local fallback. */
 export async function loadNativeCodingProfile(file: string): Promise<NativeCodingProfile> {
   let input: NativeCodingProfile
   try { input = JSON.parse(await readFile(file, 'utf8')) as NativeCodingProfile } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1 }; throw error }
-  if (input.version !== 1 || Object.keys(input).some(key => !['version', 'container', 'network'].includes(key))) throw new Error('Invalid Native coding host profile')
+  if (input.version !== 1 || Object.keys(input).some(key => !['version', 'container', 'network', 'commandRules'].includes(key))) throw new Error('Invalid Native coding host profile')
+  if (input.commandRules !== undefined) input.commandRules = parseCodingCommandRules(input.commandRules)
   if (input.container && (input.container.kind !== 'container' || !/^\S+@sha256:[a-f0-9]{64}$/u.test(input.container.image) || !['none', 'bridge'].includes(input.container.network))) throw new Error('Invalid Native container profile')
   if (input.network) {
     const network = input.network

@@ -907,7 +907,7 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
         const profile = await loadNativeCodingProfile(path.join(app.getPath('userData'), 'native-coding-profile.json'))
         return createNativeCodingExecutorV3({ store, provider: await resolveAgentProvider(store, selection.providerId, projectId),
           root: path.join(app.getPath('userData'), 'native-coding-harness'), configVersion: selection.configVersion,
-          ...(profile.container ? { containerProfile: profile.container } : {}), ...(profile.network ? { network: profile.network } : {}),
+          ...(profile.container ? { containerProfile: profile.container } : {}), ...(profile.network ? { network: profile.network } : {}), ...(profile.commandRules ? { commandRules: profile.commandRules } : {}),
           changed: codingRunId => broadcastToRenderers(ipcChannels.codingHarnessUpdated, codingRunId),
           costRecords: localProjectId => nativeCodingCostRecords(store, localProjectId) })
       }
