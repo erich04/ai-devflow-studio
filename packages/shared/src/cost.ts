@@ -119,7 +119,12 @@ export const DEEPSEEK_PRICING_EFFECTIVE_AT = '2026-08-16T16:00:00.000Z'
 
 export const DEEPSEEK_FLASH_PRICING_VERIFIED_AT = '2026-09-10T15:17:38.000Z'
 export const DEEPSEEK_FLASH_PRICING_SOURCE_VERSION = 'deepseek-pricing-snapshot-2026-09-10'
+// DeepSeek withdrew the Pro-to-Flash routing announced for this instant; Pro billing never changed.
+// Uploaded stage usage is re-validated against this resolver, so that window keeps its Flash price
+// and Pro rates apply again from our recorded verification time.
 const DEEPSEEK_PRO_FLASH_ROUTING_AT = '2026-09-14T04:00:00.000Z'
+export const DEEPSEEK_PRO_PRICING_VERIFIED_AT = '2026-11-01T09:49:20.000Z'
+export const DEEPSEEK_PRO_PRICING_SOURCE_VERSION = 'deepseek-pricing-snapshot-2026-11-01'
 
 type DeepSeekModelPrice = {
   offPeak: { hit: number; miss: number; output: number }
@@ -162,7 +167,9 @@ export function resolveDeepSeekPricingSnapshot(input: {
   if (!Number.isFinite(timestamp)) return null
   const model = input.model.toLowerCase()
   const flash = ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'].includes(model)
-  const proRoutedToFlash = model === 'deepseek-v4-pro' && timestamp >= Date.parse(DEEPSEEK_PRO_FLASH_ROUTING_AT)
+  const pro = model === 'deepseek-v4-pro'
+  const currentPro = pro && timestamp >= Date.parse(DEEPSEEK_PRO_PRICING_VERIFIED_AT)
+  const proRoutedToFlash = pro && !currentPro && timestamp >= Date.parse(DEEPSEEK_PRO_FLASH_ROUTING_AT)
   // The release notice gives a date, not an exact Flash switch instant. Never backprice that
   // transition window; the new snapshot is authoritative from our recorded verification time.
   if (flash && timestamp >= Date.parse('2026-09-09T16:00:00.000Z') &&
@@ -178,9 +185,11 @@ export function resolveDeepSeekPricingSnapshot(input: {
     providerId: input.providerId,
     model: input.model,
     tier,
-    effectiveAt: currentFlash ? (proRoutedToFlash ? DEEPSEEK_PRO_FLASH_ROUTING_AT : DEEPSEEK_FLASH_PRICING_VERIFIED_AT) : DEEPSEEK_PRICING_EFFECTIVE_AT,
+    effectiveAt: currentFlash ? (proRoutedToFlash ? DEEPSEEK_PRO_FLASH_ROUTING_AT : DEEPSEEK_FLASH_PRICING_VERIFIED_AT)
+      : currentPro ? DEEPSEEK_PRO_PRICING_VERIFIED_AT : DEEPSEEK_PRICING_EFFECTIVE_AT,
     source: DEEPSEEK_PRICING_SOURCE,
-    sourceVersion: currentFlash ? DEEPSEEK_FLASH_PRICING_SOURCE_VERSION : DEEPSEEK_PRICING_SOURCE_VERSION,
+    sourceVersion: currentFlash ? DEEPSEEK_FLASH_PRICING_SOURCE_VERSION
+      : currentPro ? DEEPSEEK_PRO_PRICING_SOURCE_VERSION : DEEPSEEK_PRICING_SOURCE_VERSION,
     currency: 'USD',
     unit: 'per_1m_tokens',
     cacheHitInputUsdPerMillion: selected.hit,
