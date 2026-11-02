@@ -72,7 +72,7 @@ export function createCodingExtensions(host: { store: LocalStore; sessionId: str
       await atomicCodingFile(receiptFile(context.operationId), Buffer.from(JSON.stringify({ inputDigest: codingDigest(JSON.stringify(input)), status: 'started' })))
       const client = await createLocalMcpClient({ installation: installed, localProjectPath: host.workspace.candidatePath,
         environment: Object.fromEntries(installed.allowedEnvironmentNames.map(key => [key, process.env[key]])), authorizeCall: value => registry.authorizeCall(value),
-        spawnProcess: (executable, args, options) => host.commands.startStdio(`${host.sessionId}:mcp:${context.operationId}`, executable, args, options.cwd, options.env, context.signal) })
+        spawnProcess: (executable, args, options) => host.commands.startStdio(`${host.sessionId}:mcp:${context.operationId}`, executable, args, options.cwd, options.env, context.signal, context.session.binding?.profile) })
       try {
         let result: unknown
         if (name === 'mcp_tools') result = { installationId: installed.id, installationVersion: installed.version, tools: client.tools }

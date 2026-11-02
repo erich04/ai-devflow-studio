@@ -530,6 +530,9 @@ try {
     const initial = await get()
     expect(initial.status).toBe('waiting_permission')
     await page.reload()
+    // Windows has no OS backend in this phase. Exercise its explicitly selected
+    // legacy profile, never an automatic fallback from a failed sandbox.
+    if (process.platform === 'win32') await page.getByLabel('命令执行方式').selectOption('trusted_local')
     if (manualAcceptance) {
       await page.getByRole('checkbox', { name: '本任务没有适用的自动测试，事先选择人工验收' }).check()
       await page.getByRole('textbox', { name: '人工验收计划', exact: true }).fill('Inspect src/message.js in the frozen diff and confirm the export changed from old to new.')

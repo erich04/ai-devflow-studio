@@ -41,6 +41,8 @@ SQLite 保存版本化会话引用，大内容位于 `devflow.sqlite.contents`�
 
 ## 执行环境
 
+新任务默认 `os_sandbox`，macOS 由 Seatbelt 约束，Linux 由 bubblewrap 或 Landlock/seccomp 约束，默认断网。可写位置仅当前工作区与命令私有临时目录；宿主私有目录不加入只读范围。所有实际命令（含安装、子任务、最终验证与 MCP stdio）由统一执行器包裹，记录后端与策略摘要；启动前探测失败不执行命令，不回退无沙箱。IP 网络必须在开始授权中明确开启。Linux 共享网络命名空间时叠加 helper，关闭宿主 Unix socket 访问；其兼容性限制见使用指南。Windows 后端未在本阶段提供，必须显式选择其他执行方式。
+
 `trusted_local` 使用当前 OS 用户权限，独立目录不是 OS 沙箱。`container` 使用固定镜像 digest、独立绑定目录、只读根文件系统和显式网络模式；镜像或 Docker 不可用就失败，不回退本机。平台可用性以实际平台验证为准。
 
 ## 发布条件

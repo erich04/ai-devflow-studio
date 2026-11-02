@@ -6,6 +6,7 @@ import { codingActiveMilliseconds } from './coding-activity-clock'
 import { pendingCodingPermission } from './native-coding-permissions'
 import type { CodingExecutionProfile } from './coding-command-runner'
 import { codingRetentionPolicy } from './native-coding-retention'
+import { codingSandboxAvailability } from './coding-os-sandbox'
 
 export function markCodingDeliveryConflict(view: CodingHarnessSnapshot): void {
   view.status = 'delivery_conflict'
@@ -41,6 +42,7 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
       ...(session.question ? { question: { id: session.question.id, text: session.question.text, options: session.question.options } } : {}),
       ...(pendingCodingPermission(session) ? { permission: { id: pendingCodingPermission(session)!.id, title: '需要额外执行授权', details: pendingCodingPermission(session)!.details } } : {}),
       execution: { testCommand: binding.context.project.testCommand, dependencyCommand: binding.dependencyPlan?.command ?? '', baseline: binding.context.workspace.baseCommitSha ?? 'unknown', ...(binding.input ? { inputDigest: binding.input.digest, dirtyPaths: binding.input.dirtyPaths } : {}), ...(session.taskBudget ? { maxTokens: session.taskBudget.maxTokens, maxCostUsd: session.taskBudget.maxCostUsd } : {}), profiles: [
+        { kind: 'os_sandbox', ...await codingSandboxAvailability() },
         { kind: 'trusted_local', available: true, reason: '在独立候选/验证目录中以当前用户权限执行，非操作系统沙箱。' },
         { kind: 'container', available: Boolean(host.containerProfile), reason: host.containerProfile ? '使用已配置且固定镜像摘要的容器，启动前检查镜像。' : '尚未配置受管容器镜像。' },
       ] },

@@ -8,7 +8,7 @@ export type CodingHarnessDetail = { kind: 'message' | 'diff'; id: string; offset
 export type CodingHarnessPage = { historyOffset?: number; revisionOffset?: number; detail?: CodingHarnessDetail }
 export type CodingHarnessCommand =
   | (CommandBase & CodingHarnessPage & { type: 'get' })
-  | (Mutation & { type: 'authorize'; profile: 'trusted_local' | 'container'; manualValidationPlan?: string })
+  | (Mutation & { type: 'authorize'; profile: 'os_sandbox' | 'trusted_local' | 'container'; network?: 'none' | 'enabled'; manualValidationPlan?: string })
   | (Mutation & { type: 'pause' | 'resume' | 'cancel' | 'retry_unknown' | 'renew_authorization' })
   | (Mutation & { type: 'cleanup_scratch' })
   | (Mutation & { type: 'steer'; text: string })
@@ -26,7 +26,7 @@ export type CodingHarnessSnapshot = CodingHarnessSummary & {
   messages: Array<{ id: string; role: 'user' | 'assistant' | 'tool'; text: string; truncated?: boolean }>
   question?: { id: string; text: string; options: string[] }
   permission?: { id: string; title: string; details: string }
-  execution?: { testCommand: string; dependencyCommand?: string; baseline: string; inputDigest?: string; dirtyPaths?: string[]; maxTokens?: number; maxCostUsd?: number; profiles: Array<{ kind: 'trusted_local' | 'container'; available: boolean; reason: string }> }
+  execution?: { testCommand: string; dependencyCommand?: string; baseline: string; inputDigest?: string; dirtyPaths?: string[]; maxTokens?: number; maxCostUsd?: number; profiles: Array<{ kind: 'os_sandbox' | 'trusted_local' | 'container'; available: boolean; reason: string }> }
   revision?: { id: string; digest: string; summary: string; files: Array<{ path: string; kind: string; sourcePath?: string; beforeHash: string | null; afterHash: string | null; binary: boolean; diff: string; truncated?: boolean }> }
   detail?: CodingHarnessDetail & { text: string; total: number; previous: number | null; next: number | null }
   evidence: Array<{ id: string; status: string; summary: string }>
@@ -51,7 +51,7 @@ export function parseCodingHarnessCommand(value: unknown): CodingHarnessCommand 
     reply: ['questionId', 'objectiveVersion', 'text'], approve: ['revisionDigest', 'objectiveVersion'], reject: ['revisionDigest', 'objectiveVersion'], permission: ['permissionId', 'decision'], extend_limits: ['maxSteps', 'maxActiveMilliseconds'],
   }
   if (typeof type !== 'string' || !Object.hasOwn(fields, type) || input.protocolVersion !== 2) throw new Error('Unsupported coding harness protocol')
-  const optional = type === 'get' ? ['historyOffset', 'revisionOffset', 'detail'] : type === 'approve' ? ['confirmedCriteria', 'manualValidationEvidence'] : type === 'authorize' ? ['manualValidationPlan'] : []
+  const optional = type === 'get' ? ['historyOffset', 'revisionOffset', 'detail'] : type === 'approve' ? ['confirmedCriteria', 'manualValidationEvidence'] : type === 'authorize' ? ['manualValidationPlan', 'network'] : []
   const expected = ['protocolVersion', 'type', 'codingRunId', ...(type === 'get' ? [] : ['commandId', 'expectedVersion']), ...fields[type]!, ...optional.filter(key => Object.hasOwn(input, key))]
   if (Object.keys(input).length !== expected.length || expected.some(key => !Object.hasOwn(input, key))) throw new Error('Unexpected coding command fields')
   for (const field of ['codingRunId', 'commandId', 'questionId', 'permissionId']) if (field in input && (typeof input[field] !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/u.test(input[field]))) throw new Error('Invalid coding command identity')
@@ -59,7 +59,8 @@ export function parseCodingHarnessCommand(value: unknown): CodingHarnessCommand 
   if ('text' in input && (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 32000)) throw new Error('Invalid coding input')
   for (const field of ['manualValidationPlan', 'manualValidationEvidence']) if (field in input && (typeof input[field] !== 'string' || !input[field].trim() || input[field].length > 8000)) throw new Error('Invalid manual validation input')
   if ('revisionDigest' in input && (typeof input.revisionDigest !== 'string' || !/^[a-f0-9]{64}$/u.test(input.revisionDigest))) throw new Error('Invalid revision digest')
-  if ('profile' in input && !['trusted_local', 'container'].includes(String(input.profile))) throw new Error('Invalid coding execution profile')
+  if ('profile' in input && !['os_sandbox', 'trusted_local', 'container'].includes(String(input.profile))) throw new Error('Invalid coding execution profile')
+  if ('network' in input && (input.type !== 'authorize' || input.profile !== 'os_sandbox' || !['none', 'enabled'].includes(String(input.network)))) throw new Error('Invalid sandbox network authorization')
   if ('decision' in input && !['approved', 'rejected'].includes(String(input.decision))) throw new Error('Invalid coding permission decision')
   for (const field of ['historyOffset', 'revisionOffset']) if (field in input && (!Number.isSafeInteger(input[field]) || Number(input[field]) < 0)) throw new Error('Invalid coding page')
   if ('confirmedCriteria' in input && (!Array.isArray(input.confirmedCriteria) || input.confirmedCriteria.length > 100 || input.confirmedCriteria.some(item => typeof item !== 'string' || !/^[a-zA-Z0-9_.:-]{1,200}$/u.test(item)))) throw new Error('Invalid criterion confirmation')

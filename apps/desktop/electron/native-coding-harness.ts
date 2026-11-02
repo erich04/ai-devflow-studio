@@ -21,6 +21,7 @@ import { createCodingExtensions } from './native-coding-extensions'
 import type { NativeCodingProfile } from './native-coding-profile'
 import type { CodingTaskAuthority } from './native-coding-tools'
 import { inspectCodingInput } from './coding-input'
+import { codingSandboxAvailability } from './coding-os-sandbox'
 
 type Core = { loop: NativeCodingLoop; workspace: CodingCandidateWorkspace; commands: CodingCommandRunner }
 const terminal = (session: NativeCodingSession) => ['completed', 'cancelled', 'failed'].includes(session.status)
@@ -374,8 +375,9 @@ function createHarnessService(host: HarnessHost): Harness {
     if (command.type === 'authorize') {
       if (session.binding!.executionGranted || session.status !== 'waiting_permission') throw new Error('Execution authorization is stale')
       if (!command.manualValidationPlan && !session.binding!.context.project.testCommand.trim()) throw new Error('请在开工前选择明确的人工验收计划，或保存适用的自动测试命令。')
-      const profile = command.profile === 'container' ? host.containerProfile : { kind: 'trusted_local' as const }
+      const profile: CodingExecutionProfile | undefined = command.profile === 'container' ? host.containerProfile : command.profile === 'os_sandbox' ? { kind: 'os_sandbox', network: command.network ?? 'none' } : { kind: 'trusted_local' }
       if (!profile) throw new Error('Container profile is not configured; no local fallback')
+      if (profile.kind === 'os_sandbox' && !(await codingSandboxAvailability()).available) throw new Error('系统沙箱不可用，任务未启动；不会自动回退为本机可信执行。')
       const input = await inspectCodingInput(session.binding!.context.workspace.worktreePath, session.binding!.context.workspace.baseCommitSha!)
       if (input.digest !== session.binding!.input?.digest) throw new Error('Input files changed after the authorization was presented; start a fresh run with the new baseline')
       const dependencyPlan = await codingDependencyPlan(session.binding!.context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'])
@@ -499,7 +501,7 @@ function createHarnessService(host: HarnessHost): Harness {
       if (!context.workspace.baseCommitSha) throw new Error('Native v3 requires an immutable input commit')
       const session = createNativeCodingSession({ id: sessionId(input.request.id), codingRunId: input.request.id, workflowRunId: context.run.id, nodeId: context.node.id,
         localProjectId: context.project.id, providerId: host.provider.id, model: host.provider.model, objective: context.userInstruction, now: new Date().toISOString() })
-      const profile = { kind: 'trusted_local' as const }, testPlan = shellPlan(context.project.testCommand, profile)
+      const profile: CodingExecutionProfile = { kind: 'os_sandbox', network: 'none' }, testPlan = shellPlan(context.project.testCommand, profile)
       session.binding = { request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage']) }
       session.binding.input = await inspectCodingInput(context.workspace.worktreePath, context.workspace.baseCommitSha)
       session.acceptance = context.upstreamArtifacts.flatMap(artifact => artifact.clarificationRevision?.status === 'approved' ? artifact.clarificationRevision.acceptanceCriteria.map((text, index) => ({ id: `criterion-${codingDigest(`${artifact.id}:${index}:${text}`)}`, objectiveVersion: 1, sourceRef: `${artifact.id}@${artifact.clarificationRevision!.revisionDigest}`, text, confirmation: 'approved_source' as const, resolution: 'unresolved' as const })) : [])

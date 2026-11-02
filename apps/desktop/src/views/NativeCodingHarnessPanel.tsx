@@ -19,7 +19,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
   const [manualMode, setManualMode] = useState(false), [manualPlan, setManualPlan] = useState(''), [manualEvidence, setManualEvidence] = useState('')
   const busy = pending > 0
   useEffect(() => { setConfirmedCriteria([]); setManualEvidence('') }, [snapshot?.revision?.digest])
-  const [profile, setProfile] = useState<'trusted_local' | 'container'>('trusted_local')
+  const [profile, setProfile] = useState<'os_sandbox' | 'trusted_local' | 'container'>('os_sandbox'), [allowNetwork, setAllowNetwork] = useState(false)
   const accept = useCallback((next: CodingHarnessSnapshot) => setSnapshot(previous => previous?.codingRunId === next.codingRunId && previous.version > next.version ? previous : next), [])
   const refresh = useCallback(async () => {
     if (!api.codingHarness) return
@@ -69,10 +69,11 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
       {manualMode ? <label>人工验收计划<textarea aria-label="人工验收计划" value={manualPlan} onChange={event => setManualPlan(event.target.value)} /><small>写明检查步骤与预期结果。最终需填写实际检查依据；不会产生自动测试通过记录，工作流的测试门禁仍保留。</small></label> : <pre>{snapshot.execution?.testCommand || '尚无自动测试命令；请选择明确的人工验收计划。'}</pre>}
       {snapshot.execution?.dependencyCommand ? <p>依赖准备（可能联网并运行安装脚本）：<code>{snapshot.execution.dependencyCommand}</code>。候选和最终验证各自安装。</p> : null}
       <label>命令执行方式 <select value={profile} onChange={event => setProfile(event.target.value as typeof profile)}>
-        {snapshot.execution?.profiles.map(item => <option key={item.kind} value={item.kind} disabled={!item.available}>{item.kind === 'trusted_local' ? '本机可信执行' : '受管容器'}</option>)}
+        {snapshot.execution?.profiles.map(item => <option key={item.kind} value={item.kind} disabled={!item.available}>{item.kind === 'os_sandbox' ? '系统沙箱（默认）' : item.kind === 'trusted_local' ? '本机可信执行' : '受管容器'}</option>)}
       </select></label>
       <p>{snapshot.execution?.profiles.find(item => item.kind === profile)?.reason}</p>
-      <button disabled={busy || (manualMode ? !manualPlan.trim() : !snapshot.execution?.testCommand.trim())} onClick={() => void command({ type: 'authorize', profile, ...(manualMode ? { manualValidationPlan: manualPlan } : {}) })}>授权并开始</button>
+      {profile === 'os_sandbox' ? <label><input type="checkbox" checked={allowNetwork} onChange={event => setAllowNetwork(event.target.checked)} />允许本任务沙箱命令联网（默认关闭，含安装脚本和子任务）</label> : null}
+      <button disabled={busy || !snapshot.execution?.profiles.find(item => item.kind === profile)?.available || (manualMode ? !manualPlan.trim() : !snapshot.execution?.testCommand.trim())} onClick={() => void command({ type: 'authorize', profile, ...(profile === 'os_sandbox' ? { network: allowNetwork ? 'enabled' : 'none' } : {}), ...(manualMode ? { manualValidationPlan: manualPlan } : {}) })}>授权并开始</button>
     </div> : null}
     {!snapshot.controlUnavailableReason && snapshot.permission ? <div className="coding-permission-card"><h4>{snapshot.permission.title}</h4><pre>{snapshot.permission.details}</pre>
       <button disabled={busy} onClick={() => void command({ type: 'permission', permissionId: snapshot.permission!.id, decision: 'approved' })}>允许这次操作</button>
@@ -94,7 +95,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     {snapshot.evidence.map(evidence => <p key={evidence.id}>{evidence.status} · {evidence.summary}</p>)}
     {snapshot.children.map(child => <details key={child.id}><summary>{child.title} · {child.status}</summary><NativeCodingHarnessPanel codingRunId={child.id} api={api} /></details>)}
     {snapshot.modelRetries ? <details><summary>模型请求自动重试（{snapshot.modelRetries.total} 次）</summary>{snapshot.modelRetries.recent.map(item => <p key={item.attemptId}>第 {item.step} 步 · {retryReasons[item.reason]} · 第 {item.number}/{item.limit} 次 · 等待 {Math.ceil(item.delayMs / 1000)} 秒{item.retryAfterMs !== undefined ? '（模型服务指定）' : ''}</p>)}</details> : null}
-    {snapshot.diagnostics ? <details><summary>恢复诊断与资料保留</summary><p>检查点 {snapshot.diagnostics.checkpoint} · 目标版本 {snapshot.diagnostics.objectiveVersion} · {snapshot.diagnostics.profile === 'container' ? '受管容器' : '本机可信执行'} · {snapshot.diagnostics.writerActive ? '执行单元尚未退出' : '当前无执行单元'}</p><p>未确定操作：{snapshot.diagnostics.uncertainTotal}。未知请求不会自动重发，未知工具效果须先对账。</p>{snapshot.diagnostics.uncertainOperations.map(item => <p key={item.id}>{item.kind} · {item.id} · {item.status}</p>)}<p>{snapshot.storage?.reason}</p>{!snapshot.controlUnavailableReason && snapshot.storage?.cleanupAllowed ? <button disabled={busy} onClick={() => void command({ type: 'cleanup_scratch' })}>清理可重建工作副本，保留全部证据</button> : null}</details> : null}
+    {snapshot.diagnostics ? <details><summary>恢复诊断与资料保留</summary><p>检查点 {snapshot.diagnostics.checkpoint} · 目标版本 {snapshot.diagnostics.objectiveVersion} · {snapshot.diagnostics.profile === 'os_sandbox' ? '系统沙箱' : snapshot.diagnostics.profile === 'container' ? '受管容器' : '本机可信执行'} · {snapshot.diagnostics.writerActive ? '执行单元尚未退出' : '当前无执行单元'}</p><p>未确定操作：{snapshot.diagnostics.uncertainTotal}。未知请求不会自动重发，未知工具效果须先对账。</p>{snapshot.diagnostics.uncertainOperations.map(item => <p key={item.id}>{item.kind} · {item.id} · {item.status}</p>)}<p>{snapshot.storage?.reason}</p>{!snapshot.controlUnavailableReason && snapshot.storage?.cleanupAllowed ? <button disabled={busy} onClick={() => void command({ type: 'cleanup_scratch' })}>清理可重建工作副本，保留全部证据</button> : null}</details> : null}
     <details><summary>任务对话与工具记录（{snapshot.historyPage?.total ?? snapshot.messages.length}）</summary>{snapshot.messages.map(message => <div key={message.id}><strong>{message.role === 'user' ? '你' : message.role === 'assistant' ? 'Native' : '工具结果'}</strong><pre>{message.text}</pre>{message.truncated ? <button onClick={() => void detail({ kind: 'message', id: message.id, offset: 0 })}>记录较长，逐页查看全文</button> : null}</div>)}
       {snapshot.historyPage ? <p><button disabled={snapshot.historyPage.previous === null} onClick={() => void page('historyOffset', snapshot.historyPage!.previous)}>更早记录</button><button disabled={snapshot.historyPage.next === null} onClick={() => void page('historyOffset', snapshot.historyPage!.next)}>后续记录</button></p> : null}
     </details>
