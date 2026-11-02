@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { AgentProviderRequestError, type NativeConversationRequest, type NativeConversationResponse } from '@ai-devflow/shared'
@@ -7,6 +7,7 @@ import { codingHarnessFixture, codingToolReply } from './native-coding-test-fixt
 import { mutateNativeCodingSession } from './native-coding-session'
 import { createLocalStore } from './local-store'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
+import { inspectCodingInput } from './coding-input'
 
 const fixtures: Awaited<ReturnType<typeof codingHarnessFixture>>[] = []
 afterEach(async () => { for (const fixture of fixtures.splice(0)) { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) } })
@@ -175,4 +176,23 @@ it('rebuilds checks from the original baseline and human clarification, not the 
   expect(session.independentVerification!.plans[0]!.sourceDigest).not.toBe(session.independentVerification!.plans[1]!.sourceDigest)
   expect(author.mock.calls[1]![0].messages[0]!.content).toContain('Export the value 2.')
   expect(session.binding?.executionGranted).toBe(true)
+})
+
+it('excludes baseline credentials from the independent author request', async () => {
+  const author = vi.fn(async (request: NativeConversationRequest) => {
+    const input = JSON.parse(request.messages[0]!.content!) as { files: Array<{ path: string; content: string }> }
+    expect(input.files.map(file => file.path)).not.toContain('.env')
+    expect(input.files.map(file => file.path)).not.toContain('service.key')
+    expect(JSON.stringify(request)).not.toContain('SYNTHETIC-PRIVATE-ENV-98271')
+    expect(JSON.stringify(request)).not.toContain('SYNTHETIC-PRIVATE-KEY-98271')
+    return planReply()
+  })
+  const fixture = await codingHarnessFixture(async () => codingToolReply('after-safe-author', 'propose_changeset', { summary: 'Review' }), undefined, {}, author); fixtures.push(fixture)
+  await writeFile(path.join(fixture.delivery, '.env'), 'API_KEY=SYNTHETIC-PRIVATE-ENV-98271')
+  await writeFile(path.join(fixture.delivery, 'service.key'), 'SYNTHETIC-PRIVATE-KEY-98271')
+  const input = await inspectCodingInput(fixture.delivery, fixture.context.workspace.baseCommitSha)
+  await mutateNativeCodingSession(fixture.store, 'native-coding', draft => { draft.binding!.input = input })
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  expect(author).toHaveBeenCalledTimes(1)
+  expect((await fixture.get()).snapshot.status).toBe('review')
 })
