@@ -42,7 +42,18 @@ export function validIndependentObservation(result) {
     (result.passed === true || result.failedAssertions > 0)
 }
 /** The host copies the report out only after the sandboxed process has stopped. */
-export async function sandboxOracleCommand(root, executable, args, cwd, log, timeoutMs = 300000) {
+export async function sandboxOracleCommand(root, executable, args, cwd, log, timeoutMs = 300000, seedWorkspaceRoot) {
+  if (seedWorkspaceRoot && executable === corepack && JSON.stringify(args) === JSON.stringify(['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts'])) {
+    const { CodingCandidateWorkspace } = await import('../apps/desktop/electron/coding-candidate-workspace.ts')
+    const { codingDependencyPlan } = await import('../apps/desktop/electron/coding-dependency-preparation.ts')
+    const { restoreCodingDependencySeed } = await import('../apps/desktop/electron/coding-dependency-seed.ts')
+    const workspace = await CodingCandidateWorkspace.open(seedWorkspaceRoot)
+    const plan = await codingDependencyPlan(cwd, { kind: 'os_sandbox', network: 'enabled' }, workspace.identity.base.excludedPaths, { isolatedStore: true })
+    const restored = await restoreCodingDependencySeed({ workspace, directory: cwd, plan })
+    if (restored.status === 'restored') args = [...args, '--store-dir', plan.storeDirectory, '--verify-store-integrity']
+    await mkdir(root, { recursive: true })
+    await json(path.join(root, 'dependency-seed.json'), { baselineDigest: workspace.identity.base.digest, dependencyPlanDigest: plan.digest, ...restored }, true)
+  }
   const { CodingCommandRunner } = await import('../apps/desktop/electron/coding-command-runner.ts')
   const oracle = new CodingCommandRunner(root), outputIndex = args.indexOf('--outputFile'), rewritten = [...args]
   const report = path.join(cwd, '.devflow-reference-result.json'), id = path.basename(log)
@@ -132,9 +143,13 @@ async function runPhase2(output, keyFile) {
       const execution = await runProcess(corepack, ['pnpm', 'exec', 'tsx', 'scripts/native-coding-trial-live.mts', inputFile, keyFile], repository, path.join(directory, 'execution.log'), plan.limits.maxActiveMilliseconds + 600000)
       if (!await exists(path.join(executionOutput, 'trial.json'))) throw new Error(`Trial ${task.id} produced no report; do not retry an uncertain paid attempt`)
       const trial = await readJson(path.join(executionOutput, 'trial.json'))
+      const seedPath = trial.candidateWorkspace && path.basename(trial.candidateWorkspace) === 'candidate' ? path.dirname(trial.candidateWorkspace) : undefined
+      const seedParts = seedPath ? path.relative(executionOutput, seedPath).split(path.sep) : []
+      const seedWorkspaceRoot = seedParts.length === 2 && seedParts[0] === 'harness' && /^[a-f0-9]{64}$/u.test(seedParts[1]) ? seedPath : undefined
+      const oracle = commandRoot => (executable, args, cwd, log, timeoutMs) => sandboxOracleCommand(commandRoot, executable, args, cwd, log, timeoutMs, seedWorkspaceRoot)
       const workspace = trial.workspace && await exists(path.join(trial.workspace, '.git')) ? trial.workspace : undefined
       if (workspace) await writeFile(path.join(directory, 'delivery-tracked.patch'), execFileSync('git', ['diff', '--binary', 'HEAD'], { cwd: workspace, maxBuffer: 64 * 1024 * 1024 }), { flag: 'wx', mode: 0o600 })
-      const independent = await independentCheck(task, baseline, workspace, directory, (...args) => sandboxOracleCommand(path.join(directory, 'oracle-commands'), ...args))
+      const independent = await independentCheck(task, baseline, workspace, directory, oracle(path.join(directory, 'oracle-commands')))
       await json(path.join(directory, 'independent.json'), independent, true)
       const qualityObservationValid = validIndependentObservation(independent)
       // Evaluate C separately only after the trial has shut down. This diagnostic
@@ -146,7 +161,7 @@ async function runPhase2(output, keyFile) {
         const { snapshotCodingTree } = await import('../apps/desktop/electron/coding-candidate-workspace.ts')
         await json(path.join(candidateDirectory, 'manifest.json'), await snapshotCodingTree(candidate, ['node_modules', '.cache', 'coverage']), true)
         await writeFile(path.join(candidateDirectory, 'tracked.patch'), execFileSync('git', ['diff', '--binary', 'HEAD'], { cwd: candidate, maxBuffer: 64 * 1024 * 1024 }), { flag: 'wx', mode: 0o600 })
-        candidateIndependent = await independentCheck(task, baseline, candidate, candidateDirectory, (...args) => sandboxOracleCommand(path.join(candidateDirectory, 'oracle-commands'), ...args))
+        candidateIndependent = await independentCheck(task, baseline, candidate, candidateDirectory, oracle(path.join(candidateDirectory, 'oracle-commands')))
         candidateObservationValid = validIndependentObservation(candidateIndependent)
         await json(path.join(candidateDirectory, 'result.json'), candidateIndependent, true)
         await removeDisposableDependencies(candidateDirectory)

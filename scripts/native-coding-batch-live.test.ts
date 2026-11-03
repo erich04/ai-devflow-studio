@@ -1,7 +1,29 @@
 // @vitest-environment node
 import { expect, it } from 'vitest'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 // @ts-expect-error Standalone Node evaluator has no declaration file.
-import { bindPublicTestPlans, budgetedEngineOrder, checkDeepSeekAvailability, nextTrialBudget, providerStopReason, protectedEvaluationPath, trialLedgerAccountedUsd } from './native-coding-batch-live.mjs'
+import { bindPublicTestPlans, budgetedEngineOrder, checkDeepSeekAvailability, nextTrialBudget, providerStopReason, protectedEvaluationPath, trialLedgerAccountedUsd, removeDisposableDependencies, removeTrialCommandCaches } from './native-coding-batch-live.mjs'
+
+it('cleans only reproducible stores in owned evaluation locations while retaining source and seed provenance', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'df-eval-cache-cleanup-'))
+  try {
+    const execution = path.join(root, 'execution'), key = 'b'.repeat(64)
+    const seed = path.join(execution, 'harness', 'a'.repeat(64), 'dependency-seeds', key)
+    for (const directory of ['source/node_modules/package', 'source/.cache/devflow-pnpm-store', 'source/.cache/unrelated', 'source/dependency-seeds/example/store', path.relative(root, path.join(seed, 'store'))]) {
+      await mkdir(path.join(root, directory), { recursive: true }); await writeFile(path.join(root, directory, 'value'), 'preserve or rebuild')
+    }
+    await writeFile(path.join(seed, 'manifest.json'), JSON.stringify({ key, identity: { version: 1 }, capturedBeforePrivateChecks: true, manifestDigest: 'proof' }))
+    await removeDisposableDependencies(root); await removeTrialCommandCaches(execution)
+    await expect(access(path.join(root, 'source/node_modules'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(access(path.join(root, 'source/.cache/devflow-pnpm-store'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(access(path.join(seed, 'store'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(JSON.parse(await readFile(path.join(seed, 'manifest.json'), 'utf8')).manifestDigest).toBe('proof')
+    expect(await readFile(path.join(root, 'source/dependency-seeds/example/store/value'), 'utf8')).toBe('preserve or rebuild')
+    expect(await readFile(path.join(root, 'source/.cache/unrelated/value'), 'utf8')).toBe('preserve or rebuild')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
 
 it('stops before paid work when the provider reports no balance, without recording account amounts or credentials', async () => {
   const secret = 'private-fixture-credential'
