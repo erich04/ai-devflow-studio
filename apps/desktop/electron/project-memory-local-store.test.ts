@@ -8,7 +8,9 @@ import {
   type AgentEvent, type Artifact, type CodingAgentRun, type LocalProject,
 } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
-import { approvedWorkflowArtifacts, buildLegacyMemoryDocument, LEGACY_MEMORY_DOCUMENT_ID, migrateLegacyProjectMemory } from './project-memory-capture'
+import {
+  approvedWorkflowArtifacts, backfillConversationProjectMemory, buildLegacyMemoryDocument, LEGACY_MEMORY_DOCUMENT_ID, migrateLegacyProjectMemory,
+} from './project-memory-capture'
 import { createDesktopAgentRuntime } from './agent-runtime-runtime'
 import type { WorkbenchConversation } from './workbench-conversation-contract'
 
@@ -87,6 +89,77 @@ describe('project memory capture', () => {
     await store.saveWorkbenchConversation({ ...first, version: 3, status: 'running' }, 2)
     await store.saveWorkbenchConversation(reply(first, 4, [{ id: 'a2', role: 'assistant', text: '还有别的吗？', createdAt: now }]), 3)
     expect(await store.listProjectMemoryDocuments()).toEqual([expect.objectContaining({ id: document!.id, status: 'delete_pending', payload: '' })])
+  })
+
+  const longMessages = (count: number): WorkbenchConversation['messages'] => Array.from({ length: count }, (_, index) =>
+    ({ id: `m${index}`, role: index % 2 ? 'assistant' : 'user', text: `第 ${index} 条：${'讨论内容'.repeat(400)}`, createdAt: now }))
+  /** One finished turn: the conversation runs, then goes idle with `messages`. */
+  async function turn(store: LocalStore, conversation: WorkbenchConversation, version: number, messages: WorkbenchConversation['messages'], title = conversation.title) {
+    // Conversation history is append-only: the fixture's first message stays first.
+    const all = [...conversation.messages, ...messages]
+    await store.saveWorkbenchConversation({ ...conversation, title, version, status: 'running', messages: all }, version - 1)
+    await store.saveWorkbenchConversation({ ...conversation, title, version: version + 1, status: 'idle', messages: all }, version)
+  }
+
+  it('sends a long conversation in segments and resends only the open one', async () => {
+    const { store, conversation } = await fixture()
+    await store.saveWorkbenchConversation(conversation, 0)
+    await turn(store, conversation, 2, longMessages(80))
+    const first = (await store.listProjectMemoryDocuments()).sort((left, right) => left.documentId.localeCompare(right.documentId, 'en', { numeric: true }))
+    expect(first.length).toBeGreaterThan(2)
+    expect(first.map((document) => document.documentId)).toEqual(first.map((_, index) => index ? `conversation:chat:${index + 1}` : 'conversation:chat'))
+    expect(first.every((document) => document.status === 'queued')).toBe(true)
+
+    await turn(store, conversation, 4, longMessages(84))
+    const second = new Map((await store.listProjectMemoryDocuments()).map((document) => [document.documentId, document]))
+    // Full segments keep their operation: nothing new is sent for them.
+    for (const document of first.slice(0, -1)) expect(second.get(document.documentId)).toMatchObject({ id: document.id, operationId: document.operationId })
+    expect(second.get(first.at(-1)!.documentId)!.operationId).not.toBe(first.at(-1)!.operationId)
+  })
+
+  it('forgets every segment of a conversation together, and a later segment is not recorded', async () => {
+    const { store, conversation, project } = await fixture()
+    await store.saveWorkbenchConversation(conversation, 0)
+    await turn(store, conversation, 2, longMessages(80))
+    const documents = await store.listProjectMemoryDocuments()
+    const chosen = documents.find((document) => document.documentId === 'conversation:chat:2')!
+    await store.forgetProjectMemoryDocument(project.id, chosen.id)
+    expect((await store.listProjectMemoryDocuments()).every((document) => document.status === 'delete_pending' && document.payload === '')).toBe(true)
+    await turn(store, conversation, 4, longMessages(160))
+    const after = await store.listProjectMemoryDocuments()
+    expect(after).toHaveLength(documents.length)
+    expect(after.every((document) => document.status === 'delete_pending')).toBe(true)
+  })
+
+  it('records a new title without sending the conversation again', async () => {
+    const { store, conversation } = await fixture()
+    await store.saveWorkbenchConversation(conversation, 0)
+    await turn(store, conversation, 2, longMessages(4))
+    const [before] = await store.listProjectMemoryDocuments()
+    await turn(store, conversation, 4, longMessages(4), '删除确认（定稿）')
+    const [after] = await store.listProjectMemoryDocuments()
+    expect(after).toMatchObject({ id: before!.id, operationId: before!.operationId, status: before!.status, title: '删除确认（定稿）' })
+  })
+
+  it('resends earlier long conversations a few segments at a time, and leaves the rest alone', async () => {
+    const { store, conversation, config, project } = await fixture()
+    // As captured before segments existed: only the newest part, under the conversation's id.
+    await store.saveWorkbenchConversation({ ...conversation, status: 'idle', messages: longMessages(80) }, 0)
+    await store.recordProjectMemoryDocument(config!, { documentId: 'conversation:chat', sourceKind: 'conversation', sourceId: 'chat', title: '删除确认',
+      payload: JSON.stringify([{ role: 'user', content: 'newest part only', timestamp: now }]), context: 'old', tags: ['source:conversation'], occurredAt: now })
+    // Never captured, so not imported; a short one has nothing to resend.
+    await store.saveWorkbenchConversation({ ...conversation, id: 'other', status: 'idle', messages: longMessages(80) }, 0)
+    const segments = (await import('./project-memory-capture')).buildConversationMemoryDocuments({ ...conversation, status: 'idle', messages: longMessages(80) }, now).length
+
+    const firstPass = await backfillConversationProjectMemory(store, project.id, 2, now)
+    expect(firstPass).toEqual({ queued: 2, remaining: segments - 2 })
+    const secondPass = await backfillConversationProjectMemory(store, project.id, 100, now)
+    expect(secondPass).toEqual({ queued: segments - 2, remaining: 0 })
+    expect(await backfillConversationProjectMemory(store, project.id, 100, now)).toEqual({ queued: 0, remaining: 0 })
+    const documents = await store.listProjectMemoryDocuments()
+    expect(documents).toHaveLength(segments)
+    expect(documents.every((document) => document.sourceId === 'chat' && document.status === 'queued')).toBe(true)
+    expect(JSON.parse(documents.find((document) => document.documentId === 'conversation:chat')!.payload)[0].content).toContain('第 0 条')
   })
 
   it('records every finished coding run with DevFlow-run tests marked HOST_VERIFIED, but not fake runs', async () => {

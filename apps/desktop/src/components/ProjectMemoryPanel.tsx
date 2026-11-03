@@ -21,6 +21,8 @@ const STATUS_LABEL: Record<ProjectMemoryDocumentStatus, string> = {
   queued: '等待写入', submitted: '写入中', retained: '已写入', failed: '写入失败', delete_pending: '正在忘记', deleted: '已忘记',
 }
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:8890'
+/** The essentials page, the one coding briefs include. */
+const FIRST_KNOWLEDGE_PAGE = PROJECT_KNOWLEDGE_PAGES[0]!.id
 const time = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false })
 const message = (reason: unknown, fallback: string) => reason instanceof Error && reason.message ? reason.message.replace(/^Error invoking remote method '[^']+': (Error: )?/u, '') : fallback
 
@@ -43,7 +45,7 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
   const [error, setError] = useState('')
   const [listError, setListError] = useState('')
   const [pages, setPages] = useState<ProjectKnowledgePages>()
-  const [pageId, setPageId] = useState<ProjectKnowledgePageId>('conventions')
+  const [pageId, setPageId] = useState<ProjectKnowledgePageId>(FIRST_KNOWLEDGE_PAGE)
   const [pagesError, setPagesError] = useState('')
   const [pageNotice, setPageNotice] = useState('')
 
@@ -51,7 +53,7 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
     let cancelled = false
     setStatus(undefined); setPage(undefined); setError(''); setListError(''); setApiKey(''); setEditing(undefined); setConfirmClear(false)
     setKind('observation'); setSearch(''); setQuery(''); setOffset(0)
-    setPages(undefined); setPagesError(''); setPageNotice(''); setPageId('conventions')
+    setPages(undefined); setPagesError(''); setPageNotice(''); setPageId(FIRST_KNOWLEDGE_PAGE)
     void api?.getProjectMemoryStatus?.({ projectId }).then((value) => {
       if (cancelled) return
       setStatus(value); setEndpoint(value.endpoint || DEFAULT_ENDPOINT)
@@ -164,7 +166,7 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
           ? <ConversationBody message={{ id: `knowledge-${knowledge.id}`, role: 'assistant', text: knowledge.content, format: 'markdown', createdAt: knowledge.refreshedAt ?? '' }} showFormatToggle={false} />
           : <p className="empty-note">还没有内容。积累了相关记忆后会自动整理；删除或修改记忆后会先清空，再重新整理。</p>}
         <small className="project-memory-meta">{[knowledge.refreshedAt ? `整理于 ${time(knowledge.refreshedAt)}` : '', knowledge.stale ? '有新记忆，稍后更新' : '',
-          knowledge.failedAt ? '最近一次整理失败，保留上一版' : ''].filter(Boolean).join(' · ')}</small>
+          knowledge.failedAt ? '最近一次整理失败，保留上一版' : '', knowledge.id === 'essentials' ? '这一页会放进每次编码简报' : ''].filter(Boolean).join(' · ')}</small>
         <div className="project-memory-actions">
           {api.refreshProjectKnowledgePage && <button type="button" className="ghost-button" disabled={busy || !status?.enabled}
             onClick={() => void refreshKnowledgePage(knowledge.id)}>立即整理</button>}
@@ -212,6 +214,10 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
         <button type="button" className="ghost-button" disabled={pageEnd >= page.total} onClick={() => setOffset(pageEnd)}>下一页</button>
       </div>}
     </div>}
+
+    {status?.conversationBackfill && <p className="project-memory-meta">
+      正在补回较早长讨论的完整内容：还有 {status.conversationBackfill.remainingSegments} 段，每次启动补发一部分。
+    </p>}
 
     {status && status.recent.length > 0 && <details>
       <summary>最近的来源（{status.recent.length}）</summary>

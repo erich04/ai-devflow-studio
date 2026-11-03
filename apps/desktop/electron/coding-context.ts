@@ -6,7 +6,9 @@ import {
   type RetrievedKnowledgeManifest,
 } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
-import { isProjectMemoryIdentity, type ProjectMemoryRecallPort } from './project-memory-recall'
+import {
+  isProjectMemoryIdentity, PROJECT_MEMORY_ESSENTIALS_ID, PROJECT_MEMORY_IDENTITY_PREFIX, type ProjectMemoryRecallPort,
+} from './project-memory-recall'
 
 /** Local Memory is only read to re-check receipts of runs created before ADR 0030. */
 export type CodingMemoryStore = Partial<Pick<LocalStore,
@@ -76,14 +78,16 @@ export type RecalledMemory = {
  */
 export async function recallScopedMemory(input: {
   store: CodingMemoryStore; projectId: string; userId: string; runtimeId: string; requestId: string
-  query: string; now: string; budget: MemoryRecallBudget
+  /** `intents`: the separate asks in the user's own words (`splitRecallIntents`), each recalled beside `query`. */
+  query: string; intents?: readonly string[]; now: string; budget: MemoryRecallBudget
 }): Promise<RecalledMemory> {
   const scope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
   const projectMemory = await projectMemoryRecall.get(input.store)?.recall({
     projectId: input.projectId, userId: input.userId, query: input.query, budget: input.budget,
+    ...(input.intents?.length ? { intents: input.intents } : {}),
   })
   if (!projectMemory) return { scope, runtimeId: input.runtimeId, recalledAt: input.now, context: [], memories: [], omittedMemoryCount: 0 }
-  // Hindsight and DevFlow's re-ranking already ordered the memory for this query.
+  // Hindsight ordered the memory for the query and each ask; the lists were merged in turn.
   const selected = selectMemoryWithinBudget(projectMemory.items, (item) => item.statement, input.budget)
   const currentScope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
   if (JSON.stringify(currentScope) !== JSON.stringify(scope)) throw new Error('Coding Context pairing changed during recall')
@@ -94,15 +98,43 @@ export async function recallScopedMemory(input: {
     projectMemory: { degraded: projectMemory.degraded } }
 }
 
+/**
+ * Memory for a coding brief: the project's essentials page (conventions that apply to every task,
+ * ADR 0030 知识页), then what the request recalls. The page is outside the recall budget: it covers
+ * conventions the request never mentions, which recall by the request cannot find.
+ */
 export async function recallCodingMemory(input: {
-  store: CodingMemoryStore; run: WorkflowRun; codingRunId: string; userId: string; query: string; now: string
+  store: CodingMemoryStore; run: WorkflowRun; codingRunId: string; userId: string; query: string; intents?: readonly string[]; now: string
 }): Promise<RecalledMemory> {
-  return recallScopedMemory({
+  const recalled = await recallScopedMemory({
     store: input.store, projectId: input.run.projectId, userId: input.userId,
     runtimeId: `agent-runtime-coding-${input.codingRunId}`,
     requestId: `coding-memory-${codingPromptDigest(input.codingRunId).slice(0, 32)}`,
-    query: input.query, now: input.now, budget: CODING_MEMORY_RECALL_BUDGET,
+    query: input.query, ...(input.intents ? { intents: input.intents } : {}), now: input.now, budget: CODING_MEMORY_RECALL_BUDGET,
   })
+  if (!recalled.projectMemory) return recalled
+  const conventions = await projectMemoryRecall.get(input.store)?.conventions?.({ projectId: input.run.projectId, userId: input.userId })
+  if (!conventions) return recalled
+  return { ...recalled,
+    context: [{ id: conventions.id, revision: 1, statement: conventions.statement }, ...recalled.context],
+    memories: [{ id: conventions.id, revision: 1, headVersion: 1, contentDigest: conventions.contentDigest }, ...recalled.memories] }
+}
+const ESSENTIALS_IDENTITY = `${PROJECT_MEMORY_IDENTITY_PREFIX}${PROJECT_MEMORY_ESSENTIALS_ID}`
+/**
+ * Builds a coding brief with the recalled memory. Recalled memory is kept whole in the brief, so
+ * the essentials page could make a brief with large approved inputs exceed its limit; the page is
+ * background, so such a brief is built without it, and `memory` (for the receipt) omits it too.
+ */
+export function buildWithCodingMemory<T>(recalled: RecalledMemory, build: (memoryContext: RecalledMemory['context']) => T): { brief: T; memory: RecalledMemory } {
+  try { return { brief: build(recalled.context), memory: recalled } }
+  catch (error) {
+    if (!recalled.context.some((item) => item.id === ESSENTIALS_IDENTITY)) throw error
+    const memory: RecalledMemory = { ...recalled,
+      context: recalled.context.filter((item) => item.id !== ESSENTIALS_IDENTITY),
+      memories: recalled.memories.filter((item) => item.id !== ESSENTIALS_IDENTITY),
+      omittedMemoryCount: recalled.omittedMemoryCount + 1 }
+    return { brief: build(memory.context), memory }
+  }
 }
 
 const MAX_QUERY_PATHS = 24

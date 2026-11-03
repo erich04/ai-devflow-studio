@@ -63,6 +63,21 @@ describe('operation-scoped continuation without fabricated expenses', () => {
     expect((await repo.reserveModelCall({ ...quote('expired'), continuationId: card.id }, actor)).accepted).toBe(false)
     await expect(repo.confirmModelBudgetContinuation(command, actor)).rejects.toThrow(/过期/)
   })
+  it('records an unknown delivery of each official DeepSeek name at its verified bound and keeps continuation available', async () => {
+    const at = '2026-11-02T07:00:00.000Z'
+    vi.useFakeTimers(); vi.setSystemTime(at)
+    for (const [model, boundUsd] of [['deepseek-flash', 0.393216], ['deepseek-v4-flash', 0.393216], ['deepseek-v4-pro', 1.64364288]] as const) {
+      const repo = createSeedTeamRepository(), call = (id: string): ModelCallQuote => ({ ...quote(`${id}-${model}`), model, createdAt: at })
+      await repo.saveRuntimeBudgetPolicy({ projectId, enabled: true, monthlyLimitUsd: 10, warningThresholdUsd: 5, currency: 'USD', updatedAt: at }, actor)
+      expect((await repo.reserveModelCall(call('lost'), actor)).accepted).toBe(true)
+      await repo.settleModelCall({ id: `lost-${model}`, projectId, state: 'failed' }, actor)
+      const record = (await repo.getTeamOverview(actor)).modelCostRecovery!.find(row => row.projectId === projectId)!.records.find(row => row.sourceId === `lost-${model}`)!
+      expect(record).toMatchObject({ costUsd: null, usageKnown: false, affectsCurrentBudget: true })
+      expect(record.budgetCostUsd).toBeCloseTo(boundUsd, 9)
+      expect((await repo.reserveModelCall(call('next'), actor)).accepted).toBe(true)
+      expect((await repo.prepareModelBudgetContinuation(call('card'), actor)).nextCallBoundUsd).toBeCloseTo(boundUsd, 9)
+    }
+  })
   it('reserves known bounds automatically and counts them atomically, without releasing on a timer', async () => {
     vi.useFakeTimers(); vi.setSystemTime(now)
     const repo = createSeedTeamRepository(), bound = verifiedModelCallBound(quote('x'))!

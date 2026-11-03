@@ -68,7 +68,9 @@ it('configures the bank once and sends the document with its source metadata, th
   expect(client.retainDocument).toHaveBeenCalledTimes(2)
   // The knowledge pages are set up once per bank and app run.
   expect(client.ensureMentalModel.mock.calls.map(([bank, page]) => [bank, page.id])).toEqual(
-    ['devflow-conventions', 'devflow-decisions', 'devflow-pitfalls', 'devflow-preferences'].map((id) => [config.bankId, id]))
+    ['devflow-essentials', 'devflow-conventions', 'devflow-decisions', 'devflow-pitfalls', 'devflow-preferences'].map((id) => [config.bankId, id]))
+  // The essentials page goes into every coding brief, so it is kept short.
+  expect(KNOWLEDGE_PAGE_MODELS.find((page) => page.id === 'devflow-essentials')!.maxTokens).toBe(700)
   expect(KNOWLEDGE_PAGE_MODELS[0]!.trigger).toEqual({ mode: 'delta', refresh_after_consolidation: true,
     min_refresh_interval_seconds: 21_600, exclude_mental_models: true, budget: 'low' })
 })
@@ -112,11 +114,14 @@ it('holds new sends while the relay is down and removes a forgotten document onl
   expect(client.deleteDocument).toHaveBeenCalledTimes(1)
   expect((await store.listProjectMemoryDocuments())[0]?.status).toBe('delete_pending')
   expect(client.clearMentalModel).not.toHaveBeenCalled()
+  expect((await store.getProjectMemoryConfiguration('project'))!.changedMemories).toBeUndefined()
   setOperation('completed'); advance(61_000)
   await service.process()
   expect((await store.listProjectMemoryDocuments())[0]).toMatchObject({ status: 'deleted', payload: '' })
   // Pages rewritten while the document still existed are emptied once it is gone.
   expect(client.clearMentalModel.mock.calls.map(([, id]) => id)).toEqual(KNOWLEDGE_PAGE_MODELS.map((page) => page.id))
+  // Coding briefs include the essentials page; one that sent a rewritten version stops at its next check.
+  expect((await store.getProjectMemoryConfiguration('project'))!.changedMemories).toEqual({ 'devflow-essentials': expect.any(String) })
   await gated.shutdown()
   expect(await gated.process()).toBe(0)
 })
@@ -154,17 +159,17 @@ it('writes empty pages of a bank that has memories, but not while a source is be
   // Asked already: the next cycles wait, even though the pages are still empty.
   advance(60_000)
   await service.process()
-  expect(client.refreshMentalModel).toHaveBeenCalledTimes(4)
+  expect(client.refreshMentalModel).toHaveBeenCalledTimes(KNOWLEDGE_PAGE_MODELS.length)
   // A written page is left alone; a failed one waits an hour.
   pages = pages.map((page, index) => index === 0 ? { ...page, content: '## 命令' } : index === 1 ? { ...page, failedAt: new Date(Date.now() + 61_000).toISOString() } : page)
   advance(10 * 60_000)
   await service.process()
-  expect(client.refreshMentalModel.mock.calls.slice(4).map(([, id]) => id)).toEqual(KNOWLEDGE_PAGE_MODELS.slice(2).map((page) => page.id))
+  expect(client.refreshMentalModel.mock.calls.slice(KNOWLEDGE_PAGE_MODELS.length).map(([, id]) => id)).toEqual(KNOWLEDGE_PAGE_MODELS.slice(2).map((page) => page.id))
   // While a forgotten source is still being deleted, a rewrite could keep it; wait.
   await store.forgetProjectMemoryDocument('project', document.id)
   setOperation('processing'); advance(11 * 60_000)
   await service.process()
-  expect(client.refreshMentalModel).toHaveBeenCalledTimes(6)
+  expect(client.refreshMentalModel).toHaveBeenCalledTimes(KNOWLEDGE_PAGE_MODELS.length * 2 - 2)
 })
 
 it('leaves an empty page written after the last change, and writes it again once memory was edited', async () => {
