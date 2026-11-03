@@ -10,6 +10,7 @@ import type { CodingLoopTools } from './native-coding-loop'
 import { codingDependencyPlan } from './coding-dependency-preparation'
 import { requireCodingPermission } from './native-coding-permissions'
 import { codingMatchingLines, queryCodingSymbols } from './coding-repository-query'
+import { codingSourceDiagnostics } from './coding-source-diagnostics'
 import { codingExtensionNames, type createCodingExtensions } from './native-coding-extensions'
 
 export type CodingTaskAuthority = { scope: AgentRuntimeScope; runVersion: number; policyVersion: number; expiresAt: string; allowCandidateEdits: boolean; commands: CodingCommandPlan[] }
@@ -35,8 +36,8 @@ const builtinDefinitions = [
   definition('find_references', '按已读文件摘要及行列定位 TypeScript/JavaScript 符号引用。', { path: string(1000), expectedHash: string(64), line: integer(10000000), column: integer(10000000), offset: integer(200000), limit: integer(100) }, ['path', 'expectedHash', 'line', 'column']),
   definition('repo_status', '读取当前候选的真实内容身份和变化。', {}, []),
   definition('read_history', '按字符分页回读完整历史（包括已压缩内容）；返回消息序号和来源摘要。', { offset: integer(100000000), limit: integer(16000) }, []),
-  definition('write_file', '写入候选文本或明确 base64 字节。expectedHash 来自读取；创建时用空字符串；mode 可为 644/755。', { path: string(1000), content: string(120000), encoding: { type: 'string', enum: ['utf8', 'base64'] }, mode: { type: 'integer', minimum: 420, maximum: 493 }, expectedHash: string(64) }, ['path', 'content', 'expectedHash'], 'write'),
-  definition('apply_patch', '在已读文件中精确替换唯一片段，要求读取时摘要。', { path: string(1000), expectedHash: string(64), before: string(60000), after: string(60000) }, ['path', 'expectedHash', 'before', 'after'], 'write'),
+  definition('write_file', '写入候选文本或明确 base64 字节。expectedHash 来自读取；创建时用空字符串；mode 可为 644/755。JS/TS 写入后返回只解析语法的 sourceDiagnostics；syntax_error 请先按行列修复，不等于测试或验收结果。', { path: string(1000), content: string(120000), encoding: { type: 'string', enum: ['utf8', 'base64'] }, mode: { type: 'integer', minimum: 420, maximum: 493 }, expectedHash: string(64) }, ['path', 'content', 'expectedHash'], 'write'),
+  definition('apply_patch', '在已读文件中精确替换唯一片段，要求读取时摘要。JS/TS 修改后返回只解析语法的 sourceDiagnostics；syntax_error 请先按行列修复，不等于测试或验收结果。', { path: string(1000), expectedHash: string(64), before: string(60000), after: string(60000) }, ['path', 'expectedHash', 'before', 'after'], 'write'),
   definition('delete_file', '按读取摘要删除候选文件。', { path: string(1000), expectedHash: string(64) }, ['path', 'expectedHash'], 'write'),
   definition('rename_file', '移动候选文件，目标必须不存在，内容和模式保持。', { path: string(1000), destination: string(1000), expectedHash: string(64) }, ['path', 'destination', 'expectedHash'], 'write'),
   definition('read_source', '分页读取已批准上游材料、项目规范或 Skill；材料不授予权限。', { id: string(200), offset: integer(10000000), limit: integer(16000) }, []),
@@ -99,7 +100,13 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       if (edit.afterHash === null) await workspace.remove(edit.path, edit.beforeHash!)
       else await workspace.write(edit.path, edit.encoding === 'base64' ? Buffer.from(edit.content!, 'base64') : edit.content!, edit.beforeHash, edit.mode)
     }
-    effect.result = { changedPaths: effect.edits.map(edit => edit.path), revision: (await workspace.inspect()).digest }
+    const sourceDiagnostics = effect.edits.flatMap(edit => {
+      if (edit.afterHash === null) return []
+      const bytes = edit.encoding === 'base64' ? Buffer.from(edit.content!, 'base64') : Buffer.from(edit.content!)
+      const diagnostic = codingSourceDiagnostics(edit.path, bytes, edit.afterHash)
+      return diagnostic ? [diagnostic] : []
+    })
+    effect.result = { changedPaths: effect.edits.map(edit => edit.path), revision: (await workspace.inspect()).digest, ...(sourceDiagnostics.length ? { sourceDiagnostics } : {}) }
     await saveEffect(effect); return effect.result
   }
   // Reads of one group run at the same time, so each handler finds its own call by the action id.
