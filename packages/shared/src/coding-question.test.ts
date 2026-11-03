@@ -7,6 +7,7 @@ const questions = [
 ]
 describe('coding questions', () => {
   it('preserves ordered multi-question answers, multiple selections and explicit custom input', () => {
+    expect(validateCodingQuestionReply(questions, { kind: 'answer', answers: [[], ['Web']] })).toEqual({ kind: 'answer', answers: [[], ['Web']] })
     expect(parseCodingQuestions(questions)).toEqual(questions)
     expect(validateCodingQuestionReply(questions, { kind: 'answer', answers: [['Blue'], ['Web', 'App']] })).toEqual({ kind: 'answer', answers: [['Blue'], ['Web', 'App']] })
     expect(validateCodingQuestionReply(questions, { kind: 'answer', answers: [['Blue'], ['Other target']] }).kind).toBe('answer')
@@ -17,7 +18,7 @@ describe('coding questions', () => {
     { kind: 'answer', answers: [['Green'], ['Web']] },
     { kind: 'answer', answers: [['Blue', 'Blue'], ['Web']] },
     { kind: 'answer', answers: [['Blue'], ['Web', 'Web']] },
-    { kind: 'answer', answers: [[], ['Web']] },
+    { kind: 'answer', answers: [[], []] },
     { kind: 'answer', answers: [['Blue'], [' ']] },
     { kind: 'answer', answers: [['Blue'], ['x'.repeat(4001)]] },
     { kind: 'dismiss', answers: [['Blue']] },

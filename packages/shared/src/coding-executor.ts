@@ -6,6 +6,7 @@ const MAX_EVENT_METADATA_BYTES = 64 * 1_024
 const digestPattern = /^[a-f0-9]{64}$/u
 
 export const codingExecutorCapabilities = [
+  'feedback_revision',
   'approved_command',
   'cancellation',
   'checkpoint_continuation',

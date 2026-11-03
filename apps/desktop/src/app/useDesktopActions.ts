@@ -1208,7 +1208,7 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function replyCodingPermission(decision: CodingPermissionDecision['decision'], scope?: 'once' | 'session') {
+  async function replyCodingPermission(decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>, scope?: 'once' | 'session') {
     if (!desktopApi || !pendingCodingPermission || !currentUser) {
       return
     }

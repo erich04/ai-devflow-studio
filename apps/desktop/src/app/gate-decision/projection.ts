@@ -40,16 +40,16 @@ import {
   type StoredRevisionList,
 } from './revision-list'
 // ---- View types (design §5.2, amendment 33) ----
-export type GateBarRow = '1' | '2' | '3' | '4' | '5' | '6' | '7' | '7a' | '7b' | '8' | '8a' | '9' | '10' | '11' | '12' | '13' | '14' | '15'
-export type GateButtonId = 'review' | 'submit' | 'confirmWithout' | 'confirm' | 'regenerate' | 'syncTeam'
+export type GateBarRow = `B${1|2|3|4|5|6|7|8|9|10|11|12|13}` | `T${1|2|3|4|5|6|7|8|9|10|11|12}` | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '7a' | '7b' | '8' | '8a' | '9' | '10' | '11' | '12' | '13' | '14' | '15'
+export type GateButtonId = 'startCoding' | 'redevelop' | 'approveChange' | 'approveWithout' | 'reviseChange' | 'rejectChange' | 'approveRepair' | 'rejectRepair' | 'reviseRepair' | 'refix' | 'rerunSelfCheck' | 'confirmEvidence' | 'rerunTests' | 'runTests' | 'review' | 'submit' | 'confirmWithout' | 'confirm' | 'regenerate' | 'syncTeam'
   | 'reloadPolicy' /* → gateEnforcement.refresh() */ | 'recheck' /* → retry() of the failed digest hooks */
   | 'returnToCurrent' /* → showCurrentVersion(), view only */
-export type NoteLink = { label: string; action: 'openVersion'; artifactId: string }
+export type NoteLink = { label: string; action: 'openProjectSettings' | 'openTeamSettings' | 'stopSelfCheck' | 'reload'; busy?: boolean } | { label: string; action: 'openVersion'; artifactId: string }
   | { label: '打开模型与执行方式设置'; action: 'openModelSettings' }
 export type CostLineLink = NoteLink | { label: '更换审查模型'; action: 'openModelSettings' } | { label: '更改'; action: 'openStageSettings' }
-export type GateNote = { tone: 'block' | 'neutral' | 'warn' | 'error' | 'ok'; text: string; technical?: string; link?: NoteLink }
-export type GateButton = { id: GateButtonId; label: string; primary: boolean; enabled: boolean; disabledReason?: string; confirmBefore?: string }
-export type CostLine = { kind: 'review' | 'generation'; text: string; link?: CostLineLink }
+export type GateNote = { tone: 'block' | 'neutral' | 'warn' | 'error' | 'ok'; text: string; technical?: string; raw?: string[]; link?: NoteLink }
+export type GateButton = { id: GateButtonId; label: string; primary: boolean; enabled: boolean; disabledReason?: string; confirmBefore?: string; danger?: true; reason?: { label: string; placeholder: string; confirmLabel: string; cancelLabel: string } }
+export type CostLine = { kind: 'review' | 'generation' | 'action' | 'run'; buttonId?: GateButtonId; text: string; link?: CostLineLink }
 export type ListItemView = {
   id: string
   number: number
@@ -61,6 +61,7 @@ export type ListItemView = {
   detail: string
   /** Chat items: the proposal artifact, its title and its body for 「查看」. */
   proposalId?: string
+  messageId?: string
   proposalTitle?: string
   proposalBody?: string
   /** The card a finding or question item came from. */
@@ -86,6 +87,8 @@ export type ListView = {
   proposalIds: string[]
 }
 export type MetaView = {
+  deadline?: { text: string; tone: 'neutral' | 'warn' }
+  extra?: string[]
   role?: string
   review?: string
   rerun?: { enabled: boolean; disabledReason?: string }
@@ -95,6 +98,7 @@ export type MetaView = {
   technical: Array<{ label: string; value: string }>
 }
 export type MarginHeaderView = {
+  title?: string
   text: string
   merges: Array<{ text: string; cardId: string }>
   /** Joins after the second go into the disclosure "另有 N 条意见并入了问题". */
@@ -103,7 +107,7 @@ export type MarginHeaderView = {
 }
 export type CardView = {
   id: string
-  kind: 'finding' | 'question'
+  kind: 'finding' | 'question' | 'permission' | 'coding_question' | 'test_failure' | 'stale_evidence'
   number: number
   title: string
   text: string
@@ -111,8 +115,13 @@ export type CardView = {
   anchor?: BlockKey
   ranges: Range[]
   blocks: BlockKey[]
-  status: 'open' | 'adopted' | 'declined' | 'answered'
+  status: 'open' | 'adopted' | 'declined' | 'answered' | 'allowed' | 'rejected' | 'expired' | 'skipped' | 'fixing' | 'retesting' | 'fixed'
   statusText?: string
+  permission?: import('@ai-devflow/shared').CodingPermissionRequest
+  codingQuestion?: { codingRunId: string; request: import('@ai-devflow/shared').CodingQuestionRequest; index: number }
+  becomes?: string
+  quote?: string
+  segments?: Array<{ text: string; raw?: true }>
   /** `static`: plain text, not a link (history mode, where the bar's list is another version's). */
   itemRef?: { itemId: string; number: number; static?: true }
   actionable: boolean
@@ -126,7 +135,7 @@ export type CardView = {
 }
 export type BarView = { cardIds: string[]; block: BlockKey; slot: 0 | 1 | 2; tone: 'question' | 'important' | 'suggestion'; label: string }
 export type HistoryListView = { title: string; text: string; count: number }
-export type GateBarMode = 'decide' | 'running' | 'pending-generation' | 'finished' | 'read-only' | 'checking' | 'unverified'
+export type GateBarMode = 'paused' | 'decide' | 'running' | 'pending-generation' | 'finished' | 'read-only' | 'checking' | 'unverified'
 export type GateDecisionView = {
   bar: {
     row: GateBarRow
@@ -136,7 +145,7 @@ export type GateDecisionView = {
     notes: GateNote[]
     buttons: GateButton[]
     costLines: CostLine[]
-    stop?: { target: 'review' | 'generation' }
+    stop?: { target: 'review' | 'generation' | 'coding' | 'revision'; busy?: true }
     list: ListView
     meta: MetaView
   }
@@ -270,6 +279,7 @@ const answerOf = (list: StoredRevisionList | undefined, number: number) =>
 /** The label of the version generated from a list's version: its successor in the records; `undefined` when none is recorded or numbered. */
 function generatedFrom(list: StoredRevisionList, artifacts: readonly Artifact[], designNumbers: ReadonlyMap<string, number> | undefined): string | undefined {
   const target = list.target
+  if (target.kind === 'change') return undefined
   const next = artifacts.filter((artifact) => artifact.runId === target.runId && (target.kind === 'requirement'
     ? artifact.kind === 'clarification' && artifact.clarificationRevision?.previousRevisionArtifactId === target.artifactId
     : artifact.kind === 'design' && artifact.designRevision?.previous.artifactId === target.artifactId &&
@@ -489,6 +499,7 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   }
   if (mode === 'current' && !history) {
     for (const other of input.otherLists ?? []) {
+      if (other.list.target.kind === 'change') continue
       const count = other.list.items.length
       if (!count || other.list.confirmedWithout || isListSubmitted(other.list, input.artifacts) || other.list.target.artifactId === current.artifact.id) continue
       notes.push({ tone: 'neutral', text: gateCopy.oldListNotice(kind, N, other.label, count), link: { label: gateCopy.oldListLink(other.label), action: 'openVersion', artifactId: other.list.target.artifactId } })

@@ -6,6 +6,7 @@ import {
   applyCodingChangeSetAtomically,
   prepareCodingChangeSet,
   verifyCodingChangeSetDigest,
+  verifyCodingChangeSetDisplay,
 } from './coding-change-set.js'
 
 const temporaryDirectories: string[] = []
@@ -28,6 +29,17 @@ async function fixture() {
 }
 
 describe('Coding Change Set v2', () => {
+  it('verifies the displayed old/new text and binds revision metadata into the approval digest', async () => {
+    const { worktreePath } = await fixture()
+    const input = { id: 'initial', codingRunId: 'coding', projectId: 'project', workspaceId: 'workspace', worktreePath, phase: 'initial' as const, configVersion: 1, providerId: 'fixture', createdAt: '2026-10-31T00:00:00.000Z', expiresAt: '2026-10-31T00:15:00.000Z', proposal: [{ path: 'alpha.ts', replacements: [{ oldText: '"old"', newText: '"new"' }] }] }
+    const initial = await prepareCodingChangeSet(input)
+    const revision = await prepareCodingChangeSet({ ...input, id: 'revision', revision: { index: 1, previous: { id: initial.id, digest: initial.changeSetDigest }, changeRequest: '补充检查', itemCount: 1 } })
+    expect(revision.changeSetDigest).not.toBe(initial.changeSetDigest)
+    expect(() => verifyCodingChangeSetDigest({ ...revision, revision: { ...revision.revision!, changeRequest: 'tampered' } })).toThrow()
+    expect(verifyCodingChangeSetDisplay(initial)[0]?.after).toContain('"new"')
+    expect(() => verifyCodingChangeSetDisplay({ ...initial, unifiedDiff: initial.unifiedDiff.replace('+export const alpha = "new"', '+export const alpha = "forged"') })).toThrow()
+    expect(() => verifyCodingChangeSetDisplay({ ...initial, unifiedDiff: initial.unifiedDiff.replace('-export const alpha = "old"', '-export const alpha = "forged"') })).toThrow()
+  })
   it('binds a normalized multi-file proposal to exact digests and applies it atomically', async () => {
     const { worktreePath } = await fixture()
     await chmod(path.join(worktreePath, 'alpha.ts'), 0o744)

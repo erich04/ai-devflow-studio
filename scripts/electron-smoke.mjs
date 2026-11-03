@@ -499,7 +499,10 @@ async function selectWorkflowNode(page, testId, storedTitle) {
     await node.dispatchEvent('click')
 
     try {
-      await expect(inspector).toContainText(expectedTitle, { timeout: 2_000 })
+      await expect(node).toHaveAttribute('aria-pressed', 'true', { timeout: 2_000 })
+      const decision = inspector.getByTestId('gate-decision-bar')
+      if (await decision.count() && /^[BT]\d+$/u.test(await decision.getAttribute('data-row') ?? '')) await expect(decision).toBeVisible()
+      else await expect(inspector).toContainText(expectedTitle, { timeout: 2_000 })
       return
     } catch (error) {
       if (attempt === 2) {
@@ -710,55 +713,46 @@ async function startRetryAttemptViaDesktopApi(
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
 }
 
-/** Runs the saved test command from the task's test step (plan W4); the page stays on the task. */
+/** Confirms the exact saved result without executing the command a second time. */
 async function runProjectTestsInTask(page, { runId, nodeId, nodeTitle }) {
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
-  const inspector = page.getByTestId('node-inspector')
-  await expect(inspector.getByTestId('task-test-run')).toContainText('npm test')
-  const runTests = inspector.getByTestId('task-status-row').getByRole('button', { name: '运行检查', exact: true })
-  await expect(runTests).toBeEnabled({ timeout: 20_000 })
-  await runTests.click()
-  await expect(page.getByTestId('toast')).toContainText('测试通过，证据已归档', { timeout: 30_000 })
-  await expect(page.getByTestId('settings-view')).toHaveCount(0)
-  const execution = await page.evaluate(async (input) => {
+  const inspector = page.getByTestId('node-inspector'), bar = inspector.getByTestId('gate-decision-bar')
+  const confirm = bar.getByRole('button', { name: '确认测试证据，进入 PR 交付', exact: true })
+  await expect(bar).toContainText('第 1 次测试报告 · 你的决定')
+  await expect(confirm).toBeEnabled({ timeout: 20_000 })
+  const before = await page.evaluate(async runId => {
     const state = await window.aiDevFlowDesktop.loadState()
-    const evidence = state.testEvidence
-      .filter((candidate) => candidate.runId === input.runId && candidate.nodeId === input.nodeId)
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
-    const workspace = evidence?.sourceTree?.workspaceId
-      ? state.managedCodingWorkspaces.find((candidate) => candidate.id === evidence.sourceTree.workspaceId)
-      : undefined
-    return {
-      evidence: evidence ? {
-        id: evidence.id,
-        status: evidence.status,
-        command: evidence.command,
-        sourceTree: evidence.sourceTree,
-      } : null,
-      testedTreePath: workspace?.worktreePath,
-      run: state.runs.find((candidate) => candidate.id === input.runId),
-    }
-  }, { runId, nodeId })
-  expect(execution.evidence?.status).toBe('passed')
-  expect(execution.evidence?.command).toBe('npm test')
-  expect(execution.evidence?.sourceTree?.digest).toMatch(/^[0-9a-f]{64}$/)
-  // Results stay in the task: 当前工作 of the (now finished) test step shows them.
-  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
-  const evidenceCard = inspector.getByTestId('node-test-evidence')
-  await expect(evidenceCard).toContainText('已通过')
-  await expect(evidenceCard).toContainText('结果对应当前代码。')
-  // Hardening H3: a change in the tested tree marks the result stale; undoing it restores it.
-  expect(execution.testedTreePath).toBeTruthy()
-  const probe = path.join(execution.testedTreePath, 'devflow-freshness-probe.txt')
+    const evidence = state.testEvidence.filter(e => e.runId === runId && e.status === 'passed').at(-1)
+    const workspace = state.managedCodingWorkspaces.find(w => w.id === evidence?.sourceTree?.workspaceId)
+    return { evidence, count: state.testEvidence.length, testedTreePath: workspace?.worktreePath }
+  }, runId)
+  // The legacy fake executor runs its marker check; the Native v2 smoke covers the saved npm test command.
+  expect(before.evidence?.command).toContain('Fake coding marker verified')
+  expect(before.evidence?.sourceTree?.digest).toMatch(/^[0-9a-f]{64}$/)
+  expect(before.testedTreePath).toBeTruthy()
+  const probe = path.join(before.testedTreePath, 'devflow-freshness-probe.txt')
   await writeFile(probe, 'changed after the test\n')
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(evidenceCard).toContainText('所测代码之后有改动，结果已过期，请重新运行检查。')
-  await expect(evidenceCard.getByText('已过期', { exact: true })).toBeVisible()
+  await expect(bar).toContainText('测试证据已过期', { timeout: 20_000 })
+  await expect(confirm).toBeDisabled()
   await rm(probe)
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(evidenceCard).toContainText('结果对应当前代码。')
-  await expect(evidenceCard.getByText('已过期', { exact: true })).toHaveCount(0)
-  return execution
+  await expect(confirm).toBeEnabled({ timeout: 20_000 })
+  await confirm.click()
+  await expect.poll(async () => page.evaluate(async ({ runId, nodeId }) => (await window.aiDevFlowDesktop.loadState()).runs.find(r => r.id === runId)?.nodes.find(n => n.id === nodeId)?.status, { runId, nodeId })).toBe('success')
+  const execution = await page.evaluate(async ({ runId, nodeId }) => {
+    const state = await window.aiDevFlowDesktop.loadState()
+    return { evidence: state.testEvidence.filter(e => e.runId === runId && e.nodeId === nodeId).at(-1), count: state.testEvidence.length, run: state.runs.find(r => r.id === runId) }
+  }, { runId, nodeId })
+  expect(execution.count).toBe(before.count + 1)
+  expect(execution.evidence.reusedFrom.evidenceId).toBe(before.evidence.id)
+  expect(execution.evidence.command).toBe(before.evidence.command)
+  expect(execution.evidence.sourceTree.digest).toBe(before.evidence.sourceTree.digest)
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  await expect(bar).toContainText('测试证据已确认')
+  await expect(bar.getByRole('button', { name: /确认测试证据/ })).toHaveCount(0)
+  await expect(page.getByTestId('settings-view')).toHaveCount(0)
+  return { ...execution, testedTreePath: before.testedTreePath }
 }
 
 async function prepareOpenCodeWorkflowAtBuild(page, { projectId, creatorId }) {
@@ -1403,19 +1397,19 @@ try {
   expect(codingAuthority.requestedBy).toBe(trustedPairingUserId)
   // The permission request is shown and decided in the task; reject and stop stay visible (W3, §3).
   const buildInspector = first.page.getByTestId('node-inspector')
-  await expect(buildInspector.getByTestId('workbench-coding-permission-summary')).toContainText('Apply fake coding diff')
-  const buildStatusRow = buildInspector.getByTestId('task-status-row')
-  await expect(buildStatusRow.getByRole('button', { name: '拒绝', exact: true })).toBeVisible()
-  await expect(buildStatusRow.getByRole('button', { name: '停止执行', exact: true })).toBeVisible()
-  await buildStatusRow.getByRole('button', { name: '批准本次', exact: true }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('审批已处理，编码状态已更新', {
-    timeout: 30_000,
-  })
+  const permissionCard = buildInspector.locator('[data-card-id^="permission:"]')
+  await expect(permissionCard).toContainText('要改的文件：')
+  await expect(permissionCard).toContainText('devflow-fake-change.txt')
+  await expect(permissionCard).not.toContainText('Apply fake coding diff', { useInnerText: true })
+  await expect(permissionCard).not.toContainText('不改文件')
+  await expect(permissionCard.getByRole('button', { name: '拒绝', exact: true })).toBeVisible()
+  await expect(buildInspector.getByTestId('gate-decision-bar').getByRole('button', { name: '停止', exact: true })).toBeVisible()
+  await permissionCard.getByRole('button', { name: '允许一次', exact: true }).click()
+  await expect.poll(async () => first.page.evaluate(async id => (await window.aiDevFlowDesktop.loadState()).codingRuns.find(r => r.id === id)?.status, codingAuthority.id), { timeout: 30_000 }).toBe('completed')
   await expect(first.page.getByTestId('settings-view')).toHaveCount(0)
-  // The build step's 执行记录 keeps the read-only Coding Run evidence without decision buttons (Y3, W5).
   await selectWorkflowNode(first.page, `flow-node-${localNodes.build.id}`, localNodes.build.title)
-  await expect(buildInspector).toContainText('devflow-fake-change.txt')
   await buildInspector.getByRole('tab', { name: '执行记录', exact: true }).click()
+  await expect(buildInspector).toContainText('devflow-fake-change.txt')
   const codingRecords = buildInspector.getByTestId('coding-run-records')
   await expect(codingRecords).toContainText('completed')
   await expect(codingRecords).toContainText('Test evidence passed')
@@ -1564,7 +1558,7 @@ try {
     currentNodeId: localNodes.pr.id,
   })
   expect(syncedEvidence).toMatchObject({
-    command: 'npm test',
+    command: completedTest.evidence.command,
     status: 'passed',
   })
   expect(JSON.stringify(syncedOverview)).not.toContain(repoDir)

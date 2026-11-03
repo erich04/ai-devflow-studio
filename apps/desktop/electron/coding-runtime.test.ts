@@ -54,6 +54,7 @@ import type {
   ReserveCodingAgentRunOptions,
 } from './local-store'
 import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine'
+import { registerProjectMemoryRecall } from './coding-context'
 import {
   createDefaultOpencodePermissionRules,
   OpencodeMessageResponseError,
@@ -2394,6 +2395,50 @@ describe('CodingRuntime', () => {
       runId: 'run-1',
       nodeId: 'node-build',
       status: 'waiting_permission',
+    })
+  })
+
+  it.each([
+    { kind: 'refix' as const, instruction: '' },
+    { kind: 'redevelop' as const, instruction: 'Keep the public API unchanged.' },
+  ])('recalls only user-authored retry intents while retaining failure context: $kind', async ({ kind, instruction }) => {
+    const repo = await gitRepo()
+    const run = buildRun({ request: 'Fix the task list.' })
+    const failedEvidence: TestEvidence = {
+      ...passingEvidence(repo), status: 'failed', exitCode: 1,
+      stdout: 'FAIL existing item order\nAssertionError: expected the original sequence',
+      summary: 'The previous changes failed tests.',
+    }
+    const previous = codingRun({ status: 'failed', testEvidenceId: failedEvidence.id })
+    const store = Object.assign(new MemoryCodingStore({
+      projects: [project(repo)], runs: [run], codingRuns: [previous], testEvidence: [failedEvidence],
+    }), { getDesktopPairingCredential: async () => null })
+    const recall = vi.fn(async () => null)
+    registerProjectMemoryRecall(store, { recall, assertCurrent: async () => undefined })
+    const runtime = createCodingRuntime({
+      store, engine: createFakeCodingEngineAdapter(),
+      worktreeRoot: await tempDir('devflow-retry-recall-'),
+      idGenerator: fixedIds('coding-run-retry-recall'),
+      now: fixedNow('2026-06-17T00:01:00.000Z'),
+    })
+    const result = await runtime.runCodingAgent({
+      runId: run.id, nodeId: 'node-build', projectId: run.projectId,
+      requestedBy: 'user-1', providerId: 'fake-coding-engine', userInstruction: instruction,
+      context: { kind, previousCodingRunId: previous.id, failedTestEvidenceId: failedEvidence.id, reason: 'Keep item order stable.' },
+    })
+    expect(recall).toHaveBeenCalledWith(expect.objectContaining({
+      intents: ['Fix the task list', ...(instruction ? ['Keep the public API unchanged'] : []), 'Keep item order stable'],
+      query: expect.stringContaining('FAIL existing item order'),
+    }))
+    expect(result.codingRun.prompt).toContain('FAIL existing item order')
+    expect(result.codingRun.prompt).toContain('User reason: Keep item order stable.')
+    expect(result.codingRun.retryOf).toMatchObject({ kind, codingRunId: previous.id, hasReason: true })
+    await runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id, codingRunId: result.codingRun.id,
+      decidedBy: 'user-1', decision: 'approved', comment: 'Approve the retry changes.',
+    })
+    expect(store.codingRuns.find(candidate => candidate.id === result.codingRun.id)).toMatchObject({
+      status: 'completed', retryOf: { kind, codingRunId: previous.id, hasReason: true },
     })
   })
 

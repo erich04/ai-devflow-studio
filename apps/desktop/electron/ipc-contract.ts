@@ -1,3 +1,6 @@
+import type { BuildTestDesktopApi, CodingRetryContext } from './build-test-contract.js'
+import { parseCodingRetryContext } from './build-test-contract.js'
+import { boundedText, optionalBoolean, parsePermissionExpected, type PermissionExpected } from './build-test-contract.js'
 import type { CodingQuestionReceipt, CodingQuestionReply } from '@ai-devflow/shared'
 import type { WorkbenchConversationApi } from './workbench-conversation-contract.js'
 import type { CredentialAccessRecord } from './credential-access.js'
@@ -313,6 +316,14 @@ export const ipcChannels = {
   retryModelCostSettlements: 'devflow:model-costs:retry',
   saveCodingRuntimeBudgetPolicy: 'devflow:coding:runtime-budget-policy:save',
   createCodingRuntimeBudgetApproval: 'devflow:coding:runtime-budget-approval:create',
+  getCodingChangeHistory: 'devflow:coding:change-history:get',
+  reviseCodingChangeSet: 'devflow:coding:change-set:revise',
+  cancelCodingRevision: 'devflow:coding:change-set:revise-cancel',
+  startCodingChangeReview: 'devflow:coding:change-review:start',
+  cancelCodingChangeReview: 'devflow:coding:change-review:cancel',
+  getCodingActionCosts: 'devflow:coding:action-costs:get',
+  confirmTestEvidence: 'devflow:test-evidence:confirm',
+  codingChangeHistoryUpdated: 'devflow:coding:push:change-history',
   runCodingAgent: 'devflow:coding:agent:run',
   startRetryAttempt: 'devflow:remediation:retry:start',
   cancelCodingAgentRun: 'devflow:coding:agent:cancel',
@@ -347,6 +358,7 @@ export type TestEvidenceFreshnessInput = {
 export type ValidateTestCommandInput = SaveProjectTestCommandInput
 
 export type RunProjectTestsInput = {
+  completeOnPass?: boolean
   projectId: string
   runId: string
   nodeId: string
@@ -606,6 +618,7 @@ export type CreateCodingRuntimeBudgetApprovalInput = {
 }
 
 export type RunCodingAgentInput = {
+  context?: CodingRetryContext
   runId: string
   nodeId: string
   projectId: string
@@ -642,10 +655,11 @@ export type ReplyCodingQuestionInput = {
 }
 
 export type ReplyCodingPermissionInput = {
+  expected?: PermissionExpected
   requestId: string
   codingRunId: string
   decidedBy: string
-  decision: CodingPermissionDecision['decision']
+  decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>
   comment: string
   scope?: 'once' | 'session'
 }
@@ -695,7 +709,7 @@ export type PairDesktopResult = {
   credential: DesktopPairingCredential
 }
 
-export type DevFlowDesktopApi = {
+export type DevFlowDesktopApi = BuildTestDesktopApi & {
   getModelCostRecovery: (input: GetCodingRuntimeConfigurationInput) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   retryModelCostSettlements: (input: GetCodingRuntimeConfigurationInput) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
@@ -1021,11 +1035,12 @@ export function parseRunProjectTestsInput(value: unknown): RunProjectTestsInput 
   }
   rejectUnexpectedFields(
     value,
-    ['projectId', 'runId', 'nodeId'],
+    ['projectId', 'runId', 'nodeId', 'completeOnPass'],
     'run project tests payload',
   )
 
   return {
+    ...(optionalBoolean(value.completeOnPass) === undefined ? {} : { completeOnPass: optionalBoolean(value.completeOnPass)! }),
     projectId: readRequiredString(value, 'projectId'),
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
@@ -2164,7 +2179,7 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
   }
   rejectUnexpectedFields(
     value,
-    ['runId', 'nodeId', 'projectId', 'requestedBy', 'userInstruction', 'runtimeBudgetApprovalId', 'additionalAttemptAfterCount'],
+    ['runId', 'nodeId', 'projectId', 'requestedBy', 'userInstruction', 'runtimeBudgetApprovalId', 'additionalAttemptAfterCount', 'context'],
     'coding agent run payload',
   )
   const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
@@ -2174,6 +2189,7 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
   )) throw new Error('Invalid additional OpenCode attempt count')
 
   return {
+    ...(value['context'] === undefined ? {} : { context: parseCodingRetryContext(value['context']) }),
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
     projectId: readRequiredString(value, 'projectId'),
@@ -2248,6 +2264,7 @@ export function parseReplyCodingPermissionInput(value: unknown): ReplyCodingPerm
   if (!isRecord(value)) {
     throw new Error('Invalid coding permission reply payload')
   }
+  if (value.expected !== undefined) rejectUnexpectedFields(value, ['requestId', 'codingRunId', 'decidedBy', 'decision', 'comment', 'scope', 'expected'], 'coding permission reply')
   const decision = value['decision']
   if (decision !== 'approved' && decision !== 'rejected' && decision !== 'expired') {
     throw new Error('Invalid coding permission decision')
@@ -2262,7 +2279,8 @@ export function parseReplyCodingPermissionInput(value: unknown): ReplyCodingPerm
     decidedBy: readRequiredString(value, 'decidedBy'),
     decision,
     ...(scope ? { scope } : {}),
-    comment: typeof value['comment'] === 'string' ? value['comment'].trim() : '',
+    ...(value.expected === undefined ? {} : { expected: parsePermissionExpected(value.expected) }),
+    comment: value.expected === undefined ? (typeof value['comment'] === 'string' ? value['comment'].trim() : '') : boundedText(value.comment ?? '', 'comment', 1000, true),
   }
 }
 

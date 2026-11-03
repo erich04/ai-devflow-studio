@@ -10,12 +10,14 @@ export const MAX_REVISION_ITEM_CHARACTERS = 1_000
 export const MAX_REVISION_TEXT_CHARACTERS = 4_000
 export const MAX_REVISION_PROPOSALS = 20
 export type ListTarget =
+  | { kind: 'change'; runId: string; codingRunId: string; changeSetId: string; changeSetDigest: string }
   | { kind: 'requirement'; runId: string; artifactId: string; revision: number; revisionDigest: string }
   | { kind: 'design'; runId: string; artifactId: string; updatedAt: string; contentDigest: string }
 export type FindingRef = { reviewId: string; index: number; text: string; level?: 'important' | 'suggestion' }
 export type StoredRevisionItem = {
   id: string
-  source: 'finding' | 'question' | 'own'
+  source: 'finding' | 'question' | 'own' | 'chat'
+  chat?: { conversationId: string; messageId: string; text: string }
   addedAt: string
   text: string
   finding?: FindingRef
@@ -43,6 +45,7 @@ export type StoredRevisionList = {
 }
 export type RevisionListStore = { version: 1; lists: Record<string, StoredRevisionList> }
 export function listKey(target: ListTarget): string {
+  if (target.kind === 'change') return `change:${target.runId}:${target.codingRunId}:${target.changeSetId}:${target.changeSetDigest}`
   return target.kind === 'requirement'
     ? `requirement:${target.runId}:${target.artifactId}:${target.revision}:${target.revisionDigest}`
     : `design:${target.runId}:${target.artifactId}:${target.updatedAt}:${target.contentDigest}`
@@ -60,7 +63,9 @@ function isIdentity(value: unknown): value is DesignRevisionIdentity {
   return isRecord(value) && isString(value.artifactId) && isString(value.updatedAt) && isDigest(value.contentDigest)
 }
 function isTarget(value: unknown): value is ListTarget {
-  if (!isRecord(value) || !isString(value.runId) || !isString(value.artifactId)) return false
+  if (!isRecord(value) || !isString(value.runId)) return false
+  if (value.kind === 'change') return isString(value.codingRunId) && isString(value.changeSetId) && isDigest(value.changeSetDigest)
+  if (!isString(value.artifactId)) return false
   if (value.kind === 'requirement') return Number.isInteger(value.revision) && (value.revision as number) >= 1 && isDigest(value.revisionDigest)
   if (value.kind === 'design') return isString(value.updatedAt) && isDigest(value.contentDigest)
   return false
@@ -77,6 +82,7 @@ function isItem(value: unknown): value is StoredRevisionItem {
     return isRecord(question) && isIndex(question.index) && isString(question.text) && Array.isArray(question.merged) &&
       question.merged.every((item) => isRecord(item) && isString(item.reviewId) && isIndex(item.index) && isString(item.text))
   }
+  if (value.source === 'chat') return isRecord(value.chat) && isString(value.chat.conversationId) && isString(value.chat.messageId) && isString(value.chat.text)
   return value.source === 'own'
 }
 function isChat(value: unknown): value is Record<string, ChatOverride> {
@@ -108,7 +114,8 @@ export function parseRevisionListStore(raw: string | null): { store: RevisionLis
       dropped++
       continue
     }
-    const items = value.items.filter(isItem)
+    const target = value.target
+    const items = value.items.filter(isItem).filter(item => item.source !== 'chat' || target.kind === 'change')
     const declined = value.declined.filter((entry): entry is { reviewId: string; index: number } => isRecord(entry) && isString(entry.reviewId) && isIndex(entry.index))
     dropped += value.items.length - items.length + value.declined.length - declined.length
     lists[key] = {
@@ -137,6 +144,7 @@ export function importLegacyDrafts(artifactId: string, suggestions: readonly Rev
 }
 // ---- Operations ----
 export type RevisionListOp =
+  | { type: 'addChat'; conversationId: string; messageId: string; text: string }
   | { type: 'adopt'; finding: FindingRef; text?: string }
   | { type: 'unadopt'; reviewId: string; index: number }
   | { type: 'decline'; reviewId: string; index: number }
@@ -170,6 +178,15 @@ export function applyRevisionListOp(list: StoredRevisionList, op: RevisionListOp
   const withoutFinding = (reviewId: string, index: number) => list.items.filter((item) => !sameFinding(item, reviewId, index))
   const undeclined = (reviewId: string, index: number) => list.declined.filter((entry) => !(entry.reviewId === reviewId && entry.index === index))
   switch (op.type) {
+    case 'addChat': {
+      if (list.target.kind !== 'change' || op.text.trim().length > 300) return { ok: false, message: '这条答疑建议不能加入清单。' }
+      const checked = checkItemText(op.text)
+      if (!checked.ok) return checked
+      const id = `chat-message-${op.conversationId}-${op.messageId}`
+      if (list.items.some(item => item.id === id)) return done(list)
+      return done({ ...list, items: [...list.items, { id, source: 'chat', text: checked.text, addedAt: now, chat: { conversationId: op.conversationId, messageId: op.messageId, text: checked.text } }] })
+    }
+
     case 'adopt': {
       const checked = checkItemText(op.text ?? op.finding.text)
       if (!checked.ok) return checked
@@ -331,7 +348,7 @@ export function numberItems(items: readonly StoredRevisionItem[], chatItems: rea
     const item = (entry as { item: StoredRevisionItem }).item
     const shown = item.source === 'finding' ? findingNumber(item.finding!.reviewId, item.finding!.index) : undefined
     const label = shown !== undefined ? gateCopy.sourceFinding(shown)
-      : item.source === 'question' ? gateCopy.sourceQuestion(item.question!.index + 1) : gateCopy.sourceOwn
+      : item.source === 'question' ? gateCopy.sourceQuestion(item.question!.index + 1) : item.source === 'chat' ? gateCopy.sourceChat : gateCopy.sourceOwn
     const earlier = item.source === 'finding' && boundReviewId !== undefined && item.finding!.reviewId !== boundReviewId
     return { id: item.id, number, source: item.source, label, text: item.text, addedAt: item.addedAt, item,
       ...(earlier ? { tag: gateCopy.earlierReviewTag } : {}), ...(shown !== undefined ? { findingNumber: shown } : {}),
@@ -340,11 +357,13 @@ export function numberItems(items: readonly StoredRevisionItem[], chatItems: rea
 }
 const indent = (text: string) => text.split('\n').join('\n   ')
 /** The submitted text, shared by both gates (§5.6). Review and artifact ids never appear. */
-export function composeRevisionText(items: readonly NumberedItem[], target: { kind: GateKind; version: string }): string {
+export function composeRevisionText(items: readonly NumberedItem[], target: { kind: GateKind | 'change'; version: string }): string {
   const lines = [gateCopy.composeHeader(items.length, target.version)]
   for (const entry of items) {
     const prefix = `${entry.number}. `
-    if (entry.source === 'chat' && entry.chat) {
+    if (entry.source === 'chat' && entry.item?.chat) {
+      lines.push(prefix + indent(`来自答疑：${entry.text}`))
+    } else if (entry.source === 'chat' && entry.chat) {
       lines.push(prefix + indent(gateCopy.composeChat(entry.chat.proposal.title, entry.chat.note)))
     } else if (entry.source === 'finding' && entry.item?.finding) {
       const finding = entry.item.finding
@@ -377,6 +396,7 @@ export function measureRevisionText(text: string): { length: number; limit: numb
 export function isListSubmitted(list: StoredRevisionList, artifacts: readonly Artifact[]): boolean {
   if (list.submitted) return true
   const target = list.target
+  if (target.kind === 'change') return Boolean(list.submitted)
   if (target.kind === 'requirement') {
     return artifacts.some((artifact) => artifact.kind === 'clarification_feedback' && artifact.clarificationFeedback?.targetArtifactId === target.artifactId)
   }

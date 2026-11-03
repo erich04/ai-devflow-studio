@@ -4,10 +4,11 @@ import { ConversationBody, type DecorateBlock } from '../../ConversationBody'
 import { hasSectionContent, partitionArtifact, sectionTitles } from '../../app/artifact-sections'
 import { gateCopy, type GateKind } from '../../app/gate-decision/copy'
 import type { GateLayoutMode } from '../../app/gate-decision/layout'
-import { blockKey, parseBlockKey, type BlockIndex, type BlockKey, type Range } from '../../app/gate-decision/material'
+import { blockKey, type BlockIndex, type BlockKey, type Range } from '../../app/gate-decision/material'
 import type { BarView } from '../../app/gate-decision/projection'
 import { GateMarker } from './GateMarker'
-import { MaterialOverlay, type BlockBoxes } from './MaterialOverlay'
+import { type BlockBoxes } from './MaterialOverlay'
+import { MaterialFrame } from './MaterialFrame'
 import { MaterialSection, onGateMaterialCommit } from './MaterialSection'
 
 export { observeGateMaterialCommitsForTests } from './MaterialSection'
@@ -54,15 +55,9 @@ export const MaterialColumn = memo(function MaterialColumn({ kind, artifact, blo
       ...(ids?.length ? { after: <span className="gate-markers">{ids.map((id) => <GateMarker key={id} cardId={id} />)}</span> } : {}),
     }
   }, [blockSet, newSet, mode, markers])
-  const linkFrom = (target: EventTarget | null) => {
-    const element = (target as Element | null)?.closest?.('[data-block-start]')
-    if (!element || !materialRef.current?.contains(element)) return onBlockLink(undefined)
-    onBlockLink(parseBlockKey(`${element.getAttribute('data-block-start')}:${element.getAttribute('data-block-end')}` as BlockKey))
-  }
   const firstVerification = main.findIndex((section) => section.group === 'verification')
   return <Profiler id="gate-material" onRender={onGateMaterialCommit}>
-    <div ref={materialRef} className="gate-material material-document" data-testid={kind === 'requirement' ? 'clarification-current-revision' : 'design-current-material'}
-      onMouseOver={(event) => linkFrom(event.target)} onMouseLeave={() => onBlockLink(undefined)} onFocus={(event) => linkFrom(event.target)}>
+    <MaterialFrame materialRef={materialRef} testId={kind === 'requirement' ? 'clarification-current-revision' : 'design-current-material'} mode={mode} boxes={boxes} newBlocks={newBlocks} bars={bars} onBlockLink={onBlockLink} onCardLink={onCardLink} onBarActivate={onBarActivate}>
         {raw ? <div className="message-plain">{artifact.content}</div> : main.map((section, index) => <Fragment key={`${section.start}:${index}`}>
           {kind === 'design' && index === firstVerification ? <p className="meta">{DESIGN_VERIFICATION_NOTE}</p> : null}
           <section className="artifact-reading-section" id={`${sectionIdPrefix}-section-${index}`}>
@@ -76,7 +71,6 @@ export const MaterialColumn = memo(function MaterialColumn({ kind, artifact, blo
         </section>)}
       </details> : null}
       {revisionHistory ? <details className="material-source" data-testid="clarification-revision-history"><summary>版本与修订意见历史</summary>{revisionHistory}</details> : null}
-      <MaterialOverlay mode={mode} boxes={boxes} newBlocks={newBlocks} bars={bars} onActivate={onBarActivate} onLink={onCardLink} />
-    </div>
+    </MaterialFrame>
   </Profiler>
 })

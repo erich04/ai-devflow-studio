@@ -229,13 +229,21 @@ describe('unified conversation execution and boundaries', () => {
     expect(session.messages.at(-1)?.citations?.[0]?.id).toBe('source-1')
   })
 
-  it('rejects the entire legacy native batch before any read if a later path is a symlink', async () => {
+  it.each(['repo_read', 'workspace_read'])('rejects the entire legacy native %s batch before any read if a later path is a symlink', async name => {
     await symlink('tasks.ts', path.join(project.path, 'alias.ts'))
+    if (name === 'workspace_read') {
+      const build = created.run.nodes.find(n => n.stage === 'build')!
+      await store.saveCodingAgentRun({ id: 'workspace-reader', runId: created.run.id, nodeId: build.id, projectId,
+        requestedBy: 'u-test', providerId: 'test', engine: 'native', status: 'completed', managedWorkspaceId: 'reader-workspace',
+        branchName: 'test', userInstruction: '', prompt: '', summary: '', changedPaths: [], startedAt: created.run.createdAt, redacted: true })
+      await store.saveManagedCodingWorkspace({ id: 'reader-workspace', projectId, codingRunId: 'workspace-reader', sourcePath: project.path,
+        worktreePath: project.path, branchName: 'test', baseBranch: 'main', createdAt: created.run.createdAt, cleanupStatus: 'active' })
+    }
     let calls = 0
     const result = harness(async input => {
       calls++
       expect(input.nativeTools?.messages ?? []).toEqual([])
-      const toolCalls = ['tasks.ts', 'alias.ts'].map((path, index) => ({ id: `call-${index}`, type: 'function' as const, function: { name: 'repo_read', arguments: JSON.stringify({ path }) } }))
+      const toolCalls = ['tasks.ts', 'alias.ts'].map((path, index) => ({ id: `call-${index}`, type: 'function' as const, function: { name, arguments: JSON.stringify({ path, ...(name === 'workspace_read' ? { runId: created.run.id } : {}) }) } }))
       return { value: {}, toolCalls, assistantMessage: { role: 'assistant' as const, content: null, tool_calls: toolCalls } }
     })
     result.provider.supportsNativeTools = true
@@ -1775,7 +1783,7 @@ describe('display text and per-turn material versions (FR-13.2, FR-13.6)', () =>
     const result = await send(service, await create(service), '需求现在是第几版？')
     expect(result.status, result.error).toBe('idle')
     const context = JSON.parse(calls[0]!)
-    expect(context.latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' } }])
+    expect(context.latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' }, build: { workspace: 'none' } }])
     const keys = Object.keys(context)
     expect(keys.indexOf('latestWorkflow')).toBeGreaterThan(keys.indexOf('toolObservations'))
   })
@@ -1834,7 +1842,7 @@ describe('display text and per-turn material versions (FR-13.2, FR-13.6)', () =>
     const result = await send(service, await create(service), '两个任务的版本？')
     expect(result.status, result.error).toBe('idle')
     expect(result.failure).toBeUndefined()
-    expect(JSON.parse(calls[0]!).latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' } }])
+    expect(JSON.parse(calls[0]!).latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' }, build: { workspace: 'none' } }])
   })
 
   it('leaves the workflow tool output without material versions and in today’s shape', async () => {

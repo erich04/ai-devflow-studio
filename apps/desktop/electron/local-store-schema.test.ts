@@ -47,7 +47,7 @@ function readMigrationSourceDigests(): string[] {
 
 describe('LocalStore schema boundary', () => {
   it('keeps every historical migration contiguous and hash-locked', () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(41)
+    expect(CURRENT_SCHEMA_VERSION).toBe(42)
     expect(schemaMigrationVersions).toEqual(
       Array.from({ length: CURRENT_SCHEMA_VERSION }, (_, index) => index + 1),
     )
@@ -93,6 +93,7 @@ describe('LocalStore schema boundary', () => {
       '96092574fc3eb3022438d1cf581736e92e1f6caf7878e2fe13cf074a4bdb789e',
       '573cfc7b90030e1b5baf915832e7af2854fc3b3b2fe4b022993492d420f1a61b',
       '960d83abfb3defbaf07372ccf7b7db053e0f2f4085cfadac5b2af86d4118473b',
+      "0cae1e08fc26e5fc8b6322eafaffa4209d50f3dd8e4825e3ff0a09bba71e3f48",
     ])
   })
 

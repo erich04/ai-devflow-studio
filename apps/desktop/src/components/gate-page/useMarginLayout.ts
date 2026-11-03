@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useState, type RefObject } from 'react'
 import type { BlockKey } from '../../app/gate-decision/material'
-import { placeMarginCards } from '../../app/gate-decision/placement'
+import { placeMarginCards, type MarginOrder } from '../../app/gate-decision/placement'
 import type { BlockBoxes } from './MaterialOverlay'
 
 /** `status` is part of the signature: a status change changes a card's height. */
-export type LayoutCard = { id: string; kind: 'finding' | 'question'; number: number; anchor?: BlockKey | undefined; status?: string }
+export type LayoutCard = { id: string; kind: string; number: number; anchor?: BlockKey | undefined; status?: string }
 export type MarginLayout = {
   /** Box of every `[data-block-start]` element relative to `.gate-material`. */
   boxes: BlockBoxes
@@ -22,7 +22,7 @@ const sameRecord = (a: Readonly<Record<string, unknown>>, b: Readonly<Record<str
  * runs before paint when the content, cards or layout change, from `ResizeObserver` on the
  * material, the workspace and every card, and after `document.fonts.ready`; never on scroll or hover.
  */
-export function useMarginLayout({ workspace, material, margin, cards, content, mode }: {
+export function useMarginLayout({ workspace, material, margin, cards, content, mode, order }: {
   workspace: RefObject<HTMLElement | null>
   material: RefObject<HTMLElement | null>
   margin: RefObject<HTMLElement | null>
@@ -30,6 +30,7 @@ export function useMarginLayout({ workspace, material, margin, cards, content, m
   /** The shown content; a new version is a new pass. */
   content: string
   mode: string
+  order?: MarginOrder
 }): MarginLayout {
   const [layout, setLayout] = useState<MarginLayout>({ boxes: {}, tops: {}, minHeight: 0, pass: 0 })
   const signature = JSON.stringify(cards)
@@ -51,7 +52,7 @@ export function useMarginLayout({ workspace, material, margin, cards, content, m
       const placed = placeMarginCards(parsed.filter((card) => heights.has(card.id)).map((card) => ({
         id: card.id, kind: card.kind, number: card.number, height: heights.get(card.id)!,
         ...(card.anchor && boxes[card.anchor] ? { anchorTop: boxes[card.anchor]!.top } : {}),
-      })), CARD_GAP)
+      })), CARD_GAP, order)
       for (const item of placed) {
         tops[item.id] = item.top
         minHeight = Math.max(minHeight, item.top + (heights.get(item.id) ?? 0))
@@ -59,7 +60,7 @@ export function useMarginLayout({ workspace, material, margin, cards, content, m
     }
     setLayout((previous) => (previous.pass > 0 && previous.minHeight === minHeight && sameRecord(previous.boxes, boxes) && sameRecord(previous.tops, tops)
       ? previous : { boxes, tops, minHeight, pass: previous.pass + 1 }))
-  }, [material, margin, signature])
+  }, [material, margin, signature, order])
   useLayoutEffect(measure, [measure, content, mode])
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return

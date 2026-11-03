@@ -50,7 +50,7 @@ export type CodingProviderCallTrace = {
   stateVersion: 1
   requestId: string
   codingRunId: string
-  phase: 'analysis' | 'initial' | 'repair'
+  phase: 'analysis' | 'initial' | 'repair' | 'revision' | 'change_review'
   attempt: number
   providerId: string
   model: string

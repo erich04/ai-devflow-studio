@@ -2,6 +2,17 @@ import {describe,it,expect,vi} from 'vitest'
 import {governedModelCall,governAgentProvider,type ModelCallGovernance} from './governed-provider'
 import {AgentProviderRequestError,createOpenAiCompatibleAgentProvider} from './agent-review'
 import type {ModelCallQuote,ModelCallSettlement} from './model-call-budget'
+it('uses the coding run identity for budget continuations across provider instances', async () => {
+ const f=fixture(); const raw={...f.base.provider,name:'fixture',reviewKnowledge:vi.fn(),completeStructuredJson:vi.fn(async()=>({value:{ok:true}}))};
+ const provider=governAgentProvider(raw,'p',f.base.governance);
+ await provider.completeStructuredJson!({systemPrompt:'JSON',userPrompt:'analysis',operationKey:'coding-run-1',purpose:'native-tool'});
+ await provider.completeStructuredJson!({systemPrompt:'JSON',userPrompt:'revision',operationKey:'coding-run-1',purpose:'native-tool'});
+ expect(f.reserve.mock.calls[0]?.[0]?.operation?.id).toBe('coding-coding-run-1');
+ expect(f.reserve.mock.calls[1]?.[0]?.operation).toEqual(f.reserve.mock.calls[0]?.[0]?.operation);
+ const next=governAgentProvider(raw,'p',f.base.governance);
+ await next.completeStructuredJson!({systemPrompt:'JSON',userPrompt:'review',operationKey:'coding-run-1',purpose:'native-tool'});
+ expect(f.reserve.mock.calls[2]?.[0]?.operation?.id).toBe('coding-coding-run-1');
+})
 function fixture(){const rows=new Map<string,ModelCallSettlement>();const reserve=vi.fn(async(_quote:ModelCallQuote)=>({accepted:true,decision:{status:'allowed' as const,blocksRun:false,currentSpendUsd:0,projectedCostUsd:0,reason:'fixture'}}));const settle=vi.fn(async(s:ModelCallSettlement)=>{rows.delete(s.id)});const governance:ModelCallGovernance={reserve,settle,persist:async(s)=>{rows.set(s.id,s)},pending:async()=>[...rows.values()]};const base={governance,projectId:'p',provider:{id:'deepseek',model:'deepseek-flash',billingProvider:'deepseek' as const,defaultReviewOutputTokens:8192},prompt:'JSON'};return {base,rows,reserve,settle}}
 describe('per-request governance',()=>{
  it('blocks before action and credentials when admission fails',async()=>{const f=fixture();f.reserve.mockResolvedValueOnce({accepted:false,decision:{status:'allowed',blocksRun:true,currentSpendUsd:0,projectedCostUsd:0,reason:'预算未配置'}});const action=vi.fn();await expect(governedModelCall({...f.base,action})).rejects.toThrow('尚未调用模型');expect(action).not.toHaveBeenCalled()})

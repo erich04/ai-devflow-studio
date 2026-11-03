@@ -1,3 +1,4 @@
+import { discussionPlaceholder } from './app/discussed-cards'
 import { ArrowUp, X } from 'lucide-react'
 import { referenceChipLabel, type DiscussionReference } from './app/discussion-reference'
 import { formatLocalTime } from './app/desktop-view-model'
@@ -60,7 +61,7 @@ export function PendingComposer({ draft, providerId, providerName, nativeReadOnl
     {modelReadinessError && <p className="conversation-error" role="status">{modelReadinessError}</p>}
     <ReferenceChips references={draft.references} disabled={sending} onRemove={(id) => onChange({ references: draft.references.filter((item) => item.id !== id) })} />
     {error && <p className="conversation-error" role="alert">{error}</p>}
-    <textarea aria-label="待发送的对话内容" value={draft.text} maxLength={12000} disabled={sending} placeholder="针对引用的材料提问…"
+    <textarea aria-label="待发送的对话内容" value={draft.text} maxLength={12000} disabled={sending} placeholder={discussionPlaceholder(draft.references) ?? "针对引用的材料提问…"}
       onChange={(event) => onChange({ text: event.target.value })}
       onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSend) onSend() } }} />
     <div className="conversation-composer-footer">

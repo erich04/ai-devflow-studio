@@ -1,3 +1,7 @@
+import { buildTestChatContext, changeRevisionLinkForMessage, type BuildTestChatPage } from './app/build-test/chat'
+import { useBuildTestController } from './app/useBuildTestController'
+import { displayCurrentStage } from './app/build-test/facts'
+import { canDecideCodingPermission, numberDesignVersions } from '@ai-devflow/shared'
 import { DiscussionToggle, WorkbenchWorkspace, type AddedRevisionLink, type ReAddRevisionLink, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
 import type { ConversationMessage } from '../electron/workbench-conversation-contract'
 import { chatPageFactsFromRecords, revisionLinkForDraft, type GateChatFacts, type RevisionLink } from './app/gate-decision/chat-link'
@@ -695,7 +699,7 @@ export function App() {
   const latestCodingRun = selectedCodingRuns[0]
   // Whether each passed result still applies to the tested code (hardening H3, X6).
   const testEvidenceFreshness = useTestEvidenceFreshness(desktopApi, selectedRun?.id, scopedTestEvidence,
-    selectedCodingRuns.map((run) => `${run.id}:${run.status}:${run.completedAt ?? ''}`).join('|'))
+    selectedCodingRuns.map((run) => `${run.id}:${run.status}:${run.completedAt ?? ''}`).join('|'), selectedNode?.stage === 'test' && selectedNode.status !== 'success' && scopedTestEvidence.some(e => e.status === 'passed'))
   const selectedCodingEvents = latestCodingRun
     ? codingEvents
         .filter((event) => event.codingRunId === latestCodingRun.id)
@@ -730,10 +734,10 @@ export function App() {
 
   useEffect(() => {
     setCodingRuntimeNow(new Date().toISOString())
-    if (!pendingCodingPermission) return
+    if (!pendingCodingPermission && latestCodingRun?.question?.status !== 'pending') return
     const timer = window.setInterval(() => setCodingRuntimeNow(new Date().toISOString()), 1_000)
     return () => window.clearInterval(timer)
-  }, [pendingCodingPermission?.id])
+  }, [pendingCodingPermission?.id, latestCodingRun?.question?.id, latestCodingRun?.question?.status])
   const selectedManagedWorkspace = latestCodingRun
     ? managedCodingWorkspaces.find((workspace) => workspace.id === latestCodingRun.managedWorkspaceId)
     : undefined
@@ -759,7 +763,7 @@ export function App() {
     desktopApi,
     projectId: selectedLocalProject?.id,
     runId: selectedRun?.id,
-    nodeId: selectedNode?.id,
+    nodeId: selectedNode?.stage === 'build' || selectedNode?.stage === 'test' ? selectedRun?.nodes.find(n => n.stage === 'build' && n.kind === 'task')?.id : selectedNode?.id,
     requestedBy: currentUser?.id,
     runtimeBudgetApprovalId,
     refreshKey: [
@@ -769,6 +773,27 @@ export function App() {
       pendingCodingPermission?.status ?? '',
     ].join('|'),
   })
+  const buildNode = selectedRun?.nodes.find(n => n.stage === 'build' && n.kind === 'task')
+  const testNode = selectedRun?.nodes.find(n => n.stage === 'test' && n.kind === 'test') ?? selectedRun?.nodes.find(n => n.stage === 'test')
+  const buildTest = useBuildTestController({ api: desktopApi, requestedBy: currentUser?.id, otherWriteBusy: Boolean(pendingInspectorAction || isStartingCodingAgent || isRunningTests || isRunningAgentReview), runtimeBudgetApprovalId,
+    applyState: applyLocalExecutionState, reloadReadiness: codingRuntime.refresh, reloadFreshness: testEvidenceFreshness.retry, selectNode: setSelectedNodeId,
+    base: selectedRun && buildNode && testNode ? { run: selectedRun, buildNode, testNode, codingRuns, codingEvents, codingPermissionRequests, codingPermissionDecisions, managedCodingWorkspaces, codingDiffArtifacts, testEvidence: scopedTestEvidence,
+      events: scopedEvents, members: teamMembers, preview: codingChangeSetPreview, freshness: testEvidenceFreshness, testCommand: selectedLocalProject?.testCommand, testBlockedReason: buildTestRunReadiness({ project: selectedLocalProject, run: selectedRun }).blockedReason, readiness: codingRuntime.readiness, readinessError: codingRuntime.error, canDecide: canDecideCodingPermission(desktopPairing, selectedRun.projectId),
+      designLabel: `方案 v${numberDesignVersions(selectedRun.id, artifacts).size || 1}`, now: codingRuntimeNow, observedAt: selectedRun.updatedAt,
+    } : undefined,
+  })
+  const displayedStage = buildTest.facts ? displayCurrentStage(buildTest.facts) : undefined
+  const previousDisplayed = useRef<{ runId: string; stage: string } | undefined>(undefined)
+  useEffect(() => {
+    const previous = previousDisplayed.current
+    previousDisplayed.current = selectedRun && displayedStage ? { runId: selectedRun.id, stage: displayedStage } : undefined
+    if (!previous || previous.runId !== selectedRun?.id || previous.stage === displayedStage || !displayedStage) return
+    if (selectedNode?.stage !== previous.stage || readingPositionRef.current?.()?.materialId) return
+    if (['build', 'test'].includes(previous.stage) && ['build', 'test'].includes(displayedStage)) {
+      const next = selectedRun.nodes.find(n => n.stage === displayedStage)
+      if (next) setSelectedNodeId(next.id)
+    }
+  }, [selectedRun?.id, displayedStage, selectedNode?.stage, setSelectedNodeId])
   const codingActionProjection = useMemo(() => {
     if (!selectedRun || !selectedNode || !selectedLocalProject) return undefined
     return buildCodingRuntimeActionProjection({
@@ -1074,7 +1099,7 @@ export function App() {
 
   // Execution evidence in 执行记录 (plan Y3). Coding evidence belongs to the build step; the diff,
   // test logs, permissions, coding trace and coding cost are already shown there, once (plan W1).
-  const showsCodingRecords = selectedNode?.kind === 'task' && selectedNode.stage === 'build' && Boolean(latestCodingRun)
+  const showsCodingRecords = (selectedNode?.stage === 'build' || selectedNode?.stage === 'test') && Boolean(latestCodingRun)
   const executionEvidenceGroups = buildAgentEvidenceGroups({
     providers: agentProviders,
     selectedReviews: selectedAgentReviews,
@@ -1148,11 +1173,11 @@ export function App() {
    * never run anything on return.
    */
   function openSettingsFromTask(
-    target: 'coding' | 'tests' | 'models',
+    target: 'coding' | 'tests' | 'models' | 'projects' | 'team',
     position: InspectorReadingPosition | null = readingPositionRef.current?.() ?? null,
   ) {
     // Old Agents/Tests targets now open a settings section (plan §4.3, Y1).
-    setSettingsSection(settingsSectionForTaskTarget(target))
+    setSettingsSection(target === 'projects' ? 'project' : target === 'team' ? 'team' : settingsSectionForTaskTarget(target))
     setSettingsFocus(target === 'tests' ? undefined : target === 'coding' ? 'coding' : 'models')
     if (!selectedRun || !selectedNode || activeView !== 'workbench') {
       setActiveView('settings')
@@ -1164,7 +1189,7 @@ export function App() {
       sourceView: activeView,
       returnView: 'workbench',
       focusTarget: target === 'tests' ? 'local-tests' : 'coding-agent',
-      label: { coding: '设置执行工具', tests: '设置测试命令', models: '设置模型与预算' }[target],
+      label: { coding: '设置执行工具', tests: '设置测试命令', models: '设置模型与预算', projects: '设置本地项目', team: '设置团队连接' }[target],
       ...(position ? { inspectorTab: position.inspectorTab, scrollTop: position.scrollTop } : {}),
       ...(position?.materialId ? { materialId: position.materialId } : {}),
       createdAt: new Date().toISOString(),
@@ -1205,6 +1230,7 @@ export function App() {
   }
 
   // 答疑 linked to the gate page (design §5.10): the shown page reports its facts here.
+  const [buildTestChatPage, setBuildTestChatPage] = useState<BuildTestChatPage>()
   const [gateChatFacts, setGateChatFacts] = useState<GateChatFacts | undefined>()
   const [revisionFocus, setRevisionFocus] = useState<{ serial: number; listKey?: string | undefined; itemId: string }>()
   const [focusMessage, setFocusMessage] = useState<{ serial: number; messageId: string }>()
@@ -1212,6 +1238,7 @@ export function App() {
     (gateChatFacts.gateNodeId === selectedNode.id || gateChatFacts.agentNodeId === selectedNode.id) ? gateChatFacts : undefined
   const viewContext = selectedRun && selectedNode ? (() => {
     const step = stageLabels[selectedNode.stage]
+    if (buildTest.facts && buildTestChatPage?.runId === selectedRun.id && buildTestChatPage.stage === selectedNode.stage) return { label: `${buildTestChatPage.reading ? '正在查看' : '当前'}：${selectedRun.title} · ${step}`, ...buildTestChatContext(buildTest.facts, buildTestChatPage) }
     if (shownGateFacts) {
       const browsing = shownGateFacts.mode === 'finished' || shownGateFacts.mode === 'sub-step' || shownGateFacts.history
       return { label: `${browsing ? '正在查看' : '当前'}：${selectedRun.title} · ${step} · ${shownGateFacts.shownLabel}${browsing && shownGateFacts.shownApproved ? '（已确认）' : ''}` }
@@ -1537,8 +1564,14 @@ export function App() {
                   runs={scopedRuns}
                   providerId={selectedAgentProviderId}
                   providerName={agentProviders.find((provider) => provider.id === selectedAgentProviderId)?.name ?? ''}
+                  providerModel={agentProviders.find(provider => provider.id === selectedAgentProviderId)?.model ?? ''}
                   request={workbenchOpenRequest}
                   viewContext={viewContext}
+                  buildTestChat={{ link: message => changeRevisionLinkForMessage(message, buildTest.facts, revisionLists.store), act: (conversationId, message) => {
+                    const link = changeRevisionLinkForMessage(message, buildTest.facts, revisionLists.store)
+                    if (link.state === 'add') { const result = revisionLists.apply(link.target, { type: 'addChat', conversationId, messageId: message.id, text: link.suggestion }); if (!result.ok) setToast(result.message) }
+                    if (link.state === 'added') setRevisionFocus(p => ({ serial: (p?.serial ?? 0) + 1, listKey: link.listKey, itemId: link.itemId }))
+                  }}}
                   revisionLinkFor={revisionLinkFor}
                   onOpenRevisionItem={openRevisionItem}
                   onReAddChatItem={reAddChatItem}
@@ -1596,6 +1629,7 @@ export function App() {
             {selectedRun ? (
               <>
                 <WorkflowBoard
+                  buildTestFacts={buildTest.facts}
                   view={boardView}
                   run={selectedRun}
                   artifacts={scopedArtifacts}
@@ -1621,6 +1655,9 @@ export function App() {
 
 
                 <Inspector
+                  buildTest={buildTest}
+                  onBuildTestChatPage={setBuildTestChatPage}
+                  onFocusChatMessage={messageId => setFocusMessage(p => ({ serial: (p?.serial ?? 0) + 1, messageId }))}
                   modelReadinessError={modelReadinessError}
                   selectedRun={selectedRun}
                   selectedNode={selectedNode}
@@ -1630,7 +1667,7 @@ export function App() {
                   events={selectedEvents}
                   runEvents={scopedEvents.filter((event) => event.runId === selectedRun.id)}
                   testEvidence={scopedTestEvidence}
-                  testEvidenceFreshness={testEvidenceFreshness}
+                  testEvidenceFreshness={testEvidenceFreshness.states}
                   governanceChecks={selectedGovernanceChecks}
                   references={knowledgeReferences}
                   latestAgentReview={latestAgentReview}
@@ -1852,7 +1889,7 @@ export function App() {
                 project={selectedLocalProject}
                 gitStatus={projectGitStatus}
                 evidence={scopedTestEvidence}
-                evidenceFreshness={testEvidenceFreshness}
+                evidenceFreshness={testEvidenceFreshness.states}
                 onHandleInTask={handleInTask}
                 isRunningTests={isRunningTests}
                 commandDraft={testCommandDraft}

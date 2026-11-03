@@ -1,3 +1,4 @@
+import type { CodingChangeReview } from '@ai-devflow/shared'
 import { ConversationContentStore } from './conversation-content-store.js'
 import type { ModelCallSettlement, ModelCallAccountingScope, ModelCallSettlementReceipt, StoredModelCallSettlement } from '@ai-devflow/shared'
 import { storedModelCallSettlement } from './model-cost-recovery'
@@ -13,7 +14,7 @@ import { resolveRemoteApprovalMaterial } from './gate-command-material.js'
 import type { RecordAgentReviewFeedbackInput } from '@ai-devflow/shared'
 import type { CodingProviderCallTrace } from './coding-engine.js'
 import { appendCodingCallCost, retainRecordedCodingCost } from './coding-call-cost.js'
-import { existsSync } from 'node:fs'
+import { constants, existsSync } from 'node:fs'
 import * as hindsight from './hindsight-store'
 import * as projectMemory from './project-memory-store'
 import { captureApprovalProjectMemory, captureCodingRunProjectMemory, captureConversationProjectMemory, captureReviewResultProjectMemory } from './project-memory-capture'
@@ -24,7 +25,7 @@ import { parseProviderThinking, resolveProviderThinking, type UpdateProviderThin
 import { inspectStoredProviderRemoval } from './provider-credential-store'
 import type { ProviderRemovalCheck, ProviderRemovalResult } from '@ai-devflow/shared'
 import { createHash, randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { copyFile, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { isDeepStrictEqual } from 'node:util'
@@ -462,6 +463,7 @@ export type CodingAgentMutation = {
   permissionDecisions?: readonly CodingPermissionDecision[]
   events?: readonly CodingAgentEvent[]
   diffArtifacts?: readonly CodingDiffArtifact[]
+  changeSets?: readonly CodingChangeSet[]
 }
 
 export type CodingAgentMutationResult =
@@ -1114,6 +1116,8 @@ export type LocalStore = {
   getCodingRuntimeConfiguration(projectId: string): Promise<CodingRuntimeConfiguration | null>
   listCodingRuntimeConfigurations(): Promise<CodingRuntimeConfiguration[]>
   saveCodingChangeSet(changeSet: CodingChangeSet): Promise<CodingChangeSet>
+  saveCodingChangeReview(review: CodingChangeReview): Promise<CodingChangeReview>
+  listCodingChangeReviews(codingRunId?: string): Promise<CodingChangeReview[]>
   getCodingChangeSet(changeSetId: string): Promise<CodingChangeSet | null>
   listCodingChangeSets(codingRunId?: string): Promise<CodingChangeSet[]>
   reserveCodingAgentRun(run: CodingAgentRun, options?: ReserveCodingAgentRunOptions): Promise<ReserveCodingAgentRunResult>
@@ -13282,59 +13286,69 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
-  async saveCodingChangeSet(changeSet: CodingChangeSet): Promise<CodingChangeSet> {
-    if (
-      changeSet.stateVersion !== 2 ||
-      changeSet.executorVersion !== 2 ||
-      (changeSet.phase !== 'initial' && changeSet.phase !== 'repair') ||
-      !/^[a-f0-9]{64}$/u.test(changeSet.changeSetDigest) ||
-      changeSet.changes.length < 1 ||
-      changeSet.changes.length > 6 ||
-      Date.parse(changeSet.expiresAt) <= Date.parse(changeSet.createdAt)
-    ) {
-      throw new Error('Coding Change Set is invalid')
-    }
-    const current = selectJson<CodingChangeSet>(
-      this.db,
-      'select json from coding_change_sets where id = ? limit 1',
-      [changeSet.id],
-    )[0]
+  private validateCodingChangeSet(changeSet: CodingChangeSet): CodingChangeSet | undefined {
+    const revision = changeSet.revision
+    if (changeSet.stateVersion !== 2 || changeSet.executorVersion !== 2 ||
+        !['initial', 'repair'].includes(changeSet.phase) || !/^[a-f0-9]{64}$/u.test(changeSet.changeSetDigest) ||
+        changeSet.changes.length < 1 || changeSet.changes.length > 6 ||
+        !Number.isFinite(Date.parse(changeSet.createdAt)) || !Number.isFinite(Date.parse(changeSet.expiresAt)) ||
+        new Date(changeSet.createdAt).toISOString() !== changeSet.createdAt || new Date(changeSet.expiresAt).toISOString() !== changeSet.expiresAt ||
+        Date.parse(changeSet.expiresAt) <= Date.parse(changeSet.createdAt)) throw new Error('Coding Change Set is invalid')
+    const current = selectJson<CodingChangeSet>(this.db, 'select json from coding_change_sets where id = ?', [changeSet.id])[0]
     if (current) {
-      if (JSON.stringify(current) !== JSON.stringify(changeSet)) {
-        throw new Error('Coding Change Set is immutable')
-      }
+      if (JSON.stringify(current) !== JSON.stringify(changeSet)) throw new Error('Coding Change Set is immutable')
       return current
     }
-    const phaseCurrent = selectJson<CodingChangeSet>(
-      this.db,
-      'select json from coding_change_sets where coding_run_id = ? and phase = ? limit 1',
-      [changeSet.codingRunId, changeSet.phase],
-    )[0]
-    if (phaseCurrent) throw new Error('Coding Change Set phase already exists')
-    this.db.run(
-      `insert into coding_change_sets (
-         id, state_version, coding_run_id, project_id, workspace_id, phase,
-         executor_version, config_version, provider_id, change_set_digest,
-         json, created_at, expires_at
-       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        changeSet.id,
-        changeSet.stateVersion,
-        changeSet.codingRunId,
-        changeSet.projectId,
-        changeSet.workspaceId,
-        changeSet.phase,
-        changeSet.executorVersion,
-        changeSet.configVersion,
-        changeSet.providerId,
-        changeSet.changeSetDigest,
-        JSON.stringify(changeSet),
-        changeSet.createdAt,
-        changeSet.expiresAt,
-      ],
-    )
+    const run = selectJson<CodingAgentRun>(this.db, 'select json from coding_agent_runs where id = ?', [changeSet.codingRunId])[0]
+    const workspace = selectJson<ManagedCodingWorkspace>(this.db, 'select json from managed_coding_workspaces where id = ?', [changeSet.workspaceId])[0]
+    if (!run || !workspace || run.projectId !== changeSet.projectId || workspace.projectId !== changeSet.projectId || workspace.codingRunId !== run.id) throw new Error('Coding Change Set scope mismatch')
+    const versions = selectJson<CodingChangeSet>(this.db, 'select json from coding_change_sets where coding_run_id = ? order by revision_index desc', [changeSet.codingRunId])
+    const previous = versions.find(c => c.phase === changeSet.phase)
+    if (!revision) {
+      if (previous) throw new Error('Coding Change Set phase already exists')
+    } else if (!Number.isInteger(revision.index) || revision.index < 1 || revision.index > 3 ||
+      !previous || revision.index !== (previous.revision?.index ?? 0) + 1 || previous.id !== revision.previous.id ||
+      previous.changeSetDigest !== revision.previous.digest || previous.workspaceId !== changeSet.workspaceId ||
+      typeof revision.changeRequest !== 'string' || !revision.changeRequest.trim() || revision.changeRequest.length > 4000 || revision.changeRequest.includes('\0') ||
+      !Number.isInteger(revision.itemCount) || revision.itemCount < 1 || revision.itemCount > 100 || versions.filter(c => c.revision).length >= 3) throw new Error('Coding Change Set revision is invalid')
+    return undefined
+  }
+
+  private insertCodingChangeSet(changeSet: CodingChangeSet): void {
+    this.db.run(`insert into coding_change_sets (id, state_version, coding_run_id, project_id, workspace_id, phase, executor_version, config_version, provider_id, change_set_digest, json, created_at, expires_at, revision_index)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [changeSet.id, changeSet.stateVersion, changeSet.codingRunId, changeSet.projectId, changeSet.workspaceId, changeSet.phase, changeSet.executorVersion, changeSet.configVersion, changeSet.providerId, changeSet.changeSetDigest, JSON.stringify(changeSet), changeSet.createdAt, changeSet.expiresAt, changeSet.revision?.index ?? 0])
+  }
+
+  async saveCodingChangeSet(changeSet: CodingChangeSet): Promise<CodingChangeSet> {
+    const current = this.validateCodingChangeSet(changeSet)
+    if (current) return current
+    this.insertCodingChangeSet(changeSet)
     await this.persist()
     return changeSet
+  }
+
+  async saveCodingChangeReview(review: CodingChangeReview): Promise<CodingChangeReview> {
+    const change = selectJson<CodingChangeSet>(this.db, 'select json from coding_change_sets where id = ?', [review.changeSetId])[0]
+    const run = selectJson<CodingAgentRun>(this.db, 'select json from coding_agent_runs where id = ?', [review.codingRunId])[0]
+    if (!change || !run || change.codingRunId !== run.id || change.phase === 'repair' || review.stateVersion !== 1 ||
+        review.changeSetDigest !== change.changeSetDigest || review.projectId !== run.projectId || review.runId !== run.runId || review.nodeId !== run.nodeId ||
+        !review.redacted || review.findings.length > 6 || !['running', 'completed', 'failed', 'cancelled'].includes(review.status) || !['automatic', 'manual'].includes(review.trigger)) throw new Error('Change review scope is invalid')
+    const existing = selectJson<CodingChangeReview>(this.db, 'select json from coding_change_reviews where id = ?', [review.id])[0]
+    if (existing) {
+      if (JSON.stringify(existing) === JSON.stringify(review)) return existing
+      const identity = (r: CodingChangeReview) => [r.id, r.stateVersion, r.codingRunId, r.runId, r.nodeId, r.projectId, r.changeSetId, r.changeSetDigest, r.trigger, r.providerId, r.model, r.startedAt]
+      if (existing.status !== 'running' || review.status === 'running' || !review.completedAt || JSON.stringify(identity(existing)) !== JSON.stringify(identity(review))) throw new Error('Change review terminal state is immutable')
+    } else if (review.status !== 'running') throw new Error('Change review must begin running')
+    if (review.status === 'completed' && (run.status !== 'waiting_permission' || run.changeSetId !== change.id || run.revisionInFlight || !selectJson<CodingPermissionRequest>(this.db, 'select json from coding_permission_requests where coding_run_id = ?', [run.id]).some(p => p.changeSetId === change.id && p.changeSetDigest === change.changeSetDigest && p.status === 'pending'))) throw new Error('Change review result is no longer current')
+    this.db.run(`insert into coding_change_reviews (id, coding_run_id, change_set_id, status, json, created_at, change_set_digest) values (?, ?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set status = excluded.status, json = excluded.json`, [review.id, review.codingRunId, review.changeSetId, review.status, JSON.stringify(review), review.startedAt, review.changeSetDigest])
+    await this.persist()
+    return review
+  }
+
+  async listCodingChangeReviews(codingRunId?: string): Promise<CodingChangeReview[]> {
+    return codingRunId ? selectJson<CodingChangeReview>(this.db, 'select json from coding_change_reviews where coding_run_id = ? order by created_at, id', [codingRunId])
+      : selectJson<CodingChangeReview>(this.db, 'select json from coding_change_reviews order by created_at, id')
   }
 
   async getCodingChangeSet(changeSetId: string): Promise<CodingChangeSet | null> {
@@ -13527,8 +13541,15 @@ class SqlJsLocalStore implements LocalStore {
       }
     }
 
+    if ((mutation.changeSets?.length ?? 0) > 1) throw new Error('Only one change revision may be committed')
+    for (const change of mutation.changeSets ?? []) {
+      if (change.codingRunId !== currentRun.id || change.projectId !== currentRun.projectId || change.workspaceId !== currentRun.managedWorkspaceId || nextRun.changeSetId !== change.id ||
+          !mutation.permissionRequests?.some(p => p.status === 'pending' && p.changeSetId === change.id && p.changeSetDigest === change.changeSetDigest)) throw new Error('Revision requires its matching run and permission request')
+      if (this.validateCodingChangeSet(change)) throw new Error('Revision already exists')
+    }
     this.db.run('begin transaction')
     try {
+      for (const change of mutation.changeSets ?? []) this.insertCodingChangeSet(change)
       if (mutation.run) {
         writeCodingAgentRun(this.db, mutation.run)
         if (shouldEnqueueCodingAgentSummary(mutation.run)) {
@@ -14534,6 +14555,8 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   listCodingRuntimeConfigurations: 'direct',
   saveCodingChangeSet: 'durable',
   getCodingChangeSet: 'direct',
+  saveCodingChangeReview: 'durable',
+  listCodingChangeReviews: 'direct',
   listCodingChangeSets: 'direct',
   reserveCodingAgentRun: 'durable',
   commitCodingAgentMutation: 'durable',
@@ -14618,6 +14641,11 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
       ? new SQL.Database(await readFile(options.dbPath))
       : new SQL.Database()
 
+    const hasSchema = db.exec("select name from sqlite_master where type = 'table' and name = 'schema_meta'")[0]?.values.length
+    if (existsSync(options.dbPath) && hasSchema && readLocalStoreSchemaVersion(db) < 42) {
+      try { await copyFile(options.dbPath, `${options.dbPath}.v41.bak`, constants.COPYFILE_EXCL) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    }
     migrateLocalStoreSchema(db, {
       migrateWorkflowRunsIntoRelationalTables,
       afterMigrations: (database) => maintainStoredEvidencePrivacy(database, {

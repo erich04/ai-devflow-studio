@@ -1,3 +1,5 @@
+import type { CodingAgentRun, CodingChangeSet, CodingPermissionRequest, ChangeSetDiffView, LocalProject, ManagedCodingWorkspace, ChangeReviewFinding } from '@ai-devflow/shared'
+import type { CodingProviderCallReporter } from './coding-engine.js'
 import { createHash } from 'node:crypto'
 import {
   CODING_EXECUTOR_CONTRACT_VERSION,
@@ -56,6 +58,19 @@ export type CodingExecutorContinuePermissionInput = {
   runtimeContext: CodingEngineApprovePermissionInput
 }
 
+export type CodingExecutorReviseInput = Omit<CodingExecutorContinuePermissionInput, 'runtimeContext'> & {
+  runtimeContext: {
+    codingRun: CodingAgentRun; workspace: ManagedCodingWorkspace; project: LocalProject
+    previous: { changeSet: CodingChangeSet; request: CodingPermissionRequest; expired: boolean }
+    changeRequest: string; itemCount: number; revisionIndex: number; now: string
+    assertContextCurrent(): Promise<void>; reportProviderCall: CodingProviderCallReporter
+  }
+}
+export type CodingExecutorReviewInput = {
+  codingRun: CodingAgentRun; changeSet: CodingChangeSet; view: ChangeSetDiffView; brief: string
+  reportProviderCall: CodingProviderCallReporter; assertContextCurrent(): Promise<void>
+}
+
 export type CodingExecutor = {
   descriptor: CodingExecutorDescriptor
   engine: CodingEngineAdapter['engine']
@@ -70,6 +85,9 @@ export type CodingExecutor = {
   ): Promise<CodingExecutorStartResult>
   replyQuestion?(input: Omit<CodingExecutorContinuePermissionInput, 'runtimeContext'> & { runtimeContext: CodingEngineReplyQuestionInput }): Promise<CodingExecutorStartResult>
   refreshPermission?(input: CodingExecutorContinuePermissionInput & { newRequestId: string }): Promise<CodingExecutorWaitingPermissionResult>
+  reviseChangeSet?(input: CodingExecutorReviseInput): Promise<CodingExecutorWaitingPermissionResult & { changeSet: CodingChangeSet }>
+  reviewChangeSet?(input: CodingExecutorReviewInput): Promise<{ findings: ChangeReviewFinding[]; levelsKnown: boolean; summary?: string }>
+  cancelAuxiliary?(codingRunId: string): Promise<void>
   cancel(input: CodingEngineCancelInput): Promise<void>
 }
 

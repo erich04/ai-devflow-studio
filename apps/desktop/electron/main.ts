@@ -1,3 +1,8 @@
+import { parseSingleId, parseReviseCodingChangeSet, parseChangeReviewStart, parseChangeReviewCancel, parseConfirmTestEvidence } from './build-test-contract.js'
+import { createCodingChangeHistoryReader } from './coding-change-history.js'
+import { getCodingActionCosts } from './coding-action-costs.js'
+import { confirmTestEvidence } from './test-evidence-confirmation.js'
+import { assertDeliveryTestEvidenceCurrent } from './delivery-test-freshness.js'
 import { createNativeRepositoryReviewProvider } from './knowledge-review-native.js'
 import {legacyChatBudget} from './legacy-chat-budget'
 import { createGovernedOpencodeProxy } from './governed-opencode-proxy.js'
@@ -1215,6 +1220,7 @@ async function prepareGitHubDelivery(input: PrepareGitHubDeliveryInput) {
         throw new GitHubRepositoryBindingSyncError()
       }
       const runtime = await getGitHubDeliveryRuntime()
+      await assertDeliveryTestEvidenceCurrent(context.store, input)
       return runtime.prepare(input)
     })
   } finally {
@@ -1892,6 +1898,7 @@ async function createCodingRuntimeForRequest(
     getCodingExecutor(projectId),
   ])
   return createCodingRuntime({
+    autoChangeReview: true,
     store,
     executor: selected.executor,
     ...(selected.configVersion === undefined ? {} : { executorConfigVersion: selected.configVersion }),
@@ -1968,6 +1975,7 @@ async function createCodingRuntimeForRequest(
     scheduleRunTimeout: (codingRun, expire) =>
       scheduleCodingRunTimeout(codingRun.id, expire),
     publisher: {
+      publishChangeHistory: runId => broadcastToRenderers(ipcChannels.codingChangeHistoryUpdated, { runId }),
       publishRunStatus: (run) => {
         broadcastToRenderers(ipcChannels.codingRunStatusUpdated, run)
         wakeRemoteSyncOutbox()
@@ -3144,6 +3152,13 @@ function registerIpcHandlers() {
           ...(testKnowledge ? { knowledgeContext: { retrievedKnowledge: testKnowledge.manifest } } : {}),
           createdAt,
         })
+        if (input.completeOnPass === false && evidence.status === 'passed') {
+          await store.saveTestEvidence(evidence)
+          const state = await store.loadState()
+          broadcastToRenderers(ipcChannels.localStateUpdated, state)
+          wakeRemoteSyncOutbox()
+          return { evidence, state }
+        }
         const artifact = createTestEvidenceArtifact(evidence)
         const event = createTestEvidenceEvent(
           evidence,
@@ -4377,6 +4392,48 @@ function registerIpcHandlers() {
     const input = parseListCodingAgentRunsInput(payload)
     const runtime = await createCodingRuntimeForRequest()
     return runtime.listCodingAgentRuns(input)
+  })
+
+  const changeHistoryReaders = new WeakMap<LocalStore, ReturnType<typeof createCodingChangeHistoryReader>>()
+  ipcMain.handle(ipcChannels.getCodingChangeHistory, async (_, payload: unknown) => {
+    const store = await getStore()
+    let reader = changeHistoryReaders.get(store)
+    if (!reader) { reader = createCodingChangeHistoryReader(store); changeHistoryReaders.set(store, reader) }
+    return reader(parseSingleId(payload, 'runId'))
+  })
+  async function trustedChangeRuntime(codingRunId: string) {
+    const store = await getStore()
+    const run = (await store.listCodingAgentRuns()).find(r => r.id === codingRunId)
+    if (!run) throw new Error('[coding_run_unavailable] 找不到这次开发。')
+    const actor = resolveTrustedCodingPermissionReply({ input: { requestId: 'change', codingRunId, decidedBy: '', decision: 'approved', comment: '' }, projectId: run.projectId, pairing: await store.getDesktopPairingCredential() })
+    return { runtime: await createCodingRuntimeForRequest(undefined, run.projectId), actor: actor.decidedBy }
+  }
+  ipcMain.handle(ipcChannels.reviseCodingChangeSet, async (_, payload: unknown) => {
+    const input = parseReviseCodingChangeSet(payload), { runtime, actor } = await trustedChangeRuntime(input.codingRunId)
+    return runtime.reviseCodingChangeSet({ ...input, requestedBy: actor })
+  })
+  ipcMain.handle(ipcChannels.cancelCodingRevision, async (_, payload: unknown) => {
+    const input = parseSingleId(payload, 'codingRunId'), { runtime } = await trustedChangeRuntime(input.codingRunId)
+    return { codingRun: await runtime.cancelCodingRevision(input) }
+  })
+  ipcMain.handle(ipcChannels.startCodingChangeReview, async (_, payload: unknown) => {
+    const input = parseChangeReviewStart(payload), { runtime } = await trustedChangeRuntime(input.codingRunId)
+    return { review: await runtime.startCodingChangeReview(input) }
+  })
+  ipcMain.handle(ipcChannels.cancelCodingChangeReview, async (_, payload: unknown) => {
+    const input = parseChangeReviewCancel(payload), { runtime } = await trustedChangeRuntime(input.codingRunId)
+    return { review: await runtime.cancelCodingChangeReview(input) }
+  })
+  ipcMain.handle(ipcChannels.getCodingActionCosts, async (_, payload: unknown) => {
+    const { projectId } = parseSingleId(payload, 'projectId')
+    const { executor } = await resolveCodingExecutorForProject(projectId)
+    return getCodingActionCosts({ projectId, store: await getStore(), executor, guard: createRuntimeBudgetGuard(await getProjectBoundRemoteSync(), true) })
+  })
+  ipcMain.handle(ipcChannels.confirmTestEvidence, async (_, payload: unknown) => {
+    const result = await confirmTestEvidence(parseConfirmTestEvidence(payload), { store: await getStore(), coordinator: workspaceOperationCoordinator })
+    broadcastToRenderers(ipcChannels.localStateUpdated, result.state)
+    wakeRemoteSyncOutbox()
+    return result
   })
 
   ipcMain.handle(ipcChannels.runCodingAgent, async (_, payload: unknown) => {

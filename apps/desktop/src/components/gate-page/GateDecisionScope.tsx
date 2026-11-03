@@ -1,3 +1,6 @@
+import { DecisionPageProvider } from './DecisionPageContext'
+import { GateCard, markerLabels, markerTone } from './GateMarker'
+import { BATCH1_MARGIN_ORDER } from '../../app/gate-decision/placement'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { numberDesignVersions, type AgentReviewResult, type Artifact, type DesignRevisionIdentity, type WorkflowRun } from '@ai-devflow/shared'
 import type { DiscussionMaterial } from '../../app/discussion-reference'
@@ -17,7 +20,7 @@ import type { RevisionListsApi } from '../../app/useRevisionLists'
 import type { RecordReviewFeedback } from './FindingEvidence'
 
 /** The version the page shows and the identity a write must still match (main re-checks it). */
-export type GateWriteContext = { current: Artifact; target?: ListTarget | undefined; designIdentity?: DesignRevisionIdentity | undefined }
+export type GateWriteContext = { current: Artifact; target?: Exclude<ListTarget, { kind: 'change' }> | undefined; designIdentity?: DesignRevisionIdentity | undefined }
 /** Writes and navigation the Inspector wires in; the page itself never calls IPC. */
 export type GateActions = {
   /** Every review button and the meta 「重新审查」 (→ `requestKnowledgeReview`, §3.21). */
@@ -145,7 +148,7 @@ export function GateDecisionScope({ page, run, artifacts, reviews, revisionLists
     contentDigest: { state: readingDigest.state, value: readingDigest.value, error: readingDigest.error } }) : undefined),
   [page.readingReview, readingArtifact, readingStatic, readingDigest.state, readingDigest.value, readingDigest.error])
   const designIdentity = designDigest.identity
-  const listTarget = useMemo((): ListTarget | undefined => {
+  const listTarget = useMemo((): Exclude<ListTarget, { kind: 'change' }> | undefined => {
     if (kind === 'requirement') {
       const metadata = current.clarificationRevision
       return metadata ? { kind, runId: run.id, artifactId: current.id, revision: metadata.revision, revisionDigest: metadata.revisionDigest } : undefined
@@ -180,7 +183,7 @@ export function GateDecisionScope({ page, run, artifacts, reviews, revisionLists
       artifacts, reviews, designNumbers, ...(rawRequest !== undefined ? { rawRequest } : {}),
       reviewTarget: deriveReviewTarget({ kind, run, gateNode: page.gateNode, reviews, current, artifacts, designNumbers }),
       ...(list ? { list } : {}), chatItems, ...(readingList ? { readingList } : {}),
-      otherLists: others.map((other) => ({ list: other, label: labelOf(other.target.artifactId) })),
+      otherLists: others.map((other) => ({ list: other, label: other.target.kind === 'change' ? '改动' : labelOf(other.target.artifactId) })),
       reviewCheck: { state: check, ...(identityOpen ? { designIdentity: true } : {}), ...(check === 'failed' && technical ? { technical } : {}) },
       ...(submittedText !== undefined ? { submittedText } : {}),
       generationAllowed: page.generationAllowed,
@@ -270,5 +273,22 @@ export function GateDecisionScope({ page, run, artifacts, reviews, revisionLists
     armed, setArmed, pendingFocus, focusCard, clearPendingFocus, lastVisitedCardId, setLastVisitedCardId, goNext,
     onlyUnhandled, setOnlyUnhandled, drafts, setDraft, listExpanded, setListExpanded, flashItem, showItem, retry, showCurrentVersion,
   }
-  return <GateScopeContext.Provider value={value}>{children}</GateScopeContext.Provider>
+  return <GateScopeContext.Provider value={value}><DecisionPageProvider value={{ ...value, marginOrder: BATCH1_MARGIN_ORDER,
+    renderCard: (card, props) => <GateCard card={card} {...props} />, markerLabel: markerLabels, markerTone,
+    dispatch: item => {
+      const context = { current: input.current.artifact, ...(listTarget ? { target: listTarget } : {}), ...(designIdentity ? { designIdentity } : {}) }
+      switch (item.id) {
+        case 'review': return actions.onRequestReview()
+        case 'submit': return actions.onSubmit({ ...context, text: view.bar.list.composedText, itemCount: view.bar.list.count ?? 0, proposals: view.bar.list.proposalIds.map(id => input.chatItems?.find(c => c.proposal.id === id)?.proposal).filter(p => p !== undefined) })
+        case 'confirm': case 'confirmWithout': return actions.onConfirm({ ...context, unsubmittedCount: view.bar.list.count ?? 0 })
+        case 'regenerate': return actions.onRegenerate()
+        case 'syncTeam': return actions.onSyncTeam()
+        case 'reloadPolicy': return actions.onReloadPolicy()
+        case 'recheck': return retry()
+        case 'returnToCurrent': return showCurrentVersion()
+      }
+    },
+    stop: target => { if (target === 'review' || target === 'generation') actions.onStop(target) },
+    dispatchLink: link => { if (link.action === 'openModelSettings') actions.onOpenModelSettings(); else if (link.action === 'openVersion') actions.onOpenVersion(link.artifactId) },
+  }}>{children}</DecisionPageProvider></GateScopeContext.Provider>
 }

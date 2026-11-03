@@ -8,6 +8,14 @@ function onIpcPayload<T>(channel: string, listener: (payload: T) => void) {
 }
 
 const desktopApi: DevFlowDesktopApi = {
+  getCodingChangeHistory: (input) => ipcRenderer.invoke(ipcChannels.getCodingChangeHistory, input),
+  reviseCodingChangeSet: (input) => ipcRenderer.invoke(ipcChannels.reviseCodingChangeSet, input),
+  cancelCodingRevision: (input) => ipcRenderer.invoke(ipcChannels.cancelCodingRevision, input),
+  startCodingChangeReview: (input) => ipcRenderer.invoke(ipcChannels.startCodingChangeReview, input),
+  cancelCodingChangeReview: (input) => ipcRenderer.invoke(ipcChannels.cancelCodingChangeReview, input),
+  getCodingActionCosts: (input) => ipcRenderer.invoke(ipcChannels.getCodingActionCosts, input),
+  confirmTestEvidence: (input) => ipcRenderer.invoke(ipcChannels.confirmTestEvidence, input),
+  onCodingChangeHistoryUpdated: listener => onIpcPayload(ipcChannels.codingChangeHistoryUpdated, listener),
   listDiagnosticRecords: () => ipcRenderer.invoke(ipcChannels.listDiagnosticRecords),
   listCredentialAccess: () => ipcRenderer.invoke(ipcChannels.listCredentialAccess),
   cancelCredentialAccess: (id) => ipcRenderer.invoke(ipcChannels.cancelCredentialAccess, id),
