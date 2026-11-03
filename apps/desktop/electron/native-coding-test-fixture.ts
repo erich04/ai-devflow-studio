@@ -8,11 +8,14 @@ import { createLocalStore } from './local-store'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
 
 /** Only the model endpoint is replaced. Git, SQLite, tools, processes and approval are real. */
-export async function codingHarnessFixture(model: NonNullable<AgentProvider['completeNativeConversation']>, testCommand = 'node -e "process.exit(0)"', providerOverrides: Partial<AgentProvider> = {}, acceptanceModel?: NonNullable<AgentProvider['completeNativeConversation']>, options: { commandRules?: CodingCommandRule[] } = {}) {
+export async function codingHarnessFixture(model: NonNullable<AgentProvider['completeNativeConversation']>, testCommand = 'node -e "process.exit(0)"', providerOverrides: Partial<AgentProvider> = {}, acceptanceModel?: NonNullable<AgentProvider['completeNativeConversation']>, options: { commandRules?: CodingCommandRule[]; baselineFiles?: Record<string, string> } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-harness-lifecycle-'))
   const delivery = path.join(root, 'delivery'); await mkdir(delivery)
   await writeFile(path.join(delivery, 'value.ts'), 'export const value = 1\n')
   await writeFile(path.join(delivery, 'package.json'), '{"private":true}')
+  for (const [name, content] of Object.entries(options.baselineFiles ?? {})) {
+    const file = path.join(delivery, name); await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, content)
+  }
   const git = (args: string[]) => promisify(execFile)('git', args, { cwd: delivery })
   await git(['init', '--quiet']); await git(['add', '.']); await git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'base'])
   const store = await createLocalStore({ dbPath: path.join(root, 'local.sqlite') }), now = new Date().toISOString()
@@ -22,7 +25,7 @@ export async function codingHarnessFixture(model: NonNullable<AgentProvider['com
   await store.saveRun(run)
   const node = run.nodes.find(item => item.stage === 'build' && item.kind === 'task')!
   const provider = { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: (input: unknown) => JSON.stringify(input), ...providerOverrides, completeNativeConversation: withFixtureAcceptance(model, acceptanceModel) }
-  const executor = createNativeCodingExecutorV3({ store, root: path.join(root, 'harness'), configVersion: 1, provider, ...options })
+  const executor = createNativeCodingExecutorV3({ store, root: path.join(root, 'harness'), configVersion: 1, provider, ...(options.commandRules ? { commandRules: options.commandRules } : {}) })
   const workspace = { id: 'workspace', projectId: project.id, codingRunId: 'coding', sourcePath: delivery, worktreePath: delivery, branchName: 'test', baseBranch: 'main', baseCommitSha: (await git(['rev-parse', 'HEAD'])).stdout.trim(), createdAt: now }
   const context = { id: 'coding', run, node, project, workspace, requestedBy: 'user', providerId: provider.id, userInstruction: 'Inspect value', now, upstreamArtifacts: [], knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [], brief: buildCodingBrief({ project, worktreePath: delivery, branchName: workspace.branchName, run, node, userInstruction: 'Inspect value', upstreamArtifacts: [], knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [] }) }
   const started = await executor.start({ request: { stateVersion: 1, id: 'coding', executor: { id: executor.descriptor.id, version: 3 }, scope: { organizationId: null, projectId: null, userId: 'user', sessionId: 'local', localProjectId: project.id, managedWorkspaceId: workspace.id }, authority: { runId: run.id, nodeId: node.id, runVersion: run.version, policyVersion: 1 }, objectiveDigest: 'b'.repeat(64), contextDigest: 'c'.repeat(64), requiredCapabilities: ['workspace_read'], budget: { maxTokens: 10000, maxCostUsd: 1 }, expectedCheckpointVersion: 0, requestedAt: now, deadline: new Date(Date.now() + 60_000).toISOString() }, runtimeContext: context })

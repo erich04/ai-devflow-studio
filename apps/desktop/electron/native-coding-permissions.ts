@@ -3,7 +3,7 @@ import { mutateNativeCodingSession, type NativeCodingSession } from './native-co
 import type { LocalStore } from './local-store'
 import { decideCodingCommand } from '@ai-devflow/shared'
 
-export type CodingOperationPermission = { id: string; operationId: string; objectiveVersion: number; kind: 'command' | 'dependencies' | 'network' | 'mcp'; digest: string; details: string; decision: 'pending' | 'approved' | 'rejected'; expiresAt: string; scope?: 'once' | 'task'; policyDigest?: string; source?: 'human' | 'rule' }
+export type CodingOperationPermission = { id: string; operationId: string; objectiveVersion: number; kind: 'command' | 'dependencies' | 'network' | 'mcp' | 'test_inputs'; digest: string; details: string; decision: 'pending' | 'approved' | 'rejected'; expiresAt: string; scope?: 'once' | 'task'; policyDigest?: string; source?: 'human' | 'rule' }
 export class CodingPermissionWait extends Error { constructor() { super('Waiting for human authorization') } }
 /** Durable task-scoped grants, separate from clarification and final ChangeSet approval. */
 export async function requireCodingPermission(store: Pick<LocalStore, 'getNativeCodingSession' | 'saveNativeCodingSession'>, sessionId: string, operation: { id: string; kind: CodingOperationPermission['kind']; value: unknown; details: string; preapproved?: boolean }): Promise<void> {

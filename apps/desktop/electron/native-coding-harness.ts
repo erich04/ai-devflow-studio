@@ -25,6 +25,7 @@ import { codingSandboxAvailability } from './coding-os-sandbox'
 import { currentIndependentChecks, runIndependentChecks } from './native-coding-independent-verification'
 import { preflightIndependentChecks } from './native-coding-check-preflight'
 import { restoreCodingDependencySeed } from './coding-dependency-seed'
+import { assertCodingTestInputAuthority } from './coding-test-inputs'
 
 type Core = { loop: NativeCodingLoop; workspace: CodingCandidateWorkspace; commands: CodingCommandRunner }
 const terminal = (session: NativeCodingSession) => ['completed', 'cancelled', 'failed'].includes(session.status)
@@ -460,6 +461,7 @@ function createHarnessService(host: HarnessHost): Harness {
         if (core.commands.hasActiveCommands) throw new Error('Candidate writers are still active')
         if (session.binding!.manualValidationPlan ? !command.manualValidationEvidence : command.manualValidationEvidence !== undefined) throw new Error('人工验收必须事先选择计划，并在批准确切修订时填写人工检查依据。')
         if (session.binding!.independentVerificationRequired && !session.binding!.manualValidationPlan && !currentIndependentChecks(session)) throw new Error('Independent acceptance must be frozen before revision approval')
+        assertCodingTestInputAuthority(session, revision)
         await mutate(id, draft => {
           if (draft.status !== 'review' || draft.pendingInput.length || draft.objectiveVersion !== command.objectiveVersion || revisionFor(draft)?.digest !== command.revisionDigest) throw new Error('Stale coding approval')
           const confirmed = new Set(command.confirmedCriteria ?? [])
@@ -468,7 +470,11 @@ function createHarnessService(host: HarnessHost): Harness {
           draft.status = 'applying'; draft.commands.push({ id: command.commandId, digest: fingerprint })
         })
         const verificationController = new AbortController(); verifications.set(id, verificationController)
-        const assertVerification = async () => { verificationController.signal.throwIfAborted(); await assertAuthority() }
+        const assertVerification = async () => {
+          verificationController.signal.throwIfAborted()
+          await assertAuthority()
+          assertCodingTestInputAuthority(await read(id), revision)
+        }
         const evidence = await applyAndVerifyCodingRevision({ workspace: core.workspace, revision,
           ...(session.binding!.manualValidationPlan ? { manualAcceptance: { plan: session.binding!.manualValidationPlan, notes: command.manualValidationEvidence!, actorId: session.binding!.context.requestedBy, confirmedAt: new Date().toISOString() } } : {}),
           approval: { id: command.commandId, revisionDigest: revision.digest, objectiveVersion: session.objectiveVersion, policyVersion: session.binding!.request.authority.policyVersion, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() },
@@ -528,6 +534,7 @@ function createHarnessService(host: HarnessHost): Harness {
       const profile: CodingExecutionProfile = { kind: 'os_sandbox', network: 'none' }, testPlan = shellPlan(context.project.testCommand, profile)
       session.binding = { permissionPolicy: { version: 1, mode: 'ask', rules: parseCodingCommandRules(host.commandRules ?? []) }, request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyCacheVersion: 1, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], { isolatedStore: true }) }
       session.binding.input = await inspectCodingInput(context.workspace.worktreePath, context.workspace.baseCommitSha)
+      session.binding.testInputPolicyVersion = 1
       session.binding.independentVerificationRequired = true
       session.binding.independentVerificationVersion = 2
       session.independentVerification = { plans: [], humanInputs: [] }

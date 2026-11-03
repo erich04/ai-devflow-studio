@@ -2,13 +2,14 @@ import { mkdir, readFile, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { createAgentRuntime, resumeAgentRuntime, requestAgentAction, validateNativeToolValue, redactSensitiveValue, type AgentRuntimeScope, type NativeToolDefinition, type NativeToolJsonSchema } from '@ai-devflow/shared'
 import { createNativeToolRegistry, digestNativeToolValue, type NativeToolRegistration } from './native-tool-registry'
-import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, codingFilePath, codingRelativePath } from './coding-candidate-workspace'
+import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, codingFilePath, codingRelativePath, snapshotCodingTree } from './coding-candidate-workspace'
 import { CodingCommandRunner, type CodingCommandPlan } from './coding-command-runner'
 import type { LocalStore } from './local-store'
 import { mutateNativeCodingSession, type CodingToolReceipt } from './native-coding-session'
 import type { CodingLoopTools } from './native-coding-loop'
 import { codingDependencyPlan } from './coding-dependency-preparation'
 import { restoreCodingDependencySeed } from './coding-dependency-seed'
+import { codingTestInputUpdate, codingTestInputPermissionDetails } from './coding-test-inputs'
 import { requireCodingPermission } from './native-coding-permissions'
 import { codingMatchingLines, queryCodingSymbols } from './coding-repository-query'
 import { codingSourceDiagnostics } from './coding-source-diagnostics'
@@ -318,6 +319,10 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
         if (name === 'run_test_plan' || (name === 'run_command' && input.planIndex === 0) || name === 'propose_changeset') {
           const session = await host.store.getNativeCodingSession(host.sessionId)
           if (name === 'propose_changeset' && session?.children.some(child => child.state === 'active')) throw new Error('Collect, merge or explicitly cancel every child before freezing')
+          if (name === 'propose_changeset' && session?.binding?.testInputPolicyVersion === 1) {
+            const update = codingTestInputUpdate(workspace.identity.base, await snapshotCodingTree(workspace.candidatePath, workspace.identity.base.excludedPaths))
+            if (update) await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'test_inputs', value: update, details: codingTestInputPermissionDetails(update) })
+          }
           const profile = session?.binding?.profile ?? host.authority.commands[0]?.profile ?? { kind: 'trusted_local' as const }
           const dependencies = await codingDependencyPlan(workspace.candidatePath, profile, workspace.identity.base.excludedPaths, { isolatedStore: session?.binding?.dependencyCacheVersion === 1 })
           if (dependencies.command && session?.binding?.dependencyPlan?.digest !== dependencies.digest) await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'dependencies', value: dependencies, details: `为当前依赖输入准备候选及独立验证目录：\n${dependencies.command}\n输入摘要：${dependencies.inputDigest}\n可能下载依赖并执行安装脚本，使用已选执行方式。` })
