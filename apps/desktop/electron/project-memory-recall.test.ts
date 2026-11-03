@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { CODING_MEMORY_RECALL_BUDGET, CONVERSATION_MEMORY_RECALL_BUDGET } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import { createLocalStore, type LocalStore } from './local-store'
-import { createProjectMemoryRecall, projectMemoryStatement } from './project-memory-recall'
+import { createProjectMemoryRecall, PROJECT_MEMORY_ESSENTIALS_ID, projectMemoryStatement } from './project-memory-recall'
 
 const directories: string[] = []
 const stores: LocalStore[] = []
@@ -28,7 +28,7 @@ async function fixture(options: { transport?: boolean } = {}) {
   if (owner.status !== 'resolved') throw new Error('No principal')
   const config = await store.configureProjectMemory({ projectId: 'project', ownerUserId: owner.userId, enabled: true,
     endpoint: 'http://127.0.0.1:8890', encryptedApiKey: null, providerId: 'deepseek' })
-  const client = { recallMemories: vi.fn(async () => memories) }
+  const client = { recallMemories: vi.fn(async (_bank: string, _input: { query: string; maxTokens: number }) => memories) }
   const degraded: string[] = []
   const recall = createProjectMemoryRecall({ store, transportAvailable: options.transport ?? true,
     client: async () => client as unknown as HindsightClient, onDegraded: (reason) => degraded.push(reason) })
@@ -48,7 +48,7 @@ it('recalls the project bank with a bounded query and labels each memory', async
   expect(new TextEncoder().encode(sent).byteLength).toBeLessThanOrEqual(1_500)
   expect(result).toEqual({ degraded: false, items: [
     { id: 'pm-o1', statement: '[observation] 删除任务前 要二次确认。', contentDigest: expect.stringMatching(/^sha256:/u) },
-    { id: 'pm-f1', statement: expect.stringMatching(/^\[fact 2026-10-20\] 撤销窗口为 5 秒/u), contentDigest: expect.stringMatching(/^sha256:/u) },
+    { id: 'pm-f1', statement: expect.stringMatching(/^\[fact 2026-10-20，(\d+ 天前|今天)\] 撤销窗口为 5 秒/u), contentDigest: expect.stringMatching(/^sha256:/u) },
   ] })
   expect(result!.items[1]!.statement).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
 })
@@ -83,9 +83,11 @@ it('degrades to no memory when Hindsight fails, and searches with a limit', asyn
   await expect(recall.search({ projectId: 'project', query: '撤销', limit: 5, signal: controller.signal })).rejects.toThrow()
 })
 
-it('formats a statement on one line with its kind and date', () => {
-  expect(projectMemoryStatement({ id: 'x', type: 'experience', text: ' 用 pnpm\n安装依赖 ', occurredAt: '2026-10-21T00:00:00Z' }))
-    .toBe('[fact 2026-10-21] 用 pnpm 安装依赖')
+it('formats a statement on one line with its kind, its day and how long ago that was', () => {
+  const fact = { id: 'x', type: 'experience' as const, text: ' 用 pnpm\n安装依赖 ', occurredAt: '2026-10-21T00:00:00Z' }
+  expect(projectMemoryStatement(fact, new Date('2026-10-31T23:30:00Z'))).toBe('[fact 2026-10-21，10 天前] 用 pnpm 安装依赖')
+  expect(projectMemoryStatement(fact, new Date('2026-10-21T08:00:00Z'))).toBe('[fact 2026-10-21，今天] 用 pnpm 安装依赖')
+  expect(projectMemoryStatement({ id: 'o', type: 'observation', text: '撤销窗口 15 秒。' }, new Date('2026-10-31T00:00:00Z'))).toBe('[observation] 撤销窗口 15 秒。')
 })
 
 it('keeps Hindsight order rather than re-ranking by shared words', async () => {
@@ -106,9 +108,66 @@ it('treats memory recalled before an edit, a deletion or a clear as stale', asyn
   await store.markProjectMemoryChanged('project', 'f1')
   await expect(check(['pm-o1'])).resolves.toBeUndefined()
   await expect(check(['pm-o1', 'pm-f1'])).rejects.toThrow('edited or deleted')
+  // Emptying the knowledge pages records the essentials page a coding brief sent as changed.
+  await expect(check(['pm-o1', 'pm-devflow-essentials'])).resolves.toBeUndefined()
+  await store.markProjectMemoryChanged('project', PROJECT_MEMORY_ESSENTIALS_ID)
+  await expect(check(['pm-o1', 'pm-devflow-essentials'])).rejects.toThrow('edited or deleted')
   // A later recall of the edited memory is current.
   await expect(recall.assertCurrent({ projectId: 'project', userId: owner, ids: ['pm-f1'], recalledAt: new Date(Date.now() + 1_000).toISOString() }))
     .resolves.toBeUndefined()
   await store.clearProjectMemory('project')
   await expect(check(['pm-o1'])).rejects.toThrow('cleared')
+})
+
+it('recalls each ask of a request beside the whole of it and takes their results in turn', async () => {
+  const { recall, client, owner } = await fixture()
+  const lists: Record<string, HindsightMemory[]> = {
+    '撤销窗口和删除一样，注释按约定的语言写': [{ id: 'undo1', type: 'observation', text: '撤销窗口 15 秒。' }, { id: 'undo2', type: 'world', text: '撤销提示用 toast。' }],
+    '撤销窗口和删除一样': [{ id: 'undo1', type: 'observation', text: '撤销窗口 15 秒。' }, { id: 'undo3', type: 'world', text: '撤销按钮在右侧。' }],
+    '注释按约定的语言写': [{ id: 'comments', type: 'observation', text: '代码注释统一用英文。' }],
+  }
+  client.recallMemories.mockImplementation(async (_bank: string, input: { query: string }) => lists[input.query] ?? [])
+  const result = await recall.recall({ projectId: 'project', userId: owner, query: '撤销窗口和删除一样，注释按约定的语言写',
+    intents: ['撤销窗口和删除一样', '注释按约定的语言写', '撤销窗口和删除一样'], budget: CONVERSATION_MEMORY_RECALL_BUDGET })
+  // The whole request once, each distinct ask once; the second ask's memory comes second, not last.
+  expect(client.recallMemories.mock.calls.map((call) => (call as unknown as [string, { query: string }])[1].query)).toEqual([
+    '撤销窗口和删除一样，注释按约定的语言写', '撤销窗口和删除一样', '注释按约定的语言写'])
+  expect(result!.items.map((item) => item.id)).toEqual(['pm-undo1', 'pm-comments', 'pm-undo2', 'pm-undo3'])
+})
+
+it('keeps the whole request\'s memory when an ask fails, and none when the whole request fails', async () => {
+  const { recall, client, owner, degraded } = await fixture()
+  client.recallMemories.mockImplementation(async (_bank: string, input: { query: string }) => {
+    if (input.query === '注释按约定的语言写') throw new HindsightError('timeout')
+    return memories
+  })
+  const partial = await recall.recall({ projectId: 'project', userId: owner, query: '撤销窗口，注释按约定的语言写',
+    intents: ['撤销窗口要多久', '注释按约定的语言写'], budget: CODING_MEMORY_RECALL_BUDGET })
+  expect(partial).toMatchObject({ degraded: false, items: [{ id: 'pm-o1' }, { id: 'pm-f1' }] })
+  client.recallMemories.mockImplementation(async () => { throw new HindsightError('timeout') })
+  expect(await recall.recall({ projectId: 'project', userId: owner, query: '撤销窗口', intents: ['撤销窗口要多久'], budget: CODING_MEMORY_RECALL_BUDGET }))
+    .toEqual({ degraded: true, items: [] })
+  expect(degraded.length).toBeGreaterThan(0)
+})
+
+it('gives the coding brief the essentials page, whole lines within its limit, and nothing when it is empty or unavailable', async () => {
+  const { recall, client, owner } = await fixture()
+  const listMentalModels = vi.fn(async () => [
+    { id: 'devflow-conventions', content: '## 约定\n- 很长的页面', stale: false },
+    { id: 'devflow-essentials', content: `- 代码注释统一用英文\n- 样式用 CSS Modules，密钥 sk-abcdefghijklmnopqrstuvwxyz0123456789 不入库\n${'- 很长的规则说明\n'.repeat(400)}`, stale: false },
+  ])
+  Object.assign(client, { listMentalModels })
+  const item = await recall.conventions({ projectId: 'project', userId: owner })
+  expect(item).toMatchObject({ id: 'pm-devflow-essentials', contentDigest: expect.stringMatching(/^sha256:/u) })
+  expect(item!.statement.split('\n')[0]).toMatch(/^Project conventions that apply to every task/u)
+  expect(item!.statement).toContain('- 代码注释统一用英文')
+  expect(item!.statement).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
+  expect(new TextEncoder().encode(item!.statement.slice(item!.statement.indexOf('\n') + 1)).byteLength).toBeLessThanOrEqual(2_500)
+  expect(item!.statement.endsWith('- 很长的规则说明')).toBe(true)
+
+  listMentalModels.mockImplementation(async () => [{ id: 'devflow-essentials', content: '  ', stale: false }])
+  expect(await recall.conventions({ projectId: 'project', userId: owner })).toBeNull()
+  listMentalModels.mockImplementation(async () => { throw new HindsightError('timeout') })
+  expect(await recall.conventions({ projectId: 'project', userId: owner })).toBeNull()
+  expect(await recall.conventions({ projectId: 'project', userId: 'someone-else' })).toBeNull()
 })

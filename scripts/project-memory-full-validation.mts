@@ -33,7 +33,7 @@ import { createLocalStore } from '../apps/desktop/electron/local-store.js'
 import { createMemoryModelRelay, type MemoryRelayCall } from '../apps/desktop/electron/memory-model-relay.js'
 import { createAgentProviderNativeCodingV2DecisionProvider, createNativeCodingExecutorV2 } from '../apps/desktop/electron/native-coding-executor-v2.js'
 import {
-  LEGACY_MEMORY_DOCUMENT_ID, buildArtifactMemoryDocument, buildCodingRunMemoryDocument, buildConversationMemoryDocument, buildLegacyMemoryDocument,
+  LEGACY_MEMORY_DOCUMENT_ID, buildArtifactMemoryDocument, buildCodingRunMemoryDocument, buildConversationMemoryDocuments, buildLegacyMemoryDocument,
   migrateLegacyProjectMemory,
 } from '../apps/desktop/electron/project-memory-capture.js'
 import { COMMIT_MEMORY_DAYS, COMMIT_MEMORY_SETTLE_MS, buildCommitMemoryDocuments, captureCommitProjectMemory, readRecentCommits } from '../apps/desktop/electron/project-memory-commits.js'
@@ -359,9 +359,8 @@ async function seedPhase() {
   const legacy = buildLegacyMemoryDocument(data.legacy)
   if (legacy) built.push({ input: legacy, label: 'legacy' })
   for (const conversation of [...data.conversations, { ...data.longConversation, daysAgo: 5 }]) {
-    const document = buildConversationMemoryDocument({ id: conversation.id, localProjectId: projectId, title: conversation.title, status: 'idle',
-      updatedAt: conversation.messages.at(-1)!.createdAt, messages: conversation.messages }, now.toISOString())
-    if (document) built.push({ input: document, label: conversation.id })
+    for (const document of buildConversationMemoryDocuments({ id: conversation.id, localProjectId: projectId, title: conversation.title, status: 'idle',
+      updatedAt: conversation.messages.at(-1)!.createdAt, messages: conversation.messages }, now.toISOString())) built.push({ input: document, label: conversation.id })
   }
   for (const run of data.codingRuns) {
     const document = buildCodingRunMemoryDocument({ run: run.run, workflow: run.workflow as never, events: run.events, testEvidence: run.testEvidence })
@@ -375,15 +374,18 @@ async function seedPhase() {
   const commitDocuments = buildCommitMemoryDocuments(await readRecentCommits(repo, since), now.toISOString())
   for (const document of commitDocuments) built.push({ input: document, label: document.documentId })
   const sources = data.conversations.length + 1 + data.codingRuns.length + data.artifacts.length + 1
-  check('every synthetic source produced a document', built.length === sources + commitDocuments.length, { built: built.length, sources, commitDays: commitDocuments.length })
+  // A long discussion is several segment documents of one source.
+  const builtSources = new Set(built.map((item) => item.label)).size
+  check('every synthetic source produced a document', builtSources === sources + commitDocuments.length, { built: built.length, builtSources, sources, commitDays: commitDocuments.length })
   await saveJson(reportPath, report)
 
-  // Deterministic capture checks: trimming and commit selection.
-  const longDocument = built.find((item) => item.label === data.longConversation.id)!.input
-  const kept = (JSON.parse(longDocument.payload) as unknown[]).length
-  check('long discussion is trimmed to the document limit, oldest messages first', bytes(longDocument.payload) <= PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 2_048 &&
-    !longDocument.payload.includes(MARKERS.oldestLongChat) && longDocument.payload.includes(MARKERS.newestLongChat) && kept < data.longConversation.messages.length,
-  { payloadBytes: bytes(longDocument.payload), sourceBytes: bytes(JSON.stringify(data.longConversation.messages)), keptMessages: kept, totalMessages: data.longConversation.messages.length })
+  // Deterministic capture checks: segments and commit selection.
+  const longSegments = built.filter((item) => item.label === data.longConversation.id).map((item) => item.input)
+  const kept = longSegments.reduce((sum, segment) => sum + (JSON.parse(segment.payload) as unknown[]).length, 0)
+  check('long discussion is kept whole in segments within the document limit', longSegments.length > 1 &&
+    longSegments.every((segment) => bytes(segment.payload) <= PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 2_048) &&
+    longSegments[0]!.payload.includes(MARKERS.oldestLongChat) && longSegments.at(-1)!.payload.includes(MARKERS.newestLongChat) && kept === data.longConversation.messages.length,
+  { segments: longSegments.length, payloadBytes: longSegments.map((segment) => bytes(segment.payload)), sourceBytes: bytes(JSON.stringify(data.longConversation.messages)), keptMessages: kept, totalMessages: data.longConversation.messages.length })
   const longRun = built.find((item) => item.label === 'cr-long-activity')!.input
   check('long coding run keeps its latest activity and marks the omission', longRun.payload.includes('[earlier activity omitted]') &&
     longRun.payload.includes(MARKERS.lateEvent) && !longRun.payload.includes(MARKERS.earlyEvent) && bytes(longRun.payload) <= PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 1_024,
@@ -447,14 +449,16 @@ async function consolidatePhase() {
   // What the store recorded and sent, checked again from the stored rows.
   const rows = await bankDocuments()
   const payload = (documentId: string) => rows.find((row) => row.documentId === documentId)?.payload ?? ''
-  const longChat = payload('conversation:chat-perf-long')
+  const longChatRows = rows.filter((row) => row.sourceKind === 'conversation' && row.sourceId === 'chat-perf-long')
+  const longChat = longChatRows.map((row) => row.payload).join('\n')
   const longRun = payload('coding-run:cr-long-activity')
   const commits = rows.filter((row) => row.sourceKind === 'commit')
   const commitText = commits.map((row) => row.payload).join('\n')
   const latestCommit = Date.parse((await git(state!.repo, ['log', '-1', '--format=%cI'])).stdout.trim())
   const today = commits.find((row) => row.documentId === `commits:${new Date(latestCommit).toISOString().slice(0, 10)}`)
-  check('stored: the long discussion was sent without its oldest messages', bytes(longChat) <= PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 2_048 &&
-    !longChat.includes(MARKERS.oldestLongChat) && longChat.includes(MARKERS.newestLongChat), { bytes: bytes(longChat) })
+  check('stored: the long discussion was sent whole, in segments within the limit', longChatRows.length > 1 &&
+    longChatRows.every((row) => bytes(row.payload) <= PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 2_048) &&
+    longChat.includes(MARKERS.oldestLongChat) && longChat.includes(MARKERS.newestLongChat), { segments: longChatRows.length, bytes: longChatRows.map((row) => bytes(row.payload)) })
   check('stored: the long coding run was sent with its latest activity only', longRun.includes('[earlier activity omitted]') &&
     longRun.includes(MARKERS.lateEvent) && !longRun.includes(MARKERS.earlyEvent), { bytes: bytes(longRun) })
   check('stored: commit days within 30 days, without merges or e-mail addresses', commits.length > 0 && !commitText.includes(MARKERS.oldCommit) &&
@@ -1060,16 +1064,16 @@ async function clearPhase() {
   check('clear: the new bank starts empty', empty?.items.length === 0 && empty.degraded === false, { items: empty?.items.length, degraded: empty?.degraded })
   const legacy = await migrateLegacyProjectMemory(store, projectId)
   const conversation = timeline(new Date(state!.baseTime), projectId, owner(), state!.repo).conversations.find((item) => item.id === 'chat-delete-confirm')!
-  const again = buildConversationMemoryDocument({ id: conversation.id, localProjectId: projectId, title: conversation.title, status: 'idle',
+  const [again] = buildConversationMemoryDocuments({ id: conversation.id, localProjectId: projectId, title: conversation.title, status: 'idle',
     updatedAt: new Date().toISOString(), messages: [...conversation.messages, { id: 'chat-delete-confirm-u9', role: 'user', text: '继续上次的讨论。', createdAt: new Date().toISOString() },
-      { id: 'chat-delete-confirm-a9', role: 'assistant', text: 'OK.', createdAt: new Date().toISOString() }] }, new Date().toISOString())!
-  const reRecorded = await store.recordProjectMemoryDocument(await config(), again)
+      { id: 'chat-delete-confirm-a9', role: 'assistant', text: 'OK.', createdAt: new Date().toISOString() }] }, new Date().toISOString())
+  const reRecorded = await store.recordProjectMemoryDocument(await config(), again!)
   check('clear: the legacy copy and earlier sources stay forgotten', legacy?.status === 'deleted' && reRecorded?.status === 'deleted', { legacy: legacy?.status, conversation: reRecorded?.status })
-  const fresh = buildConversationMemoryDocument({ id: 'chat-after-clear', localProjectId: projectId, title: '清空后的新约定', status: 'idle', updatedAt: new Date().toISOString(), messages: [
+  const [fresh] = buildConversationMemoryDocuments({ id: 'chat-after-clear', localProjectId: projectId, title: '清空后的新约定', status: 'idle', updatedAt: new Date().toISOString(), messages: [
     { id: 'chat-after-clear-u', role: 'user', text: '新约定：PR 标题要加模块前缀，例如 [tasks] 或 [sync]。', createdAt: new Date().toISOString() },
     { id: 'chat-after-clear-a', role: 'assistant', text: 'Recorded: PR titles start with a module prefix such as [tasks] or [sync].', createdAt: new Date().toISOString() },
-  ] }, new Date().toISOString())!
-  await store.recordProjectMemoryDocument(await config(), { ...fresh, notBefore: new Date().toISOString() })
+  ] }, new Date().toISOString())
+  await store.recordProjectMemoryDocument(await config(), { ...fresh!, notBefore: new Date().toISOString() })
   const retained = await runWorker('after clear', async () => (await bankDocuments()).find((row) => row.documentId === 'conversation:chat-after-clear')?.status === 'retained', 10 * 60_000)
   await settleBank(after.bankId, 10 * 60_000)
   const recalled = (await recallSelection('PR 标题有什么约定？', CODING_MEMORY_RECALL_BUDGET)).selected.map((item) => item.statement)

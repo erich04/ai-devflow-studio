@@ -62,6 +62,7 @@ import {
   type TestEvidenceStatus,
   type WorkflowNode,
   type WorkflowRun,
+  splitRecallIntents,
 } from '@ai-devflow/shared'
 import {
   captureWorktreeDiff,
@@ -90,7 +91,7 @@ import {
 import { providerCallTraceMessage } from './provider-call-trace-message.js'
 import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter.js'
 import { CODING_BRIEF_MAX_BYTES, estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
-import { assertCodingContextCurrent, buildCodingMemoryQuery, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
+import { assertCodingContextCurrent, buildCodingMemoryQuery, buildWithCodingMemory, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
 import { evaluateCurrentWorkflowEvidence, type WorkflowEvidenceEvaluation } from './workflow-evaluation.js'
 import type {
   CodingAgentMutation,
@@ -3122,28 +3123,30 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const recalled = await recallCodingMemory({
         store: deps.store, run, codingRunId, userId: input.requestedBy,
         query: recallQuery,
+        // Only the user's own words are split; the node and approved titles stay in the whole query.
+        intents: splitRecallIntents([run.request, input.userInstruction].filter((text) => text.trim()).join('\n')),
         now: now(),
       })
       const model = executor.modelId ?? providerId
-      const canonicalBrief = buildCodingBrief({
+      const { brief: canonicalBrief, memory: briefMemory } = buildWithCodingMemory(recalled, (memoryContext) => buildCodingBrief({
         run,
         node,
         project,
         ...briefContext,
         ...(retrievedKnowledge ? { retrievedKnowledge } : {}),
         maxContextBytes: CODING_BRIEF_MAX_BYTES,
-        memoryContext: recalled.context,
+        memoryContext,
         userInstruction: input.userInstruction,
         worktreePath: '<managed-worktree-created-after-budget-approval>',
         branchName: '<managed-branch-created-after-budget-approval>',
         ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
         ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
-      })
+      }))
       const contextReceipt = {
         stateVersion: 1 as const, runId: run.id, nodeId: node.id, runVersion: run.version,
-        runtimeId: recalled.runtimeId, scope: recalled.scope,
-        promptDigest: codingPromptDigest(canonicalBrief.prompt), memories: recalled.memories,
-        omittedMemoryCount: recalled.omittedMemoryCount, compaction: canonicalBrief.compaction!,
+        runtimeId: briefMemory.runtimeId, scope: briefMemory.scope,
+        promptDigest: codingPromptDigest(canonicalBrief.prompt), memories: briefMemory.memories,
+        omittedMemoryCount: briefMemory.omittedMemoryCount, compaction: canonicalBrief.compaction!,
         ...(canonicalBrief.knowledgeContext ? { knowledgeContext: canonicalBrief.knowledgeContext } : {}),
       }
       const estimatedCost = metered && executor.descriptor.kind === 'native'

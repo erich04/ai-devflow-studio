@@ -21,7 +21,7 @@ import { createLocalStore } from '../apps/desktop/electron/local-store.js'
 import { createMemoryModelRelay, type MemoryRelayCall } from '../apps/desktop/electron/memory-model-relay.js'
 import { registerProjectMemoryRecall } from '../apps/desktop/electron/coding-context.js'
 import {
-  buildArtifactMemoryDocument, buildCodingRunMemoryDocument, buildConversationMemoryDocument, buildLegacyMemoryDocument,
+  buildArtifactMemoryDocument, buildCodingRunMemoryDocument, buildConversationMemoryDocuments, buildLegacyMemoryDocument,
 } from '../apps/desktop/electron/project-memory-capture.js'
 import { buildCommitMemoryDocuments } from '../apps/desktop/electron/project-memory-commits.js'
 import { createProjectMemoryRecall } from '../apps/desktop/electron/project-memory-recall.js'
@@ -139,7 +139,7 @@ try {
       { statement: '构建产物输出到 dist/ 目录，dist/ 不提交到仓库。', createdAt: iso(-780) },
       { statement: 'Verified test command for this project: pnpm test:regression.', createdAt: iso(-770) },
     ]),
-    buildConversationMemoryDocument({ id: 'chat-1', localProjectId: projectId, title: '删除确认', status: 'idle', updatedAt: iso(-500), messages: [
+    ...buildConversationMemoryDocuments({ id: 'chat-1', localProjectId: projectId, title: '删除确认', status: 'idle', updatedAt: iso(-500), messages: [
       message('u1', 'user', '这个项目删除任务前必须弹出二次确认框，按钮文案用“删除”而不是“确定”。撤销窗口保留 5 秒。以后都用中文回答我。', iso(-500)),
       message('a1', 'assistant', '好的：删除前弹确认框，按钮写“删除”，撤销窗口 5 秒，之后用中文回答。', iso(-499)),
       message('u2', 'user', '跑测试用 pnpm test:regression，不要用 pnpm test，后者会连带跑很慢的 e2e。', iso(-498)),
@@ -162,11 +162,11 @@ try {
       { sha: 'b1c2d3e4f5a6b7c8d9e0b1c2d3e4f5a6b7c8d9e0', committedAt: iso(-290), subject: 'fix(tasks): 删除确认后刷新列表',
         body: '确认删除后调用 refreshTasks()，否则列表保留已删除项。' },
     ], iso(0)),
-    buildConversationMemoryDocument({ id: 'chat-2', localProjectId: projectId, title: '撤销时长调整', status: 'idle', updatedAt: iso(-60), messages: [
+    ...buildConversationMemoryDocuments({ id: 'chat-2', localProjectId: projectId, title: '撤销时长调整', status: 'idle', updatedAt: iso(-60), messages: [
       message('u3', 'user', '用户反馈 5 秒太短，撤销窗口改成 10 秒。', iso(-60)),
       message('a3', 'assistant', '已记录：撤销窗口从 5 秒调整为 10 秒。', iso(-59)),
     ] }, iso(-60)),
-    buildConversationMemoryDocument({ id: 'chat-3', localProjectId: projectId, title: '回答语言', status: 'idle', updatedAt: iso(-30), messages: [
+    ...buildConversationMemoryDocuments({ id: 'chat-3', localProjectId: projectId, title: '回答语言', status: 'idle', updatedAt: iso(-30), messages: [
       message('u4', 'user', '从现在起请用英文回答我，代码注释也写英文。之前说的用中文回答作废。', iso(-30)),
       message('a4', 'assistant', 'Understood. From now on I will answer in English and write code comments in English.', iso(-29)),
     ] }, iso(-30)),
@@ -241,7 +241,7 @@ try {
     await delay(15_000)
     await service.process(1)
   }
-  const expected: Record<string, RegExp> = { conventions: /test:regression/u, decisions: /ConfirmDialog|10\s*秒|10 seconds/iu,
+  const expected: Record<string, RegExp> = { essentials: /英文|English/iu, conventions: /test:regression/u, decisions: /ConfirmDialog|10\s*秒|10 seconds/iu,
     pitfalls: /refreshTasks/u, preferences: /英文|English/iu }
   report.pages = PROJECT_KNOWLEDGE_PAGES.map((page) => {
     const value = pages.get(knowledgePageModelId(page.id))

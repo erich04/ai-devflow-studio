@@ -89,7 +89,10 @@ export type ProjectMemoryStatus = {
    */
   relay: { port: number; running: boolean; tokenFile: string | null; hindsightBaseUrl: string }
   counts: Partial<Record<ProjectMemoryDocumentStatus, number>>
+  /** One entry per source: a conversation is listed once, however many segments it has. */
   recent: Array<Pick<ProjectMemoryDocument, 'id' | 'sourceKind' | 'title' | 'status' | 'updatedAt' | 'lastError'>>
+  /** Segments of earlier long conversations still waiting to be sent again, a few per run. */
+  conversationBackfill?: { remainingSegments: number }
   unavailableReason?: string
 }
 /** Hindsight's memory types: consolidated observations, facts about the project, and what agents did. */
@@ -125,11 +128,16 @@ export type ConfigureProjectMemoryInput = {
  * the user refreshes it; each rewrite is a model call charged like extraction (about 0.8 US cents per
  * page with DeepSeek Flash, measured 2026-10-29). Editing or forgetting
  * memory empties the pages first, so they never show what was removed. Pages are for the user to
- * read; prompts keep using recalled memories.
+ * read; prompts use recalled memories, except the short "essentials" page, which every coding brief
+ * includes so that conventions the request never mentions still apply (validated 2026-10-31).
  */
-export type ProjectKnowledgePageId = 'conventions' | 'decisions' | 'pitfalls' | 'preferences'
+export type ProjectKnowledgePageId = 'essentials' | 'conventions' | 'decisions' | 'pitfalls' | 'preferences'
 export const PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS = 6 * 60 * 60
-export const PROJECT_KNOWLEDGE_PAGES: ReadonlyArray<{ id: ProjectKnowledgePageId; title: string; query: string }> = [
+/** The essentials page as the coding brief includes it, at most; longer pages are cut at a line. */
+export const PROJECT_MEMORY_ESSENTIALS_MAX_BYTES = 2_500
+export const PROJECT_KNOWLEDGE_PAGES: ReadonlyArray<{ id: ProjectKnowledgePageId; title: string; query: string; maxTokens?: number }> = [
+  { id: 'essentials', title: '每个任务都适用的约定', maxTokens: 700,
+    query: '列出本项目每个开发任务都必须遵守的约定和用户偏好：代码注释的语言、答复的语言与详略、提交信息格式、样式方案、必须运行的测试命令、目录分工等。每条一行，写成「- 规则」，只写记忆中有依据且仍然有效的；后来改过的只写最新的。只写对所有任务都适用的规则，不写某个功能的具体数值、排查过程或历史。最多 15 条。只输出规则列表，不写其他段落。用中文。' },
   { id: 'conventions', title: '约定与命令',
     query: '总结本项目的编码约定、目录与模块分工、构建/测试/运行命令和环境要求。按主题分节，用中文。只写记忆中有依据的内容，没有依据的不写。' },
   { id: 'decisions', title: '决策与原因',

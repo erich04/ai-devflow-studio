@@ -721,4 +721,47 @@ describe('DeepSeek runtime settlement', () => {
       { requestPhase: 'initial', timestamp: offPeak.timestamp, costUsd: 0.22, pricingSnapshot: { tier: 'off_peak' } },
     ])
   })
+
+  it('prices deepseek-v4-pro, deepseek-flash and the deepseek-v4-flash alias by date at peak and off-peak', () => {
+    const price = (model: string, timestamp: string) => {
+      const snapshot = resolveDeepSeekPricingSnapshot({ providerId: scope.providerId, model, timestamp })!
+      return { tier: snapshot.tier, rates: [snapshot.cacheHitInputUsdPerMillion, snapshot.cacheMissInputUsdPerMillion, snapshot.outputUsdPerMillion],
+        sourceVersion: snapshot.sourceVersion, effectiveAt: snapshot.effectiveAt }
+    }
+    const pro = { peak: [0.044, 1.32, 3.96], off_peak: [0.022, 0.66, 1.98] }
+    const flash = { peak: [0.006, 0.3, 1.2], off_peak: [0.003, 0.15, 0.6] }
+    // Weekdays: 07:00 UTC is peak, 12:00 UTC is off-peak.
+    for (const [tier, hour] of [['peak', '07'], ['off_peak', '12']] as const) {
+      expect(price('deepseek-v4-pro', `2026-09-11T${hour}:00:00.000Z`)).toEqual({ tier, rates: pro[tier],
+        sourceVersion: 'deepseek-pricing-snapshot-2026-08-30', effectiveAt: '2026-08-16T16:00:00.000Z' })
+      // The withdrawn routing window keeps the price that saved stage usage was validated against.
+      expect(price('deepseek-v4-pro', `2026-10-28T${hour}:00:00.000Z`)).toEqual({ tier, rates: flash[tier],
+        sourceVersion: 'deepseek-pricing-snapshot-2026-09-10', effectiveAt: '2026-09-14T04:00:00.000Z' })
+      expect(price('deepseek-v4-pro', `2026-11-02T${hour}:00:00.000Z`)).toEqual({ tier, rates: pro[tier],
+        sourceVersion: 'deepseek-pricing-snapshot-2026-11-01', effectiveAt: '2026-11-01T09:49:20.000Z' })
+      for (const model of ['deepseek-flash', 'deepseek-v4-flash']) {
+        expect(price(model, `2026-11-02T${hour}:00:00.000Z`)).toEqual({ tier, rates: flash[tier],
+          sourceVersion: 'deepseek-pricing-snapshot-2026-09-10', effectiveAt: '2026-09-10T15:17:38.000Z' })
+      }
+    }
+    // 2026-11-01 is a Sunday, so both sides of the verification instant are off-peak.
+    expect(price('deepseek-v4-pro', '2026-11-01T09:49:19.999Z').rates).toEqual(flash.off_peak)
+    expect(price('deepseek-v4-pro', '2026-11-01T09:49:20.000Z').rates).toEqual(pro.off_peak)
+  })
+
+  it('settles and reserves deepseek-v4-pro at its own rates instead of the Flash rates', () => {
+    const usage = { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 0, cacheMissTokens: 1_000_000,
+      cacheStatus: 'complete' as const, billingProvider: 'deepseek' as const }
+    const settle = (timestamp: string) => settleCodingRuntimeCost({ ...scope, model: 'deepseek-v4-pro', timestamp, usage })
+    expect(settle('2026-11-02T07:00:00.000Z')).toMatchObject({ costStatus: 'settled', costUsd: 5.28,
+      breakdown: { cacheMissInputUsd: 1.32, outputUsd: 3.96 }, pricingSnapshot: { tier: 'peak' } })
+    expect(settle('2026-11-02T12:00:00.000Z')).toMatchObject({ costUsd: 2.64, pricingSnapshot: { tier: 'off_peak' } })
+    const reservation = estimateCodingRuntimeCost({
+      engine: 'native', providerId: scope.providerId, model: 'deepseek-v4-pro', billingProvider: 'deepseek',
+      prompt: '1234', maxOutputTokens: 100, providerCallLimit: 1, runId: scope.runId, nodeId: scope.nodeId,
+      projectId: scope.projectId, userId: scope.userId, timestamp: '2026-11-02T12:00:00.000Z',
+    })
+    // One input token and 100 output tokens at the peak Pro cache-miss and output rates.
+    expect(reservation).toMatchObject({ costUsd: 0.00039732, pricingSnapshot: { tier: 'peak', cacheMissInputUsdPerMillion: 1.32, outputUsdPerMillion: 3.96 } })
+  })
 })

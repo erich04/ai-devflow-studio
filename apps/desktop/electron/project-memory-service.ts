@@ -8,7 +8,7 @@ import type { ProjectMemoryClaim, ProjectMemorySettlement } from './project-memo
 export const knowledgePageModelId = (id: ProjectKnowledgePageId) => `devflow-${id}`
 /** Rewritten after consolidation, at most every six hours, editing only what changed; never reading other pages. */
 export const KNOWLEDGE_PAGE_MODELS: readonly HindsightMentalModelDefinition[] = PROJECT_KNOWLEDGE_PAGES.map((page) => ({
-  id: knowledgePageModelId(page.id), name: page.title, sourceQuery: page.query, maxTokens: 1_500,
+  id: knowledgePageModelId(page.id), name: page.title, sourceQuery: page.query, maxTokens: page.maxTokens ?? 1_500,
   trigger: { mode: 'delta', refresh_after_consolidation: true, min_refresh_interval_seconds: PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS,
     exclude_mental_models: true, budget: 'low' },
 }))
@@ -20,6 +20,7 @@ export async function clearKnowledgePages(client: HindsightClient, bankId: strin
 }
 
 export type ProjectMemoryServiceStore = {
+  markProjectMemoryChanged(projectId: string, memoryId: string): Promise<ProjectMemoryConfiguration>
   listProjectMemoryConfigurations(): Promise<ProjectMemoryConfiguration[]>
   listProjectMemoryDocuments(projectId?: string): Promise<ProjectMemoryDocument[]>
   completeProjectMemoryBankDeletion(projectId: string, bankId: string): Promise<void>
@@ -159,7 +160,11 @@ export class ProjectMemoryService {
       await client.deleteDocument(document.bankId, document.documentId)
       const deleted = ['completed', 'failed', 'cancelled', 'not_found'].includes(operation)
       // A page rewritten before the document was gone may still contain it; empty the pages once more.
-      if (deleted && document.attempts > 0) await clearKnowledgePages(client, document.bankId)
+      // A coding run that sent such an essentials page stops at its next check.
+      if (deleted && document.attempts > 0) {
+        await clearKnowledgePages(client, document.bankId)
+        if (document.bankId === config.bankId) await this.deps.store.markProjectMemoryChanged(document.projectId, knowledgePageModelId('essentials'))
+      }
       await settle(deleted ? 'deleted' : 'unknown')
       return
     }

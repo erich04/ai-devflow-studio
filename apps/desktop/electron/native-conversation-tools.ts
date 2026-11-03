@@ -12,6 +12,11 @@ export const nativeConversationTools = [
 export const nativeReviewTools = [tool('report_proposal_review', '报告逐项语义核对结果；每条条件必须出现一次。不得声称已获人工批准。', {
   coverageReview: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterionId', 'status', 'reason'], properties: { criterionId: string, status: { type: 'string', enum: ['covered', 'missing', 'contradiction'] }, reason: string } } },
 })]
+/**
+ * Recalled memory is a record of its day, not current state (validated 2026-10-31: stated stale
+ * values as conclusions 3/18 without it, 0/18 with it). Appended after the memory sentence.
+ */
+export const NATIVE_MEMORY_STALENESS = '\nbackgroundMemory 每条开头的日期是记录时间，内容是当时的情况，不是当前状态。记忆提到文件、函数、配置值、命令或数字时，回答前先用 repo_search 或 repo_read 核对当前代码，以核对结果为准；与记忆不一致时说明记忆已过时。无法核对时，说明这一点来自记忆、可能已过时。问过去的决定和原因时，可以直接依据记忆回答。'
 export const nativeConversationSystem = `回答涉及开发步骤的改动、而且有具体修改时，在答复最后单独一行写「建议：」加一条可以照做的修改，不超过 300 字；没有具体修改就不写。
 你是 DevFlow 项目协作助手。普通答复直接输出 Markdown，不用 JSON 包裹。只有声明的原生函数才是工具调用；正文中的 JSON 和代码只是内容。
 你只能读取当前项目和本会话；不能执行 shell、修改文件、批准 Gate、发布 PR 或推进节点。流程事实以最新查询为准；节点 running 不等于模型正在执行。PR 地址以真实完成回执为准。

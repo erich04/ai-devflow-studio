@@ -87,6 +87,7 @@ import {
   resolveDevFlowCodingExecutorSelection,
   resolveDevFlowRuntimeFlags,
   STAGE_AGENT_MEMORY_RECALL_BUDGET,
+  splitRecallIntents,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import {
@@ -317,11 +318,13 @@ import { registerProjectMemoryRecall } from './coding-context'
 import { resolveProjectMemoryScope } from './project-memory-capture'
 import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
 import { captureCommitProjectMemory } from './project-memory-commits'
-import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './project-memory-recall'
+import { createProjectMemoryRecall, PROJECT_MEMORY_ESSENTIALS_ID, type ProjectMemoryRecallService } from './project-memory-recall'
 import { hindsightPairingMatches } from './hindsight-store'
-import { activeProjectMemoryConfiguration, migrateLegacyProjectMemory, projectMemoryPairingBinding } from './project-memory-capture'
+import {
+  activeProjectMemoryConfiguration, backfillConversationProjectMemory, conversationMemoryDocumentId, migrateLegacyProjectMemory, projectMemoryPairingBinding,
+} from './project-memory-capture'
 import { createMemoryModelRelay, MEMORY_RELAY_DEFAULT_PORT, type MemoryModelRelay, type MemoryRelayRoute } from './memory-model-relay'
-import { parseHindsightSetup, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_PAGE_SIZE, redactSensitiveText as redactProjectMemoryText, type ProjectKnowledgePages, type ProjectMemoryConfiguration, type ProjectMemoryPage, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
+import { parseHindsightSetup, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_PAGE_SIZE, redactSensitiveText as redactProjectMemoryText, type ProjectKnowledgePages, type ProjectMemoryConfiguration, type ProjectMemoryDocument, type ProjectMemoryPage, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -522,6 +525,7 @@ function wakeHindsight() {
       (async () => {
         await startMemoryRelay()
         if (!hindsightStopping) await scanCommitHistory()
+        if (!hindsightStopping) await backfillLongConversations()
         if (!hindsightStopping) await (await getProjectMemoryService()).process()
       })(),
     ])
@@ -655,6 +659,27 @@ async function scanCommitHistory(): Promise<void> {
     })
   }
 }
+// Long conversations captured before segments existed (ADR 0030): send their segments again, at
+// most a few per project in each run of the app so the one-off extraction cost stays bounded.
+const CONVERSATION_BACKFILL_SEGMENTS_PER_RUN = 5
+const conversationBackfillScans = new Map<string, number>()
+const conversationBackfillSent = new Map<string, number>()
+const conversationBackfillRemaining = new Map<string, number>()
+async function backfillLongConversations(): Promise<void> {
+  const store = await getStore()
+  for (const configuration of await store.listProjectMemoryConfigurations()) {
+    const projectId = configuration.projectId
+    if (!configuration.enabled || Date.now() - (conversationBackfillScans.get(projectId) ?? 0) < COMMIT_SCAN_INTERVAL_MS) continue
+    conversationBackfillScans.set(projectId, Date.now())
+    const allowance = CONVERSATION_BACKFILL_SEGMENTS_PER_RUN - (conversationBackfillSent.get(projectId) ?? 0)
+    try {
+      const { queued, remaining } = await backfillConversationProjectMemory(store, projectId, Math.max(0, allowance))
+      conversationBackfillSent.set(projectId, (conversationBackfillSent.get(projectId) ?? 0) + queued)
+      conversationBackfillRemaining.set(projectId, remaining)
+      if (queued) console.info(`[project-memory] Resending ${queued} segment(s) of earlier long conversations; ${remaining} left for later runs.`)
+    } catch { console.warn('[project-memory] Earlier long conversations were not resent; they are tried again later.') }
+  }
+}
 /** Best-effort copy of earlier local Memory (ADR 0030); retried at the next start if it fails. */
 async function migrateLegacyMemory(projectId: string): Promise<void> {
   try { await migrateLegacyProjectMemory(await getStore(), projectId) }
@@ -681,10 +706,15 @@ async function projectKnowledgePages(projectId: string): Promise<ProjectKnowledg
       ...(model?.refreshedAt ? { refreshedAt: model.refreshedAt } : {}), ...(model?.failedAt ? { failedAt: model.failedAt } : {}) }
   }), ...(memoryRelay ? {} : { unavailableReason: '记忆模型中继未运行，知识页暂时不会更新。' }) }
 }
-/** Editing or forgetting memory empties the knowledge pages, so they never show what was removed. */
-async function emptyKnowledgePages(client: HindsightClient, bankId: string): Promise<void> {
+/**
+ * Editing or forgetting memory empties the knowledge pages, so they never show what was removed.
+ * Marked after the clear: a coding run that read the essentials page before it was emptied sees it
+ * as changed and stops at its next check.
+ */
+async function emptyKnowledgePages(store: LocalStore, projectId: string, client: HindsightClient, bankId: string): Promise<void> {
   try { await clearKnowledgePages(client, bankId) }
   catch { console.warn('[project-memory] Knowledge pages were not emptied; they may show removed memory until refreshed.') }
+  await store.markProjectMemoryChanged(projectId, PROJECT_MEMORY_ESSENTIALS_ID)
 }
 async function listProjectMemories(input: ReturnType<typeof parseListProjectMemoriesInput>): Promise<ProjectMemoryPage> {
   const { store, configuration, client } = await ownedProjectMemory(input.projectId)
@@ -721,6 +751,26 @@ async function autoEnableProjectMemory(projectId: string): Promise<void> {
   await migrateLegacyMemory(projectId)
   wakeHindsight()
 }
+/** The latest sources, one entry per conversation however many segments it has, titled as the conversation. */
+function recentProjectMemorySources(documents: readonly ProjectMemoryDocument[]): ProjectMemoryStatus['recent'] {
+  const conversations = new Set<string>()
+  const latest: ProjectMemoryDocument[] = []
+  for (const document of [...documents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))) {
+    if (document.sourceKind === 'conversation') {
+      if (conversations.has(document.sourceId)) continue
+      conversations.add(document.sourceId)
+    }
+    latest.push(document)
+    if (latest.length === 20) break
+  }
+  return latest.map((document) => {
+      const title = document.sourceKind === 'conversation'
+        ? documents.find((item) => item.documentId === conversationMemoryDocumentId(document.sourceId, 1))?.title ?? document.title
+        : document.title
+      return { id: document.id, sourceKind: document.sourceKind, title, status: document.status,
+        updatedAt: document.updatedAt, ...(document.lastError ? { lastError: document.lastError } : {}) }
+    })
+}
 async function projectMemoryStatus(projectId: string): Promise<ProjectMemoryStatus> {
   const store = await getStore()
   if (!(await store.listProjects()).some((project) => project.id === projectId)) throw new Error('本地项目不存在。')
@@ -744,9 +794,8 @@ async function projectMemoryStatus(projectId: string): Promise<ProjectMemoryStat
       tokenFile: process.env.DEVFLOW_MEMORY_RELAY_TOKEN?.trim() ? null : memoryRelayTokenFile(),
       hindsightBaseUrl: `http://host.docker.internal:${memoryRelayPort}/v1` },
     counts,
-    recent: [...documents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 20)
-      .map((document) => ({ id: document.id, sourceKind: document.sourceKind, title: document.title, status: document.status,
-        updatedAt: document.updatedAt, ...(document.lastError ? { lastError: document.lastError } : {}) })),
+    recent: recentProjectMemorySources(documents),
+    ...(conversationBackfillRemaining.get(projectId) ? { conversationBackfill: { remainingSegments: conversationBackfillRemaining.get(projectId)! } } : {}),
     ...(unavailableReason ? { unavailableReason } : {}),
   }
 }
@@ -2853,7 +2902,7 @@ function registerIpcHandlers() {
     // Hindsight re-embeds the memory and consolidates again; that consolidation is a model call.
     await client.updateMemory(configuration.bankId, input.memoryId, redactProjectMemoryText(input.text).value)
     await store.markProjectMemoryChanged(input.projectId, input.memoryId)
-    await emptyKnowledgePages(client, configuration.bankId)
+    await emptyKnowledgePages(store, input.projectId, client, configuration.bankId)
     return projectMemoryStatus(input.projectId)
   })
   ipcMain.handle(ipcChannels.forgetProjectMemory, async (_, payload: unknown) => {
@@ -2861,7 +2910,7 @@ function registerIpcHandlers() {
     const { store, configuration, client } = await ownedProjectMemory(input.projectId)
     await client.invalidateMemory(configuration.bankId, input.memoryId, 'deleted by the user in DevFlow')
     await store.markProjectMemoryChanged(input.projectId, input.memoryId)
-    await emptyKnowledgePages(client, configuration.bankId)
+    await emptyKnowledgePages(store, input.projectId, client, configuration.bankId)
     return projectMemoryStatus(input.projectId)
   })
   ipcMain.handle(ipcChannels.forgetProjectMemorySource, async (_, payload: unknown) => {
@@ -2869,7 +2918,7 @@ function registerIpcHandlers() {
     const { store, configuration, client } = await ownedProjectMemory(input.projectId)
     await store.forgetProjectMemoryDocument(input.projectId, input.documentId)
     // Emptied again once Hindsight has deleted the document (project-memory-service).
-    await emptyKnowledgePages(client, configuration.bankId)
+    await emptyKnowledgePages(store, input.projectId, client, configuration.bankId)
     wakeHindsight()
     return projectMemoryStatus(input.projectId)
   })
@@ -3502,7 +3551,7 @@ function registerIpcHandlers() {
             store, projectId: run.projectId, userId: actor.userId,
             runtimeId: `agent-runtime-stage-${stageRuntimeKey}`,
             requestId: `stage-memory-${codingPromptDigest(`${stageRuntimeKey}\n${recalledAt}`).slice(0, 32)}`,
-            query: [run.request, node.title, node.subtitle].join('\n'),
+            query: [run.request, node.title, node.subtitle].join('\n'), intents: splitRecallIntents(run.request),
             now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
           }).catch(() => {
             console.warn('[stage-agent] Memory recall failed; generating without recalled Memory.')
