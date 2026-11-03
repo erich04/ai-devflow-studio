@@ -4,6 +4,7 @@ import { atomicCodingFile, codingDigest, CodingCandidateWorkspace } from './codi
 import { mutateNativeCodingSession, type NativeCodingSession } from './native-coding-session'
 import type { CodingHarnessCommand, ModelCostRecord } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
+import { removeCodingDependencySeedStores } from './coding-dependency-seed'
 
 const cleanupQueues = new WeakMap<LocalStore, Map<string, Promise<NativeCodingSession>>>()
 /** Same command identity remains a replay even after cleanup advanced the checkpoint. */
@@ -34,7 +35,7 @@ export function codingRetentionPolicy(root: NativeCodingSession, children: Nativ
   const blocked = root.parent || !['completed', 'cancelled', 'failed'].includes(root.status) || root.children.some(child => child.state === 'active' && !children.some(session => session.id === child.sessionId && ['completed', 'cancelled', 'failed'].includes(session.status))) || sessions.some(session => session.writer || session.activity.some(interval => interval.endedAt === undefined))
   if (blocked) return { cleanupAllowed: false, reason: '活跃、待审批或待恢复的任务保留全部资料。' }
   if (sessions.flatMap(session => session.attempts).filter(attempt => attempt.status !== 'not_sent').some(attempt => attempt.status !== 'completed' || !ledger?.some(row => row.sourceKind === 'model_call' && row.sourceId === attempt.id && row.status === 'settled' && row.usageKnown && row.costUsd !== null))) return { cleanupAllowed: false, reason: '存在用量未知或费用未确认的调用，暂不清理工作副本。' }
-  return { cleanupAllowed: true, reason: '仅清理候选与验证工作副本及其依赖。保留文件内容、修订、对话、命令日志和事务证据；终态任务不能继续执行。' }
+  return { cleanupAllowed: true, reason: '仅清理候选与验证工作副本、安装依赖和可重建的依赖缓存。保留文件内容、修订、对话、命令日志、缓存来源和事务证据；终态任务不能继续执行。' }
 }
 
 /** Only host-owned, terminal scratch directories are removed; evidence and D are retained. */
@@ -59,5 +60,6 @@ export async function cleanupCodingScratch(root: NativeCodingSession, children: 
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unexpected scratch directory type')
       await rm(directory, { recursive: true, force: true })
     }
+    await removeCodingDependencySeedStores(workspace)
   }
 }

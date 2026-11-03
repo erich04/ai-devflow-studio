@@ -105,3 +105,23 @@ export async function restoreCodingDependencySeed(input: SeedInput) {
     return { status: 'restored' as const, manifestDigest: seed.manifest.digest }
   } catch (error) { await rm(destination, { recursive: true, force: true }); throw error }
 }
+
+/** Terminal cleanup retains the seed provenance, removing only rebuildable bytes.
+ * The caller must first enforce session, active-writer and settled-cost checks. */
+export async function removeCodingDependencySeedStores(workspace: CodingCandidateWorkspace): Promise<void> {
+  const parent = path.dirname(await codingFilePath(workspace.root, 'dependency-seeds/.path-check'))
+  const entries = await readdir(parent, { withFileTypes: true }).catch(error => { if (missing(error)) return []; throw error })
+  for (const entry of entries) {
+    if (!/^[a-f0-9]{64}$/u.test(entry.name)) continue
+    if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('Unsafe dependency seed directory')
+    const manifestFile = await codingFilePath(workspace.root, `dependency-seeds/${entry.name}/manifest.json`)
+    const saved = JSON.parse(await readFile(manifestFile, 'utf8'))
+    if (saved.key !== entry.name || saved.identity?.version !== 1 || saved.identity.baselineDigest !== workspace.identity.base.digest ||
+        codingDigest(JSON.stringify(saved.identity)) !== entry.name || saved.capturedBeforePrivateChecks !== true) throw new Error('Invalid dependency seed cleanup identity')
+    const store = path.join(parent, entry.name, 'store')
+    const stat = await lstat(store).catch(error => { if (missing(error)) return undefined; throw error })
+    if (!stat) continue
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe dependency seed store')
+    await rm(store, { recursive: true, force: true })
+  }
+}
