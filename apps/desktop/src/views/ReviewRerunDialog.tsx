@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { spaceAfterVersion } from '../app/version-spacing'
 
 /**
  * Confirms another paid Gate Review when the step already has one. It names what this review covers
@@ -62,7 +63,7 @@ export function ReviewRerunDialog({ target, context, provider, reviewedAt, revie
         <p>本次 Provider：{provider}</p>
         <p id="review-rerun-impact">{appliesToCurrent
           ? '继续会再次调用 Provider，新增审查记录和 token 用量，并可能产生 Provider 费用。上次结果会保留在历史记录中。'
-          : `继续会调用 Provider 审查${target}，新增审查记录和 token 用量，并可能产生 Provider 费用。${previous}的审查结果保留在历史记录中，不作为${target}的结果。`}
+          : `继续会调用 Provider 审查${target}，新增审查记录和 token 用量，并可能产生 Provider 费用。${spaceAfterVersion(previous)}的审查结果保留在历史记录中，不作为${spaceAfterVersion(target)}的结果。`}
         </p>
         <div className="modal-actions">
           <button ref={cancelRef} className="ghost-button" onClick={onCancel}>取消</button>

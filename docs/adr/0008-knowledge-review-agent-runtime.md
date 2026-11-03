@@ -69,3 +69,6 @@ Electron 本地审查完整保存在 SQLite。团队 API 可用时，Electron �
 - 后续强制执行可以将 Gate 策略从仅警告改为可配置阻断，无需改变审查持久化。
 - 首个 Agent 刻意保持较窄范围；多 Agent 交接、真实 MCP 执行、向量 RAG 和自动修复不属于本次决策范围。
 - ADR 0009 更新编码 Agent 边界：v0.6 可以通过受管适配器承载外部 opencode 引擎，而非自行构建编码 Agent。
+<a id="finding-importance-2026-10-30-ux-batch-1"></a>
+## 意见级别（2026-10-30，UX batch 1）
+需求与方案审查的每条意见可带可选的 `importance`（重要 / 建议），只用于显示，策略不读取；一次审查里只要有一条缺少级别，就整体不显示级别。

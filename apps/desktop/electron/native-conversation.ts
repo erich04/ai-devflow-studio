@@ -15,7 +15,8 @@ type Host = {
   signal: AbortSignal
   read(): Promise<WorkbenchConversation>
   update: SessionUpdate
-  context(): Promise<Record<string, unknown>>
+  /** `compact` omits optional per-turn facts (material versions) for an overflow rebuild. */
+  context(options?: { compact?: boolean }): Promise<Record<string, unknown>>
   memory?(): Promise<unknown>
   pauseInvestigation?(): Promise<void>
   beforeModelRequest?(request: NativeConversationRequest, callId: string, memoryIncluded: boolean): Promise<void>
@@ -246,7 +247,7 @@ export async function runNativeConversation(host: Host): Promise<void> {
         validateNativeHistory(request.messages)
         const coveredIds = session.messages.filter(m => m.role === 'user' || m.role === 'assistant').map(m => m.id)
         const compaction = buildRollingSummary(session, coveredIds, now())
-        const boundary: NativeToolMessage = { role: 'user', content: JSON.stringify({ userRequest, ...await host.context(), rollingSummary: compaction?.summary, ...(checkpoint.criticalProposalInput ? { criticalProposalInput: checkpoint.criticalProposalInput } : {}) }) }
+        const boundary: NativeToolMessage = { role: 'user', content: JSON.stringify({ userRequest, ...await host.context({ compact: true }), rollingSummary: compaction?.summary, ...(checkpoint.criticalProposalInput ? { criticalProposalInput: checkpoint.criticalProposalInput } : {}) }) }
         request = { ...request, messages: [boundary] }
         budget = nativeRequestBudget(provider, request)
         if (!budget.overflow) {

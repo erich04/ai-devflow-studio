@@ -27,7 +27,9 @@ export async function commitDesignRevision(input: {
   const events = await store.listEvents(run.id)
   const event: AgentEvent = { id: `event-${generated.artifact.id}`, runId: run.id, nodeId: gateNodeId,
     sequence: Math.max(0, ...events.map((item) => item.sequence)) + 1, kind: 'thinking',
-    message: `${input.actor.userName} 根据旧方案与 ${resolved.proposals.length} 份已保存提案生成新版方案；仍待方案评审。Source: ${generated.source} · ${generated.providerId} · ${generated.model}.`,
+    message: `${input.actor.userName} ${resolved.changeRequest === undefined
+      ? `根据旧方案与 ${resolved.proposals.length} 份已保存提案生成新版方案；仍待方案评审。`
+      : `根据旧方案、修订清单与 ${resolved.proposals.length} 份已保存提案生成新版方案；仍待方案评审。`}Source: ${generated.source} · ${generated.providerId} · ${generated.model}.`,
     timestamp: generated.artifact.updatedAt }
   // Cancellation stays effective until this point. Sealing prevents cancellation halfway through a commit.
   input.beforeCommit?.()

@@ -3,11 +3,12 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, measurePromptSections, runWorkflowStageAgent, type AgentProvider, type DesktopPairingCredential, type GitHubDeliveryIntent, type LocalProject } from '@ai-devflow/shared'
+import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, measurePromptSections, resolveRequestPolicy, runWorkflowStageAgent, type AgentProvider, type DesktopPairingCredential, type GitHubDeliveryIntent, type LocalProject } from '@ai-devflow/shared'
 import { codingPromptDigest, registerProjectMemoryRecall, type CodingMemoryStore } from './coding-context'
 import { projectMemoryIdentity, type ProjectMemoryRecallItem, type ProjectMemoryRecallPort } from './project-memory-recall'
 import { createLocalStore, type LocalStore } from './local-store'
-import { degradeOlderObservations, WorkbenchConversationService } from './workbench-conversation-service'
+import { degradeOlderObservations, packConversationContext, WorkbenchConversationService } from './workbench-conversation-service'
+import { buildRequirementContext } from './workbench-requirement-context'
 import { parseConversationCommand } from './workbench-conversation-contract'
 import { readWorkbenchRepository } from './workbench-repository'
 import { ConversationExecutorError } from './conversation-executor'
@@ -1731,4 +1732,120 @@ it('does not classify a host storage read failure during action validation as re
   expect(result.failure?.code).toBe('ConversationPersistenceError')
   expect(result.error).not.toContain('private diagnostic')
   expect(result.messages.some(m=>m.role==='assistant')).toBe(false)
+})
+
+describe('display text and per-turn material versions (FR-13.2, FR-13.6)', () => {
+  const clarifyNode = created.run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent')!
+  const saveRequirement = (runId: string) => store.saveArtifact({ id: `${runId}-clarification`, runId, nodeId: clarifyNode.id, kind: 'clarification', title: '需求澄清结果', summary: '澄清', content: '# 需求', redacted: true, updatedAt: '2026-09-16T10:05:00.000Z' })
+  const reference = '【引用材料】\n- 需求澄清结果（需求 v1）\n意见：缺少验收口径\n【以上为引用材料】'
+
+  it('stores the typed text as display, takes the title from it and still sends the reference to the model (AC43)', async () => {
+    const { service, calls } = harness(async () => ({ value: { text: '已回答。' } }))
+    const id = await create(service)
+    const typed = '这个意见要怎么改？'
+    const result = await send(service, id, `${reference}\n\n${typed}`, { display: { text: typed, references: ['需求 v1 · 意见 2 · 重要'] } })
+    expect(result.status, result.error).toBe('idle')
+    const user = result.messages.find((message) => message.role === 'user')!
+    expect(user.display).toEqual({ text: typed, references: ['需求 v1 · 意见 2 · 重要'] })
+    expect(user.text).toBe(`${reference}\n\n${typed}`)
+    expect(result.title).toBe(typed)
+    expect(JSON.parse(calls[0]!).currentRequest.text).toContain('【引用材料】')
+    expect(JSON.parse(calls[0]!).currentRequest.text).toContain('意见：缺少验收口径')
+  })
+
+  it('rejects a display text that is not the end of the sent text', async () => {
+    const { service, calls } = harness(async () => ({ value: { text: '不应调用' } }))
+    const id = await create(service)
+    await expect(service.command({ type: 'send', projectId, conversationId: id, providerId: 'test', text: `${reference}\n\n真正发送的内容`, display: { text: '别的内容', references: [] } })).rejects.toThrow('会话输入过长或格式不正确。')
+    expect(calls).toHaveLength(0)
+    const session = (await store.listWorkbenchConversations(projectId)).find((item) => item.id === id)!
+    expect(session.messages).toHaveLength(0)
+    expect(() => parseConversationCommand({ type: 'send', projectId, conversationId: id, providerId: 'x', text: 'x', display: { text: 'x', references: ['r'.repeat(121)] } })).toThrow('会话输入过长或格式不正确。')
+    expect(() => parseConversationCommand({ type: 'send', projectId, conversationId: id, providerId: 'x', text: 'x', display: { text: ' ', references: [] } })).toThrow('会话输入过长或格式不正确。')
+    expect(() => parseConversationCommand({ type: 'send', projectId, conversationId: id, providerId: 'x', text: 'x', display: { text: 'x', references: ['a', 'b', 'c', 'd'] } })).toThrow('会话输入过长或格式不正确。')
+    expect(() => parseConversationCommand({ type: 'send', projectId, conversationId: id, providerId: 'x', text: 'x', display: { text: 'x', references: [], extra: 1 } })).toThrow('会话输入过长或格式不正确。')
+    expect(() => parseConversationCommand({ type: 'send', projectId, conversationId: id, providerId: 'x', text: 'x', display: { text: 'x\0', references: [] } })).toThrow('会话输入过长或格式不正确。')
+    expect(() => parseConversationCommand({ type: 'update', projectId, conversationId: id, display: { text: 'x', references: [] } })).toThrow()
+    expect(parseConversationCommand({ type: 'send', projectId, conversationId: id, providerId: 'x', text: 'x', display: { text: 'x', references: ['r'.repeat(120)] } })).toMatchObject({ display: { text: 'x' } })
+  })
+
+  it('carries material versions in the per-step tail of a legacy turn (AC47)', async () => {
+    await saveRequirement(created.run.id)
+    const { service, calls } = harness(async () => ({ value: { text: '需求现在是 v1。' } }))
+    const result = await send(service, await create(service), '需求现在是第几版？')
+    expect(result.status, result.error).toBe('idle')
+    const context = JSON.parse(calls[0]!)
+    expect(context.latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' } }])
+    const keys = Object.keys(context)
+    expect(keys.indexOf('latestWorkflow')).toBeGreaterThan(keys.indexOf('toolObservations'))
+  })
+
+  it('keeps material versions after a 30-run overview over 6,000 characters is reduced', async () => {
+    for (let index = 0; index < 29; index++) {
+      const other = createWorkflowRunFromRequest({ runId: `material-run-${index}`, title: `并行任务 ${index} ${'很长的标题'.repeat(10)}`, request: '另一条真实流程', projectId, creatorId: 'u-test', branchName: `ai/material-${index}`, now: `2026-09-16T11:${String(index).padStart(2, '0')}:00.000Z` })
+      await store.saveRun(other.run)
+    }
+    const { service, calls } = harness(async () => ({ value: { text: '已回答。' } }))
+    const result = await send(service, await create(service), '各任务的需求版本？')
+    expect(result.status, result.error).toBe('idle')
+    const workflow = JSON.parse(calls[0]!).latestWorkflow
+    expect(workflow.totalRuns).toBe(30)
+    expect(workflow.contextSummaryOnly).toBe(true)
+    expect(workflow.runs.length).toBeLessThan(30)
+    expect(workflow.materials).toHaveLength(10)
+    expect(workflow.materials[0].runId).toBe('material-run-28')
+    expect(JSON.stringify(workflow).length).toBeLessThanOrEqual(6000)
+  })
+
+  it('removes material versions after every run summary and before shortening the requirements', () => {
+    const run = { ...created.run, request: '原始需求正文。'.repeat(200) }
+    const requirements = [buildRequirementContext(run, [])]
+    const materials = Array.from({ length: 10 }, (_, index) => ({ runId: `run-${index}`, requirement: { version: 2, status: 'current' }, design: { version: 1, gateStatus: 'pending' } }))
+    const facts = { observedAt: '2026-09-16T10:00:00.000Z', totalRuns: 3, runs: [0, 1, 2].map((index) => ({ id: `run-${index}`, title: `任务 ${index}`, status: 'running', version: 1, currentNodeId: 'n', updatedAt: '2026-09-16T10:00:00.000Z' })), materials }
+    const session = { id: 's', localProjectId: projectId, version: 1, title: '新对话', isOpen: true, inputDraft: '', status: 'running' as const, createdAt: created.run.createdAt, updatedAt: created.run.createdAt, messages: [{ id: 'u', role: 'user' as const, text: '版本？', createdAt: created.run.createdAt }] }
+    const pack = (maxInputBytes: number) => {
+      try {
+        return packConversationContext({ session, history: session.messages, facts, observations: [], remainingSteps: 3, requirements, systemPrompt: 'system', provider: { id: 'fake', model: 'fake', resolveRequestPolicy: () => ({ ...resolveRequestPolicy({ model: 'fixture' }), maxInputBytes, contextTokens: 10_000_000, maxOutputTokens: 1000 }) } })
+      } catch { return undefined }
+    }
+    const sent = (maxInputBytes: number) => { const packed = pack(maxInputBytes); return packed && JSON.parse(packed.prompt) as { latestWorkflow: { runs: unknown[]; materials?: unknown[] }; originalRequirements: Array<{ truncated?: boolean; content: string }> } }
+    expect(sent(1_000_000)?.latestWorkflow.materials).toHaveLength(10)
+    let low = 1_000, high = 1_000_000
+    while (high - low > 1) { const middle = Math.floor((low + high) / 2); if (sent(middle)?.latestWorkflow.materials) high = middle; else low = middle }
+    // The smallest limit that still carries the material versions already has no run summary left.
+    expect(sent(high)!.latestWorkflow.runs).toEqual([])
+    expect(sent(high)!.originalRequirements[0]!.content).toBe(requirements[0]!.content)
+    // One byte less: the material versions go, while the requirements are still complete.
+    const below = sent(low)!
+    expect(below.latestWorkflow.materials).toBeUndefined()
+    expect(below.latestWorkflow.runs).toEqual([])
+    expect(below.originalRequirements[0]!.content).toBe(requirements[0]!.content)
+  })
+
+  it('completes a turn when one run’s artifacts cannot be read, without that run in the material versions', async () => {
+    const other = createWorkflowRunFromRequest({ runId: 'unreadable-run', title: '读取失败的任务', request: '另一条流程', projectId, creatorId: 'u-test', branchName: 'ai/unreadable', now: '2026-09-16T12:00:00.000Z' })
+    await store.saveRun(other.run)
+    await saveRequirement(created.run.id)
+    const failing = new Proxy(store, { get(target, key) {
+      if (key !== 'listArtifacts') return Reflect.get(target, key)
+      return async (runId: string) => { if (runId === 'unreadable-run') throw new Error('SQLITE_IOERR'); return target.listArtifacts(runId) }
+    } })
+    const { service, calls } = harness(async () => ({ value: { text: '已回答。' } }), true, { store: failing })
+    const result = await send(service, await create(service), '两个任务的版本？')
+    expect(result.status, result.error).toBe('idle')
+    expect(result.failure).toBeUndefined()
+    expect(JSON.parse(calls[0]!).latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' } }])
+  })
+
+  it('leaves the workflow tool output without material versions and in today’s shape', async () => {
+    await saveRequirement(created.run.id)
+    let step = 0
+    const { service, calls } = harness(async () => ({ value: step++ === 0 ? { tool: { name: 'workflow', args: {} } } : { text: '已查询流程。' } }))
+    const result = await send(service, await create(service))
+    expect(result.status, result.error).toBe('idle')
+    const observed = JSON.parse(calls[1]!).toolObservations[0].result
+    expect(Object.keys(observed)).toEqual(['observedAt', 'totalRuns', 'offset', 'nextOffset', 'truncated', 'runs'])
+    expect(JSON.stringify(observed)).not.toContain('materials')
+    expect(JSON.parse(calls[1]!).latestWorkflow.materials).toHaveLength(1)
+  })
 })

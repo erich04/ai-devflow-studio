@@ -391,6 +391,8 @@ export type RequestClarificationChangesInput = ClarificationRevisionIdentity & {
   runId: string
   nodeId: string
   reason: string
+  /** Exact saved proposals of the revision list; [] means none. */
+  proposals?: DesignRevisionIdentity[]
 }
 
 export type RequestClarificationChangesResult = {
@@ -1536,6 +1538,13 @@ export function parseCancelWorkflowAgentNodeInput(value: unknown): { runId: stri
   }
 }
 
+function readDesignInputIdentity(item: unknown): DesignRevisionIdentity {
+  if (!isRecord(item)) throw new Error('Invalid design input identity')
+  rejectUnexpectedFields(item, ['artifactId', 'updatedAt', 'contentDigest'], 'design input identity')
+  return { artifactId: readExactRequiredIdentifier(item, 'artifactId'), updatedAt: readExactTimestamp(item, 'updatedAt'),
+    contentDigest: readExactRequiredDigest(item, 'contentDigest') }
+}
+
 export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWorkflowAgentNodeInput {
   if (!isRecord(value)) {
     throw new Error('Invalid complete workflow agent node payload')
@@ -1548,20 +1557,21 @@ export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWor
   let designRevision: DesignRevisionRequest | undefined
   if (revision !== undefined) {
     if (!isRecord(revision)) throw new Error('Invalid design revision')
-    rejectUnexpectedFields(revision, ['expectedRunVersion', 'previous', 'proposals'], 'design revision')
-    const identity = (item: unknown): DesignRevisionIdentity => {
-      if (!isRecord(item)) throw new Error('Invalid design input identity')
-      rejectUnexpectedFields(item, ['artifactId', 'updatedAt', 'contentDigest'], 'design input identity')
-      return { artifactId: readExactRequiredIdentifier(item, 'artifactId'), updatedAt: readExactTimestamp(item, 'updatedAt'),
-        contentDigest: readExactRequiredDigest(item, 'contentDigest') }
+    rejectUnexpectedFields(revision, ['expectedRunVersion', 'previous', 'proposals', 'changeRequest'], 'design revision')
+    const changeRequest = revision['changeRequest']
+    if (changeRequest !== undefined && (typeof changeRequest !== 'string' || changeRequest.includes('\u0000') ||
+      !changeRequest.trim() || changeRequest.trim().length > 4000)) {
+      throw new Error('Invalid design revision')
     }
-    if (!Array.isArray(revision['proposals']) || revision['proposals'].length < 1 || revision['proposals'].length > 20) {
+    if (!Array.isArray(revision['proposals']) || revision['proposals'].length < (changeRequest === undefined ? 1 : 0) ||
+      revision['proposals'].length > 20) {
       throw new Error('Invalid design proposal selection')
     }
-    const proposals = revision['proposals'].map(identity)
+    const proposals = revision['proposals'].map(readDesignInputIdentity)
     if (new Set(proposals.map((item) => item.artifactId)).size !== proposals.length) throw new Error('Duplicate design proposal')
     designRevision = { expectedRunVersion: readExactPositiveVersion(revision, 'expectedRunVersion'),
-      previous: identity(revision['previous']), proposals }
+      previous: readDesignInputIdentity(revision['previous']), proposals,
+      ...(changeRequest === undefined ? {} : { changeRequest }) }
   }
 
   return {
@@ -1583,9 +1593,22 @@ export function parseRequestClarificationChangesInput(value: unknown): RequestCl
   if (!isRecord(value)) throw new Error('Invalid request clarification changes payload')
   rejectUnexpectedFields(
     value,
-    ['runId', 'nodeId', 'artifactId', 'revision', 'revisionDigest', 'reason'],
+    ['runId', 'nodeId', 'artifactId', 'revision', 'revisionDigest', 'reason', 'proposals'],
     'request clarification changes payload',
   )
+  let proposals: DesignRevisionIdentity[] | undefined
+  if (value['proposals'] !== undefined) {
+    const raw = value['proposals']
+    if (!Array.isArray(raw) || raw.length > 20) throw new Error('Invalid clarification proposal selection')
+    try {
+      proposals = raw.map(readDesignInputIdentity)
+    } catch {
+      throw new Error('Invalid clarification proposal selection')
+    }
+    if (new Set(proposals.map((item) => item.artifactId)).size !== proposals.length) {
+      throw new Error('Invalid clarification proposal selection')
+    }
+  }
   return {
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
@@ -1593,6 +1616,7 @@ export function parseRequestClarificationChangesInput(value: unknown): RequestCl
     revision: readExactPositiveVersion(value, 'revision'),
     revisionDigest: readExactRequiredDigest(value, 'revisionDigest'),
     reason: readRequiredString(value, 'reason'),
+    ...(proposals ? { proposals } : {}),
   }
 }
 

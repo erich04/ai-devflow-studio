@@ -120,6 +120,35 @@ it('does not start another native recovery when the whole-question recovery allo
   expect(h.read().checkpoint?.investigation?.stopReason).toBe('recovery_limit')
 })
 
+it('writes the material versions into the per-turn user message (FR-13.6)', async () => {
+  const h = setup(async () => answer('需求是 v1。'))
+  const id = await create(h.service)
+  const result = await send(h.service, id, '需求现在是第几版？')
+  expect(result.status, result.error).toBe('idle')
+  const turn = result.nativeTranscript!.find(entry => entry.message.role === 'user')!
+  const workflow = JSON.parse(turn.message.content!).latestWorkflow
+  expect(workflow.materials).toEqual([expect.objectContaining({ runId: fixture.run.id })])
+  expect(workflow.runs[0]).toMatchObject({ id: fixture.run.id })
+})
+
+it('rebuilds an overflowing native boundary with the compact context, without material versions', async () => {
+  const h = isolatedNative(async input => {
+    expect(JSON.stringify(input.messages)).not.toContain('OLD_RAW_TEXT')
+    expect(JSON.parse(input.messages[0]!.content!)).toMatchObject({ userRequest: '只读调查', latestWorkflow: { runs: [] }, rollingSummary: expect.any(Object) })
+    expect(input.messages[0]!.content).not.toContain('materials')
+    return answer('完成')
+  }, { maxInputBytes: 14000 })
+  const context = vi.fn(async (options?: { compact?: boolean }) => ({ latestWorkflow: options?.compact ? { runs: [] } : { runs: [], materials: [{ runId: 'native-run' }] } }))
+  h.host.context = context
+  await h.host.update(current => ({ ...current, nativeTranscript: [{ turnId: 'old', message: { role: 'user', content: 'OLD_RAW_TEXT'.repeat(5000) } }] }))
+  await runNativeConversation(h.host)
+  expect(h.read().status).toBe('idle')
+  expect(h.read().nativeContextStart).toBeGreaterThan(0)
+  expect(context).toHaveBeenCalledWith({ compact: true })
+  // The turn's own user message was written with the full context first.
+  expect(h.read().nativeTranscript!.some(entry => entry.turnId === 'user' && entry.message.content?.includes('"materials"'))).toBe(true)
+})
+
 it('keeps Memory omitted in the receipt when history compaction is also needed after dropping it', async () => {
   const h = isolatedNative(async input => {
     expect(JSON.stringify(input.messages)).not.toContain('MEMORY_OVERFLOW')

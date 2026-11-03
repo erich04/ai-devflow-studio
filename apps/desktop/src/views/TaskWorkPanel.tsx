@@ -14,6 +14,7 @@ import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action
 import type { CodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
 import { formatLocalTime } from '../app/desktop-view-model'
 import type { TestRunReadiness } from '../app/test-run-readiness'
+import { spaceAfterVersion } from '../app/version-spacing'
 import { CodingChangeSetReview, commandRiskLabels } from './CodingChangeSetReview'
 import type { GateReviewScope } from '../app/gate-review-scope'
 
@@ -137,7 +138,7 @@ export function GateReviewRunPanel({
           <details><summary>诊断详情</summary><code>{failure}</code></details>
         </div>
       ) : latestReview && outdated ? (
-        <p data-testid="review-outdated">上次审查针对{reviewScope?.reviewedLabel ?? '之前的版本'}，当前版本已更新（{formatLocalTime(latestReview.createdAt)} · {latestReview.model}）。结果保留在历史中，不作为{currentLabel}的审查结果。</p>
+        <p data-testid="review-outdated">上次审查针对{reviewScope?.reviewedLabel ?? '之前的版本'}，当前版本已更新（{formatLocalTime(latestReview.createdAt)} · {latestReview.model}）。结果保留在历史中，不作为{spaceAfterVersion(currentLabel)}的审查结果。</p>
       ) : latestReview ? (
         <p>上次审查：{formatLocalTime(latestReview.createdAt)} · {latestReview.model}。内容变化后可以重新审查，旧结果保留在历史中。</p>
       ) : null}

@@ -151,6 +151,8 @@ export type RequestClarificationChangesInput = ClarificationRevisionIdentity & {
   runId: string
   nodeId: string
   reason: string
+  /** Exact saved proposals of the revision list; [] means none. */
+  proposals?: DesignRevisionIdentity[]
 }
 
 export type RequestClarificationChangesResult = {

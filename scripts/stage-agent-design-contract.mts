@@ -46,7 +46,8 @@ const server = createServer((request, response) => {
       assumptions: [], openQuestions: [], uncheckedScopes: ['Browser presentation'] },
     }
     if (prompt.includes('PREVIOUS_DESIGN_FULL_TEXT')) {
-      assert(prompt.includes('DESIGN_PROPOSAL_MARKER'), 'Revision omitted the selected proposal')
+      // The gate page revises from its revision list (UX batch 1); the Electron step adds one own item.
+      assert(prompt.includes('DESIGN_CHANGE_LIST_MARKER'), 'Revision omitted the revision list')
       assert(prompt.includes('## Delivery and rollback'), 'Revision omitted the full previous design')
       design.title = 'Revised task filter design'
       design.content += '\n## Selected amendment\nPreserve the original scope; no counts. Run npm test before and after editing.'

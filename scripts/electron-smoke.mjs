@@ -579,11 +579,48 @@ async function runKnowledgeReviewViaDesktopApi(
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
 }
 
-/** Runs the Gate Review from the task status row and verifies the persisted, trusted record (W2). */
+/**
+ * The gate page layout in Electron itself (design §3.13, §11): with the 答疑 panel open the
+ * mode follows the measured width; repeated with an injected 15 px classic scrollbar. Logs both widths.
+ */
+async function checkGateLayout(page) {
+  const toggle = page.locator('button.discussion-toggle')
+  const wasOpen = await toggle.getAttribute('aria-expanded') === 'true'
+  if (!wasOpen) await toggle.click()
+  await expect(page.locator('#workbench-discussion')).toBeVisible()
+  const workspace = page.locator('.gate-workspace')
+  const measure = async (label) => {
+    let reading
+    await expect.poll(async () => {
+      reading = await page.evaluate(() => ({
+        content: document.documentElement.clientWidth,
+        width: document.querySelector('.gate-workspace')?.getBoundingClientRect().width ?? 0,
+        layout: document.querySelector('.gate-workspace')?.getAttribute('data-layout'),
+      }))
+      return reading.layout === (reading.width >= 772 ? 'wide' : 'narrow')
+    }, { timeout: 10_000 }).toBe(true)
+    console.log(`Gate page layout (${label}): window content ${reading.content} px, .gate-workspace ${Math.round(reading.width * 100) / 100} px, ${reading.layout}.`)
+    if (reading.content >= 1440) {
+      expect(reading.width).toBeGreaterThanOrEqual(776)
+      expect(reading.layout).toBe('wide')
+    }
+    return reading
+  }
+  await expect(workspace).toBeVisible()
+  const native = await measure('default scrollbars')
+  const style = await page.addStyleTag({ content: '::-webkit-scrollbar { width: 15px; height: 15px; } ::-webkit-scrollbar-thumb { background: rgba(0,0,0,.35); } ::-webkit-scrollbar-track { background: transparent; }' })
+  const classic = await measure('injected 15 px scrollbars')
+  await style.evaluate((element) => element.remove())
+  if (!wasOpen) await toggle.click()
+  return { native, classic }
+}
+
+/** Runs the design Gate Review from the decision bar and verifies the persisted, trusted record (W2, design §3.21). */
 async function runKnowledgeReviewInTask(page, { runId, nodeId, nodeTitle }) {
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
-  const statusRow = page.getByTestId('node-inspector').getByTestId('task-status-row')
-  const runReview = statusRow.getByRole('button', { name: '审查当前方案', exact: true })
+  const bar = page.getByTestId('node-inspector').getByTestId('gate-decision-bar')
+  await expect(bar).toContainText('方案 v1 · 你的决定', { timeout: 20_000 })
+  const runReview = page.getByTestId('gate-decision-bar').getByRole('button', { name: '审查方案 v1', exact: true })
   await expect(runReview).toBeEnabled({ timeout: 20_000 })
   await runReview.click()
   await expect(page.getByTestId('toast')).toContainText('门禁审查已完成', { timeout: 30_000 })
@@ -1221,6 +1258,9 @@ try {
   await expect(first.page.getByTestId('settings-view')).toHaveCount(0)
   await selectWorkflowNode(first.page, `flow-node-${localNodes.clarifyGate.id}`, localNodes.clarifyGate.title)
   await expect(first.page.getByTestId('node-inspector')).toContainText('基于知识的门禁审查已生成审查意见')
+  // The clarify Gate is the requirement decision page (UX batch 1, design §3.2).
+  await expect(first.page.getByTestId('gate-decision-bar')).toContainText('需求 v1 · 你的决定', { timeout: 20_000 })
+  await checkGateLayout(first.page)
   const clarifyGateDecision = await first.page.evaluate(async ({ runId, nodeId, projectId }) => {
     return window.aiDevFlowDesktop.evaluateGateEnforcement({
       runId,
