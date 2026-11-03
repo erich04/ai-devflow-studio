@@ -8,6 +8,7 @@ import { mutateNativeCodingSession } from './native-coding-session'
 import { createLocalStore } from './local-store'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
 import { inspectCodingInput } from './coding-input'
+import { runtimeStateKey, runtimeStateMarker } from './native-coding-context'
 
 const fixtures: Awaited<ReturnType<typeof codingHarnessFixture>>[] = []
 afterEach(async () => { for (const fixture of fixtures.splice(0)) { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) } })
@@ -56,6 +57,12 @@ it('freezes checks before implementation, hides them, and stops after two automa
   expect(stopped.snapshot.pauseReason).toBe('independent_verification_repair_limit')
   expect(stopped.completion).toBeUndefined()
   expect(proposals).toBe(3)
+  const remaining = model.mock.calls.filter(([request]) => request.nativeOperation?.purpose !== 'coding-acceptance-plan').map(([request]) => {
+    const content = request.messages.at(-1)!.content!
+    const state = content.includes(runtimeStateMarker) ? JSON.parse(content.split(runtimeStateMarker).at(-1)!) : JSON.parse(content)[runtimeStateKey]
+    return state.acceptanceSchedule.repairRoundsRemaining
+  })
+  expect(remaining).toEqual([2, 2, 1])
   expect(model.mock.calls.filter(([request]) => request.nativeOperation?.purpose === 'coding-acceptance-plan')).toHaveLength(1)
   expect(model.mock.calls.filter(([request]) => request.nativeOperation?.purpose !== 'coding-acceptance-plan').every(([request]) => !JSON.stringify(request).includes(privateBody))).toBe(true)
   await expect(mutateNativeCodingSession(fixture.store, 'native-coding', draft => { draft.independentVerification!.plans[0]!.checks[0]!.body = 'check(true)' })).rejects.toThrow()
