@@ -13,7 +13,7 @@ import { isolatedOpencodeProfileEnv } from '../apps/desktop/electron/opencode-pr
 import { createGovernedOpencodeProxy } from '../apps/desktop/electron/governed-opencode-proxy.ts'
 import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.ts'
 import { createWorkflowRuntime } from '../apps/desktop/electron/workflow-runtime.ts'
-import { createEvaluationLedger, evaluationUsage, saveJson, digest } from './native-coding-live-support.ts'
+import { createEvaluationLedger, evaluationUsage, saveJson, digest, configureEvaluationHarnessLimits } from './native-coding-live-support.ts'
 import { historicalPrefixSystem, legacyPrefixRequest } from './native-coding-cache-probe.ts'
 import { handleEvaluationChildControls } from './native-coding-live-operator.ts'
 import { parseCodingCommandRules, type CodingCommandRule, type CodingPermissionMode } from '../packages/shared/src/index.ts'
@@ -114,6 +114,8 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   try {
     const started = await coding.runCodingAgent({ runId: run.id, nodeId: run.currentNodeId, projectId, requestedBy: run.creatorId, userInstruction: input.prompt }); codingRunId = started.codingRun.id
     if (native) {
+      const limits = await configureEvaluationHarnessLimits(store, codingRunId, input)
+      await recordAction({ type: 'frozen_harness_limits', limits, wallDeadline: new Date(start + input.maxActiveMilliseconds).toISOString() })
       const get = (target = codingRunId!) => coding.codingHarnessCommand({ protocolVersion: 2, type: 'get', codingRunId: target })
       const command = async (body: Record<string, unknown>, target = codingRunId!) => { const snapshot = await get(target); const value = { protocolVersion: 2, codingRunId: target, commandId: `operator-${actions.length}`, expectedVersion: snapshot.version, ...body } as CodingHarnessCommand; await recordAction({ command: value }); return coding.codingHarnessCommand(value) }
       await command({ type: 'authorize', ...(input.execution ? { profile: input.execution.profile, network: input.execution.network, permissionMode: input.execution.permissionMode } : { profile: 'trusted_local' }) })
