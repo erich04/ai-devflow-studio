@@ -8,6 +8,7 @@ import type { LocalStore } from './local-store'
 import { mutateNativeCodingSession, type CodingToolReceipt } from './native-coding-session'
 import type { CodingLoopTools } from './native-coding-loop'
 import { codingDependencyPlan } from './coding-dependency-preparation'
+import { restoreCodingDependencySeed } from './coding-dependency-seed'
 import { requireCodingPermission } from './native-coding-permissions'
 import { codingMatchingLines, queryCodingSymbols } from './coding-repository-query'
 import { codingSourceDiagnostics } from './coding-source-diagnostics'
@@ -197,7 +198,8 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       if ((name === 'run_test_plan' || input.planIndex === 0) && ctx.session.binding?.manualValidationPlan) throw new Error('本任务使用事先选择的人工验收；没有自动测试计划。额外命令需要单独授权，其结果不替代人工验收。')
       let plan = commandPlan(name === 'run_test_plan' ? { planIndex: 0 } : input)
       if (name === 'run_test_plan' || input.planIndex === 0) {
-        const dependencies = await codingDependencyPlan(workspace.candidatePath, plan.profile, workspace.identity.base.excludedPaths)
+        const dependencies = await codingDependencyPlan(workspace.candidatePath, plan.profile, workspace.identity.base.excludedPaths, { isolatedStore: ctx.session.binding?.dependencyCacheVersion === 1 })
+        await restoreCodingDependencySeed({ workspace, directory: workspace.candidatePath, plan: dependencies, signal: ctx.signal })
         if (dependencies.plan) plan = { ...plan, preparation: { executable: dependencies.plan.executable, args: dependencies.plan.args, timeoutMs: dependencies.plan.timeoutMs } }
       }
       return host.commands.start(`${host.sessionId}:${ctx.operationId}`, plan, workspace.candidatePath, ctx.signal)
@@ -219,7 +221,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
         const changed = [...observed.files.filter(file => baseline.get(file.path)?.hash !== file.hash || baseline.get(file.path)?.mode !== file.mode), ...workspace.identity.base.files.filter(file => !observed.files.some(current => current.path === file.path))]
         if (changed.some(file => !host.child!.paths.some(scope => file.path === scope || file.path.startsWith(`${scope}/`)))) throw new Error('Child command changed a file outside delegated scope')
       }
-      const dependencies = await codingDependencyPlan(workspace.candidatePath, ctx.session.binding?.profile ?? { kind: 'trusted_local' }, workspace.identity.base.excludedPaths)
+      const dependencies = await codingDependencyPlan(workspace.candidatePath, ctx.session.binding?.profile ?? { kind: 'trusted_local' }, workspace.identity.base.excludedPaths, { isolatedStore: ctx.session.binding?.dependencyCacheVersion === 1 })
       const revision = await workspace.freeze({ id: `changeset-${codingDigest(`${host.sessionId}:${ctx.operationId}`)}`, sessionId: host.sessionId, codingRunId: ctx.session.codingRunId, objectiveVersion: ctx.session.objectiveVersion, policyVersion: host.authority.policyVersion, testPlanDigest: codingDigest(JSON.stringify({ testPlan: ctx.session.binding?.testPlanDigest ?? host.testPlanDigest, dependencies: dependencies.digest })), summary: String(input.summary), now: new Date().toISOString() })
       await change(draft => { if (!draft.revisions.some(item => item.id === revision.id)) draft.revisions.push(revision) })
       return { revisionId: revision.id, digest: revision.digest, summary: revision.summary, fileCount: revision.operations.length }
@@ -317,7 +319,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
           const session = await host.store.getNativeCodingSession(host.sessionId)
           if (name === 'propose_changeset' && session?.children.some(child => child.state === 'active')) throw new Error('Collect, merge or explicitly cancel every child before freezing')
           const profile = session?.binding?.profile ?? host.authority.commands[0]?.profile ?? { kind: 'trusted_local' as const }
-          const dependencies = await codingDependencyPlan(workspace.candidatePath, profile, workspace.identity.base.excludedPaths)
+          const dependencies = await codingDependencyPlan(workspace.candidatePath, profile, workspace.identity.base.excludedPaths, { isolatedStore: session?.binding?.dependencyCacheVersion === 1 })
           if (dependencies.command && session?.binding?.dependencyPlan?.digest !== dependencies.digest) await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'dependencies', value: dependencies, details: `为当前依赖输入准备候选及独立验证目录：\n${dependencies.command}\n输入摘要：${dependencies.inputDigest}\n可能下载依赖并执行安装脚本，使用已选执行方式。` })
           if (name === 'propose_changeset' && !dependencies.frozen) throw new Error('Generate a lockfile in the candidate before freezing final verification')
         }

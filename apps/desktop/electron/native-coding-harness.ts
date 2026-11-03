@@ -24,6 +24,7 @@ import { inspectCodingInput } from './coding-input'
 import { codingSandboxAvailability } from './coding-os-sandbox'
 import { currentIndependentChecks, runIndependentChecks } from './native-coding-independent-verification'
 import { preflightIndependentChecks } from './native-coding-check-preflight'
+import { restoreCodingDependencySeed } from './coding-dependency-seed'
 
 type Core = { loop: NativeCodingLoop; workspace: CodingCandidateWorkspace; commands: CodingCommandRunner }
 const terminal = (session: NativeCodingSession) => ['completed', 'cancelled', 'failed'].includes(session.status)
@@ -160,7 +161,7 @@ function createHarnessService(host: HarnessHost): Harness {
       } }),
       authority })
     const loop = new NativeCodingLoop({ store: host.store, provider: host.provider, tools, verificationWorkspace: workspace, changed: () => { host.changed?.(session.codingRunId); if (session.parent) host.changed?.(session.parent.codingRunId) },
-      preflightIndependentChecks: (plan, operationId, signal) => preflightIndependentChecks({ plan, workspace, runner: commands, profile: binding.profile, operationId, signal }),
+      preflightIndependentChecks: (plan, operationId, signal) => preflightIndependentChecks({ plan, workspace, runner: commands, profile: binding.profile, operationId, signal, ...(binding.dependencyCacheVersion ? { dependencyCacheVersion: binding.dependencyCacheVersion } : {}) }),
       assertAuthority: checkedAuthority,
       reconcileWorkers: () => commands.reconcile(),
       activity: (unitId, active) => activity(`${session.id}:${unitId}`, active),
@@ -383,7 +384,7 @@ function createHarnessService(host: HarnessHost): Harness {
       if (profile.kind === 'os_sandbox' && !(await codingSandboxAvailability()).available) throw new Error('系统沙箱不可用，任务未启动；不会自动回退为本机可信执行。')
       const input = await inspectCodingInput(session.binding!.context.workspace.worktreePath, session.binding!.context.workspace.baseCommitSha!)
       if (input.digest !== session.binding!.input?.digest) throw new Error('Input files changed after the authorization was presented; start a fresh run with the new baseline')
-      const dependencyPlan = await codingDependencyPlan(session.binding!.context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'])
+      const dependencyPlan = await codingDependencyPlan(session.binding!.context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], { isolatedStore: session.binding!.dependencyCacheVersion === 1 })
       if (dependencyPlan.inputDigest !== session.binding!.dependencyPlan?.inputDigest || dependencyPlan.command !== session.binding!.dependencyPlan?.command) throw new Error('Dependency plan changed since execution was presented')
       for (const plan of [shellPlan(session.binding!.context.project.testCommand, profile), dependencyPlan.plan].filter(Boolean)) {
         if (decideCodingCommand({ rules: session.binding!.permissionPolicy?.rules ?? [], mode: 'ask', sandboxed: profile.kind !== 'trusted_local', executable: plan!.executable, args: plan!.args }) === 'deny') throw new Error('Initial test or dependency plan conflicts with a deny rule')
@@ -474,8 +475,9 @@ function createHarnessService(host: HarnessHost): Harness {
           assertAuthority: assertVerification,
           verify: async directory => {
             await mutate(id, draft => { draft.status = 'verifying' })
-            const dependencies = await codingDependencyPlan(directory, session.binding!.profile, revision.base.excludedPaths)
+            const dependencies = await codingDependencyPlan(directory, session.binding!.profile, revision.base.excludedPaths, { isolatedStore: session.binding!.dependencyCacheVersion === 1 })
             if (revision.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlanDigest, dependencies: dependencies.digest }))) throw new Error('Frozen verification plan changed')
+            await restoreCodingDependencySeed({ workspace: core.workspace, directory, plan: dependencies, signal: verificationController.signal })
             await prepareCodingDependencies({ directory, profile: session.binding!.profile, excludedPaths: revision.base.excludedPaths, runner: core.commands, operationId: `${session.id}:verify:${command.commandId}`, plan: dependencies, signal: verificationController.signal, final: true })
             const logId = `${session.id}:verify:${command.commandId}`
             await core.commands.start(logId, session.binding!.testPlan, directory, verificationController.signal)
@@ -524,7 +526,7 @@ function createHarnessService(host: HarnessHost): Harness {
       const session = createNativeCodingSession({ id: sessionId(input.request.id), codingRunId: input.request.id, workflowRunId: context.run.id, nodeId: context.node.id,
         localProjectId: context.project.id, providerId: host.provider.id, model: host.provider.model, objective: context.userInstruction, now: new Date().toISOString() })
       const profile: CodingExecutionProfile = { kind: 'os_sandbox', network: 'none' }, testPlan = shellPlan(context.project.testCommand, profile)
-      session.binding = { permissionPolicy: { version: 1, mode: 'ask', rules: parseCodingCommandRules(host.commandRules ?? []) }, request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage']) }
+      session.binding = { permissionPolicy: { version: 1, mode: 'ask', rules: parseCodingCommandRules(host.commandRules ?? []) }, request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyCacheVersion: 1, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], { isolatedStore: true }) }
       session.binding.input = await inspectCodingInput(context.workspace.worktreePath, context.workspace.baseCommitSha)
       session.binding.independentVerificationRequired = true
       session.binding.independentVerificationVersion = 2

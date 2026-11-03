@@ -2,6 +2,7 @@ import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import { codingDigest, snapshotCodingTree, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { codingDependencyPlan, prepareCodingDependencies } from './coding-dependency-preparation'
+import { captureCodingDependencySeed, restoreCodingDependencySeed } from './coding-dependency-seed'
 import type { CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import { runIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
 
@@ -9,15 +10,18 @@ export type IndependentPreflight = { status: 'valid' | 'invalid' | 'unavailable'
 
 /** Execute only against a fresh B copy, before implementation. Never inspect C,
  * reference patches or external acceptance tests when validating a draft. */
-export async function preflightIndependentChecks(input: { plan: FrozenIndependentChecks; workspace: CodingCandidateWorkspace; runner: CodingCommandRunner; profile: CodingExecutionProfile; operationId: string; signal: AbortSignal }): Promise<IndependentPreflight> {
+export async function preflightIndependentChecks(input: { plan: FrozenIndependentChecks; workspace: CodingCandidateWorkspace; runner: CodingCommandRunner; profile: CodingExecutionProfile; operationId: string; signal: AbortSignal; dependencyCacheVersion?: 1 }): Promise<IndependentPreflight> {
   if (!input.plan.adapter) return { status: 'valid', feedback: 'Legacy node check format; no framework baseline preflight.' }
   const { plan, workspace, runner, profile, signal } = input, base = workspace.identity.base
   const directory = path.join(workspace.root, `preflight-${codingDigest(input.operationId).slice(0, 20)}`)
   signal.throwIfAborted()
   await workspace.materialize(base, directory)
   try {
-    const dependencies = await codingDependencyPlan(directory, profile, base.excludedPaths)
-    await prepareCodingDependencies({ directory, profile, excludedPaths: base.excludedPaths, runner, operationId: input.operationId, plan: dependencies, signal, final: true })
+    const dependencies = await codingDependencyPlan(directory, profile, base.excludedPaths, { isolatedStore: input.dependencyCacheVersion === 1 })
+    await restoreCodingDependencySeed({ workspace, directory, plan: dependencies, signal })
+    const prepared = await prepareCodingDependencies({ directory, profile, excludedPaths: base.excludedPaths, runner, operationId: input.operationId, plan: dependencies, signal, final: true })
+    // Publish only the successful B bootstrap, before loading any private test.
+    if (prepared.logId) await captureCodingDependencySeed({ workspace, directory, plan: dependencies, preparationLogId: prepared.logId, signal })
     let diagnostics = ''
     const result = await runIndependentChecks({ plan, runner, directory, profile, operationId: `${input.operationId}:checks`, signal, onDiagnostics: value => { diagnostics = value } })
     if ((await snapshotCodingTree(directory, base.excludedPaths)).digest !== base.digest) return { status: 'invalid', feedback: 'The generated checks modified existing baseline files. Only host-owned scratch test files are allowed.' }

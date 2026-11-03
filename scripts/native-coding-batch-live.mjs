@@ -55,7 +55,7 @@ export async function removeDisposableDependencies(root) {
   for (const item of await readdir(root, { withFileTypes: true })) {
     if (!item.isDirectory() || item.name === '.git') continue
     const directory = path.join(root, item.name)
-    if (item.name === 'node_modules') await rm(directory, { recursive: true, force: true })
+    if (item.name === 'node_modules' || path.basename(root) === '.cache' && item.name === 'devflow-pnpm-store') await rm(directory, { recursive: true, force: true })
     else await removeDisposableDependencies(directory)
   }
 }
@@ -70,8 +70,16 @@ export async function removeTrialCommandCaches(execution) {
       const directory = path.join(home, cache)
       await rm(directory, { recursive: true, force: true }); removed.push(path.relative(execution, directory))
     }
+    const seeds = path.join(harness, entry.name, 'dependency-seeds')
+    for (const seed of await readdir(seeds, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error })) {
+      if (!seed.isDirectory() || !/^[a-f0-9]{64}$/u.test(seed.name)) continue
+      const saved = JSON.parse(await readFile(path.join(seeds, seed.name, 'manifest.json'), 'utf8'))
+      if (saved.key !== seed.name || saved.identity?.version !== 1 || saved.capturedBeforePrivateChecks !== true) continue
+      const directory = path.join(seeds, seed.name, 'store')
+      await rm(directory, { recursive: true, force: true }); removed.push(path.relative(execution, directory))
+    }
   }
-  await json(path.join(execution, 'disposable-cache-cleanup.json'), { scope: 'Only private command package-manager download stores, after trial and independent checking. Source, receipts, logs and ledgers preserved.', removed }, true)
+  await json(path.join(execution, 'disposable-cache-cleanup.json'), { scope: 'Only private command package-manager stores and host baseline dependency seed data, after trial and independent checking. Seed manifests, source, receipts, logs and ledgers preserved.', removed }, true)
 }
 export function runProcess(command, args, cwd, log, timeoutMs = 300000) {
   return new Promise((resolve, reject) => {
