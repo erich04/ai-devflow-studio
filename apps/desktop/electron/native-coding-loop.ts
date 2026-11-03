@@ -256,6 +256,7 @@ export class NativeCodingLoop {
             session.deliveryEvidence.filter(item => session.revisions.some(revision => revision.objectiveVersion === session.objectiveVersion && revision.digest === item.revisionDigest) && item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length) } : {}),
           objectiveVersion: session.objectiveVersion, role: session.parent?.mode ?? 'root',
           candidateEditingGranted: Boolean(session.binding?.executionGranted && session.parent?.mode !== 'read_only'),
+          ...(session.binding?.testInputPolicyVersion === 1 ? { testInputAuthority: 'Existing baseline tests, fixtures and runner configuration are acceptance inputs. Keep them unchanged and add new tests in new files. A changed existing input needs separate exact-content human authorization before submission; editing code and passing modified tests do not provide that authorization.' } : {}),
           finalVerification: 'Host independently verifies the approved frozen revision; neither a model statement nor human approval alone proves completion.' }
         const planning = needsIndependentChecks(session) ? await independentCheckRequest(session, this.host.verificationWorkspace ?? (() => { throw new Error('Independent verification workspace is required') })()) : undefined
         const requestOptions = { operationKey, budgetAttemptId: attemptId,
