@@ -46,7 +46,7 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
       ...(binding.permissionPolicy ? { permissionPolicy: { mode: binding.permissionPolicy.mode, rules: binding.permissionPolicy.rules, humanPrompts: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source !== 'rule').length, 0), automaticDecisions: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source === 'rule').length, 0) } } : {}),
       ...(binding.independentVerificationRequired && !binding.manualValidationPlan && !session.parent ? { independentVerification: {
         status: independentPlan ? 'frozen' as const : 'preparing' as const, criteriaCount: independentPlan?.criteria.length ?? session.acceptance.length,
-        repairRounds: Math.min(2, objectiveEvidence.filter(item => item.status === 'test_failed' && item.result?.status !== 'cancelled').length),
+        repairRounds: Math.min(2, objectiveEvidence.filter(item => item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length),
         ...(objectiveEvidence.at(-1)?.result?.independentVerification ? { lastResult: objectiveEvidence.at(-1)!.result!.independentVerification!.status } : {}),
       } } : {}),
       ...(session.question ? { question: { id: session.question.id, text: session.question.text, options: session.question.options } } : {}),

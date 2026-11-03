@@ -164,7 +164,9 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     const events = codingRunId ? await store.listCodingAgentEvents(codingRunId) : []
     const usage = evaluationUsage(ledger.records())
     const report = { id: input.id, engine: input.engine, provider: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', claimedCompleted: current?.status === 'completed', status: session?.status ?? current?.status ?? 'not_started', failure: deadlineExpired ? failure ?? 'evaluation_wall_time_limit' : failure, providerUnavailable, deadlineExpired, durationMs: Date.now() - start, ...usage,
-      codingRun: current, workspace: workspace?.worktreePath, finalSnapshot, metrics: { humanInterventions: actions.filter(action => (action.command as { type?: string })?.type === 'reply').length, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, peakContextTokens: usage.peakContextTokens,
+      codingRun: current, workspace: workspace?.worktreePath, candidateWorkspace: session?.binding ? path.join(session.binding.workspaceRoot, 'candidate') : undefined,
+      workspaceMeaning: { workspace: 'D: managed delivery, restored to B on failed acceptance', candidateWorkspace: 'C: private candidate after the terminal model/tool activity; diagnostic only' },
+      finalSnapshot, metrics: { humanInterventions: actions.filter(action => (action.command as { type?: string })?.type === 'reply').length, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, peakContextTokens: usage.peakContextTokens,
         effectiveInvestigationSteps: session ? session.toolReceipts.filter(row => row.effect === 'read' && row.status === 'completed').length : input.engine === 'native-v2' ? observations.filter(row => row.kind === 'structured').length : null,
         repairAttempts: session ? session.revisions.length - Math.min(1, session.revisions.length) : null, recoveryAttempts: 0, recoverySuccesses: 0,
         humanPermissionPrompts: permissions.filter(row => row.source !== 'rule').length,

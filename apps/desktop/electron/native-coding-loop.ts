@@ -4,7 +4,9 @@ import type { LocalStore } from './local-store'
 import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { updateNativeCodingSession, type NativeCodingSession, type CodingModelAttempt, type CodingModelRetry, type CodingToolReceipt } from './native-coding-session'
 import { codingContext } from './native-coding-context'
-import { independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, needsIndependentChecks } from './native-coding-independent-verification'
+import { independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, needsIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
+import type { IndependentPreflight } from './native-coding-check-preflight'
+import { codingRepairBudget } from './native-coding-repair-budget'
 
 export type CodingLoopTools = {
   definitions: ReadOnlyFunctionDefinition[]
@@ -93,6 +95,7 @@ export class NativeCodingLoop {
   private readonly acquiring = new Set<string>()
   constructor(private readonly host: { store: LoopStore; provider: AgentProvider; tools: CodingLoopTools; now?: () => string; changed?: (session: NativeCodingSession) => void;
     verificationWorkspace?: CodingCandidateWorkspace;
+    preflightIndependentChecks?(plan: FrozenIndependentChecks, operationId: string, signal: AbortSignal): Promise<IndependentPreflight>;
     stopPreviousWorker?: (writer: NonNullable<NativeCodingSession['writer']>) => Promise<boolean>; reconcileWorkers?: () => Promise<boolean>;
     activity?(unitId: string, active: boolean): Promise<void>; rootActiveMilliseconds?(): Promise<number>; rootStepsUsed?(): Promise<number>; reserveRootStep?(attemptId: string): Promise<boolean>; assertAuthority?(): Promise<void>
     /** Backoff before an automatic re-send; resolves early when the batch is interrupted. */
@@ -249,6 +252,8 @@ export class NativeCodingLoop {
         const attemptId = `model-call-${randomUUID()}`
         const runtimeState = { steps: { usedBeforeThisCall: usedSteps, remainingIncludingThisCall: Math.max(0, session.limits.maxSteps - usedSteps), maximum: session.limits.maxSteps },
           activeMilliseconds: { usedBeforeThisCall: elapsed, remaining: Math.max(0, session.limits.maxActiveMilliseconds - elapsed) },
+          ...(!session.parent && session.binding?.independentVerificationRequired ? { acceptanceSchedule: codingRepairBudget(session.limits, usedSteps, elapsed,
+            session.deliveryEvidence.filter(item => session.revisions.some(revision => revision.objectiveVersion === session.objectiveVersion && revision.digest === item.revisionDigest) && item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length) } : {}),
           objectiveVersion: session.objectiveVersion, role: session.parent?.mode ?? 'root',
           candidateEditingGranted: Boolean(session.binding?.executionGranted && session.parent?.mode !== 'read_only'),
           finalVerification: 'Host independently verifies the approved frozen revision; neither a model statement nor human approval alone proves completion.' }
@@ -292,11 +297,24 @@ export class NativeCodingLoop {
           }
           if (planning) {
             const plan = independentChecksFromResponse(planning.source, response, this.now())
+            const preflight = await this.host.preflightIndependentChecks?.(plan, `${session.id}:independent:preflight-${attemptId}`, controller.signal)
+            if (plan.adapter && !preflight) throw new Error('Independent framework preflight is required')
             session = await this.change(id, draft => {
               const attempt = draft.attempts.find(item => item.id === attemptId)!
               attempt.status = 'completed'; attempt.completedAt = this.now(); if (response.usage) attempt.usage = response.usage
               if (draft.status !== 'running' || draft.writer?.owner !== this.owner || draft.writer.epoch !== epoch || controller.signal.aborted || draft.pendingInput.length || draft.objectiveVersion !== plan.objectiveVersion || independentCheckSourceDigest(draft) !== plan.sourceDigest) { attempt.error = 'Acceptance plan superseded by interruption or human input'; return }
               draft.independentVerification ??= { plans: [], humanInputs: [] }
+              if (preflight && preflight.status !== 'valid') {
+                draft.independentVerification.drafts ??= []
+                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, plan })
+                const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === plan.objectiveVersion && item.sourceDigest === plan.sourceDigest).length
+                if (preflight.status === 'unavailable' || failures >= 3) { draft.status = 'paused'; draft.pauseReason = preflight.status === 'unavailable' ? 'independent_verification_preflight_unavailable' : 'independent_verification_plan_invalid' }
+                return
+              }
+              if (plan.adapter && preflight) {
+                draft.independentVerification.drafts ??= []
+                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, plan })
+              }
               draft.independentVerification.plans.push(plan)
               draft.binding!.testPlanDigest = codingDigest(JSON.stringify({ testPlan: draft.binding!.testPlan, independentChecks: plan.digest }))
             })
@@ -337,6 +355,7 @@ export class NativeCodingLoop {
           })
         } catch (error) {
           let failure = planning && received ? { kind: 'pause' as const, reason: 'independent_verification_plan_invalid' } : classifyModelFailure(error, received)
+          if (planning && failure.kind === 'invalid_batch') failure = { kind: 'pause', reason: 'independent_verification_plan_invalid' }
           if (failure.kind === 'invalid_batch' && context.compact) failure = { kind: 'pause', reason: 'invalid_model_response' }
           const responseReceived = received || error instanceof AgentProviderRequestError && error.deliveryState === 'response_received'
           const retry = failure.kind === 'retry' ? this.retrySchedule(session, attemptId, failure) : undefined
@@ -350,6 +369,14 @@ export class NativeCodingLoop {
             if (terminal(draft) || (draft.status !== 'running' && attempt.status !== 'unknown')) return
             if (attempt.status === 'unknown') { draft.status = 'reconciling'; draft.pauseReason = 'model_delivery_unknown'; return }
             const writing = draft.writer?.owner === this.owner && draft.writer.epoch === epoch && !controller.signal.aborted
+            if (writing && planning && responseReceived && failure.kind === 'pause' && ['independent_verification_plan_invalid', 'invalid_model_response'].includes(failure.reason)) {
+              draft.independentVerification ??= { plans: [], humanInputs: [] }
+              draft.independentVerification.drafts ??= []
+              draft.independentVerification.drafts.push({ attemptId, objectiveVersion: planning.source.objectiveVersion, sourceDigest: planning.source.sourceDigest,
+                feedback: 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.' })
+              const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === planning.source.objectiveVersion && item.sourceDigest === planning.source.sourceDigest).length
+              if (failures < 3) return
+            }
             if (writing && retry) { attempt.retry = retry; return }
             if (writing && failure.kind === 'invalid_batch') {
               // The rejected reply is not history. Tell the model why once; a second invalid batch in a row pauses.

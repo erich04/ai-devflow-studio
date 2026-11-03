@@ -86,6 +86,21 @@ it('uses the same frozen checks after a real repair and emits completion only fo
   expect(session.deliveryEvidence.at(-1)?.result?.independentVerification?.status).toBe('passed')
 })
 
+it('pauses on a checker fault without ordering implementation repairs or exposing private diagnostics', async () => {
+  const coder = vi.fn(async () => codingToolReply('proposal', 'propose_changeset', { summary: 'Review' }))
+  const fixture = await codingHarnessFixture(coder, undefined, {}, async () => codingToolReply('broken-check', 'submit_independent_checks', {
+    checks: [{ criterionId: 'objective', body: "throw new TypeError('PRIVATE-FIXTURE-DETAIL')" }],
+  })); fixtures.push(fixture)
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  const result = await approve(fixture, 1); await fixture.executor.settled('coding')
+  expect(result.snapshot).toMatchObject({ status: 'paused', pauseReason: 'independent_verification_invalid' })
+  const session = (await fixture.store.getNativeCodingSession('native-coding'))!
+  expect(session.deliveryEvidence.at(-1)?.result?.independentVerification).toMatchObject({ status: 'invalid', failedCriteria: [], invalidCriteria: ['objective'] })
+  expect(coder).toHaveBeenCalledTimes(1)
+  expect(JSON.stringify(session.transcript)).not.toContain('PRIVATE-FIXTURE-DETAIL')
+  expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe('export const value = 1\n')
+})
+
 it('cancels an acceptance request without exposing or applying its late response, while preserving usage', async () => {
   let release: ((response: NativeConversationResponse) => void) | undefined
   const author = vi.fn(async () => new Promise<NativeConversationResponse>(resolve => { release = resolve }))
@@ -151,6 +166,21 @@ it('pauses an invalid check plan without losing its charge or accepting a comple
   expect(session.independentVerification?.plans).toEqual([])
   expect(session.attempts[0]).toMatchObject({ status: 'completed', usage: { inputTokens: 10, outputTokens: 5 } })
   expect(coder).not.toHaveBeenCalled()
+})
+
+it('corrects a received invalid author response in a bounded private draft loop before implementation', async () => {
+  const author = vi.fn(async () => author.mock.calls.length === 1
+    ? codingToolReply('invalid-draft', 'submit_independent_checks', { checks: [] }) : planReply())
+  const coder = vi.fn(async () => codingToolReply('review', 'propose_changeset', { summary: 'Review' }))
+  const fixture = await codingHarnessFixture(coder, undefined, {}, author); fixtures.push(fixture)
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  expect((await fixture.get()).snapshot.status).toBe('review')
+  expect(author).toHaveBeenCalledTimes(2)
+  expect(coder).toHaveBeenCalledTimes(1)
+  const session = (await fixture.store.getNativeCodingSession('native-coding'))!
+  expect(session.attempts.filter(attempt => attempt.status === 'completed')).toHaveLength(3)
+  expect(session.independentVerification?.plans).toHaveLength(1)
+  expect(JSON.stringify(session.transcript)).not.toContain('invalid-draft')
 })
 
 it('prevents the implementer from reading private acceptance command output after failure', async () => {

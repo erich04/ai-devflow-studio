@@ -31,6 +31,9 @@ export function phase2Score(tasks, rows) {
   const falseCompleted = rows.filter(row => row.claimedCompleted === true && row.independentPassed !== true).length
   const invalidObservations = rows.filter(row => row.qualityObservationValid === false).length
   return { planned: tasks.length, observed: rows.length, independentPassed, falseCompleted,
+    candidateObserved: rows.filter(row => row.candidateIndependent).length,
+    candidatePassed: rows.filter(row => row.candidateObservationValid === true && row.candidateIndependent?.passed === true).length,
+    candidateInvalidObservations: rows.filter(row => row.candidateObservationValid === false).length,
     invalidObservations, qualityGatePassed: rows.length === tasks.length && invalidObservations === 0 && independentPassed >= 1 && falseCompleted === 0,
     releaseGatePassed: false, interpretation: 'Only the original r8 ten-task phase2 gate. OS platform checks and PR CI are separate evidence; this does not complete the 31-task release evaluation.' }
 }
@@ -130,11 +133,26 @@ async function runPhase2(output, keyFile) {
       if (!await exists(path.join(executionOutput, 'trial.json'))) throw new Error(`Trial ${task.id} produced no report; do not retry an uncertain paid attempt`)
       const trial = await readJson(path.join(executionOutput, 'trial.json'))
       const workspace = trial.workspace && await exists(path.join(trial.workspace, '.git')) ? trial.workspace : undefined
-      if (workspace) await writeFile(path.join(directory, 'candidate.patch'), execFileSync('git', ['diff', '--binary', 'HEAD'], { cwd: workspace, maxBuffer: 64 * 1024 * 1024 }), { mode: 0o600 })
+      if (workspace) await writeFile(path.join(directory, 'delivery-tracked.patch'), execFileSync('git', ['diff', '--binary', 'HEAD'], { cwd: workspace, maxBuffer: 64 * 1024 * 1024 }), { flag: 'wx', mode: 0o600 })
       const independent = await independentCheck(task, baseline, workspace, directory, (...args) => sandboxOracleCommand(path.join(directory, 'oracle-commands'), ...args))
       await json(path.join(directory, 'independent.json'), independent, true)
       const qualityObservationValid = validIndependentObservation(independent)
-      const row = { taskId: task.id, engine: 'native-v3', claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, qualityObservationValid, costUsd: trial.costUsd, durationMs: trial.durationMs, metrics: trial.metrics, status: trial.status, failure: trial.failure ?? null, execution, independent }
+      // Evaluate C separately only after the trial has shut down. This diagnostic
+      // never influences delivery scoring, author context or implementation repair.
+      const candidate = trial.candidateWorkspace && await exists(path.join(trial.candidateWorkspace, '.git')) ? trial.candidateWorkspace : undefined
+      let candidateIndependent, candidateObservationValid
+      if (candidate) {
+        const candidateDirectory = path.join(directory, 'candidate-diagnostic'); await mkdir(candidateDirectory)
+        const { snapshotCodingTree } = await import('../apps/desktop/electron/coding-candidate-workspace.ts')
+        await json(path.join(candidateDirectory, 'manifest.json'), await snapshotCodingTree(candidate, ['node_modules', '.cache', 'coverage']), true)
+        await writeFile(path.join(candidateDirectory, 'tracked.patch'), execFileSync('git', ['diff', '--binary', 'HEAD'], { cwd: candidate, maxBuffer: 64 * 1024 * 1024 }), { flag: 'wx', mode: 0o600 })
+        candidateIndependent = await independentCheck(task, baseline, candidate, candidateDirectory, (...args) => sandboxOracleCommand(path.join(candidateDirectory, 'oracle-commands'), ...args))
+        candidateObservationValid = validIndependentObservation(candidateIndependent)
+        await json(path.join(candidateDirectory, 'result.json'), candidateIndependent, true)
+        await removeDisposableDependencies(candidateDirectory)
+      }
+      const row = { taskId: task.id, engine: 'native-v3', claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, qualityObservationValid,
+        candidateIndependent, candidateObservationValid, costUsd: trial.costUsd, durationMs: trial.durationMs, metrics: trial.metrics, status: trial.status, failure: trial.failure ?? null, execution, independent }
       await json(path.join(directory, 'row.json'), row, true); rows.push(row)
       await json(path.join(output, 'runs.json'), rows); await json(path.join(output, 'score.json'), phase2Score(plan.tasks, rows))
       console.log(JSON.stringify({ event: 'result', task: task.id, status: trial.status, independentPassed: independent.passed, claimedCompleted: trial.claimedCompleted, costUsd: trial.costUsd }))
