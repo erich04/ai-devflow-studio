@@ -2539,7 +2539,10 @@ describe('App', () => {
     render(<App />)
     fireEvent.change(await screen.findByRole('combobox', { name: /设计执行器/ }), { target: { value: 'local-agent' } })
     expect(screen.getByRole('combobox', { name: '本节点使用的模型' })).toHaveValue(agentProvider.id)
-    fireEvent.click(screen.getByTestId('complete-design-agent'))
+    const generate = screen.getByTestId('complete-design-agent')
+    // Project budget readiness loads independently of the executor and provider controls.
+    await waitFor(() => expect(generate).toBeEnabled())
+    fireEvent.click(generate)
     await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith(expect.objectContaining({
       nodeId: 'n-design', executor: 'local-agent', providerId: agentProvider.id,
     })))
