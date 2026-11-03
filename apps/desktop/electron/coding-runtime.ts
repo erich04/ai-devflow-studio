@@ -153,6 +153,7 @@ function preserveCodingRunContext(run: CodingAgentRun, previous: CodingAgentRun)
     ...(previous.configVersion === undefined ? {} : { configVersion: previous.configVersion }),
     ...(previous.workflowRunVersion === undefined ? {} : { workflowRunVersion: previous.workflowRunVersion }),
     ...(previous.additionalAttemptAuthorization ? { additionalAttemptAuthorization: previous.additionalAttemptAuthorization } : {}),
+    ...(previous.retryOf ? { retryOf: previous.retryOf } : {}),
   }
 }
 
@@ -3072,6 +3073,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     async runCodingAgent(input) {
       const run = await findRun(input.runId)
       const node = validateCodingWorkflowContext(run, input)
+      const originalUserInstruction = input.userInstruction
       const retry = input.context ? await resolveCodingRetryContext({ run, nodeId: node.id, context: input.context, userInstruction: input.userInstruction }, deps.store) : undefined
       if (retry) input = { ...input, userInstruction: retry.userInstruction }
       const project = await findProject(input.projectId)
@@ -3124,7 +3126,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         store: deps.store, run, codingRunId, userId: input.requestedBy,
         query: recallQuery,
         // Only the user's own words are split; the node and approved titles stay in the whole query.
-        intents: splitRecallIntents([run.request, input.userInstruction].filter((text) => text.trim()).join('\n')),
+        intents: splitRecallIntents([run.request, originalUserInstruction, retry?.userReason ?? ''].filter((text) => text.trim()).join('\n')),
         now: now(),
       })
       const model = executor.modelId ?? providerId
