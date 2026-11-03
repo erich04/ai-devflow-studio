@@ -23,6 +23,7 @@ import type { CodingTaskAuthority } from './native-coding-tools'
 import { inspectCodingInput } from './coding-input'
 import { codingSandboxAvailability } from './coding-os-sandbox'
 import { currentIndependentChecks, runIndependentChecks } from './native-coding-independent-verification'
+import { preflightIndependentChecks } from './native-coding-check-preflight'
 
 type Core = { loop: NativeCodingLoop; workspace: CodingCandidateWorkspace; commands: CodingCommandRunner }
 const terminal = (session: NativeCodingSession) => ['completed', 'cancelled', 'failed'].includes(session.status)
@@ -159,6 +160,7 @@ function createHarnessService(host: HarnessHost): Harness {
       } }),
       authority })
     const loop = new NativeCodingLoop({ store: host.store, provider: host.provider, tools, verificationWorkspace: workspace, changed: () => { host.changed?.(session.codingRunId); if (session.parent) host.changed?.(session.parent.codingRunId) },
+      preflightIndependentChecks: (plan, operationId, signal) => preflightIndependentChecks({ plan, workspace, runner: commands, profile: binding.profile, operationId, signal }),
       assertAuthority: checkedAuthority,
       reconcileWorkers: () => commands.reconcile(),
       activity: (unitId, active) => activity(`${session.id}:${unitId}`, active),
@@ -482,17 +484,21 @@ function createHarnessService(host: HarnessHost): Harness {
               const plan = currentIndependentChecks(session)
               if (!plan || plan.baselineDigest !== revision.base.digest || session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, independentChecks: plan.digest }))) throw new Error('Frozen independent acceptance changed')
               const independentVerification = await runIndependentChecks({ plan, runner: core.commands, directory, profile: session.binding!.profile, operationId: `${session.id}:independent:${command.commandId}`, signal: verificationController.signal })
-              return { exitCode: independentVerification.status === 'passed' ? 0 : 1, status: independentVerification.status, logId, independentVerification }
+              return { exitCode: independentVerification.status === 'passed' ? 0 : 1, status: independentVerification.status === 'invalid' ? 'failed' : independentVerification.status, logId, independentVerification }
             }
             return { exitCode: tested.exitCode, status: tested.status === 'passed' ? 'passed' : tested.status === 'timed_out' ? 'timed_out' : tested.status === 'cancelled' ? 'cancelled' : 'failed', logId }
           } }).catch(async error => { await mutate(id, draft => { if (draft.status === 'applying') { draft.status = 'paused'; draft.pauseReason = error instanceof Error ? error.message : 'Application did not start' } }); throw error }).finally(() => { verifications.delete(id) })
         await mutate(id, draft => {
           draft.deliveryEvidence.push(evidence)
           draft.status = ['technical_completed', 'verified_no_change', 'manual_accepted'].includes(evidence.status) ? 'completed' : evidence.status === 'delivery_conflict' ? 'delivery_conflict' : evidence.status === 'test_failed' && evidence.result?.status !== 'cancelled' ? 'ready' : 'paused'
-          if (draft.status === 'paused' || draft.status === 'ready') { draft.pauseReason = evidence.status === 'evidence_invalid' ? 'invalid_test_plan' : 'final_test_failed'; draft.transcript.push({ role: 'user', content: JSON.stringify({ finalVerification: evidence, deliveryRestored: true, instruction: 'Investigate the recorded final failure, repair the candidate, and submit a NEW revision for human approval.' }) }) }
+          const verifierInvalid = evidence.result?.independentVerification?.status === 'invalid'
+          if (verifierInvalid && draft.status === 'ready') draft.status = 'paused'
+          if (draft.status === 'paused' || draft.status === 'ready') { draft.pauseReason = verifierInvalid ? 'independent_verification_invalid' : evidence.status === 'evidence_invalid' ? 'invalid_test_plan' : 'final_test_failed'; draft.transcript.push({ role: 'user', content: JSON.stringify({ finalVerification: evidence, deliveryRestored: true,
+            failedRequirements: evidence.result?.independentVerification?.failedRequirements?.length ? evidence.result.independentVerification.failedRequirements : currentIndependentChecks(draft)?.criteria.filter(item => evidence.result?.independentVerification?.failedCriteria.includes(item.id)),
+            instruction: verifierInvalid ? 'The independent checker could not evaluate the requirement. Candidate correctness is unknown. This is not an implementation repair attempt; the frozen check requires investigation.' : 'Repair the candidate against the listed approved requirements, then submit a NEW revision for human approval. The independent plan digest and the public test plan digest identify different objects and are not expected to match.' }) }) }
           if (draft.status === 'ready' && draft.binding!.independentVerificationRequired) {
             const revisions = new Set(draft.revisions.filter(item => item.objectiveVersion === draft.objectiveVersion).map(item => item.digest))
-            const failures = draft.deliveryEvidence.filter(item => revisions.has(item.revisionDigest) && item.status === 'test_failed' && item.result?.status !== 'cancelled').length
+            const failures = draft.deliveryEvidence.filter(item => revisions.has(item.revisionDigest) && item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length
             if (failures >= 3) { draft.status = 'paused'; draft.pauseReason = 'independent_verification_repair_limit' }
           }
         })
@@ -521,6 +527,7 @@ function createHarnessService(host: HarnessHost): Harness {
       session.binding = { permissionPolicy: { version: 1, mode: 'ask', rules: parseCodingCommandRules(host.commandRules ?? []) }, request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage']) }
       session.binding.input = await inspectCodingInput(context.workspace.worktreePath, context.workspace.baseCommitSha)
       session.binding.independentVerificationRequired = true
+      session.binding.independentVerificationVersion = 2
       session.independentVerification = { plans: [], humanInputs: [] }
       session.acceptance = context.upstreamArtifacts.flatMap(artifact => artifact.clarificationRevision?.status === 'approved' ? artifact.clarificationRevision.acceptanceCriteria.map((text, index) => ({ id: `criterion-${codingDigest(`${artifact.id}:${index}:${text}`)}`, objectiveVersion: 1, sourceRef: `${artifact.id}@${artifact.clarificationRevision!.revisionDigest}`, text, confirmation: 'approved_source' as const, resolution: 'unresolved' as const })) : [])
       if (session.acceptance.length > 100) throw new Error('More than 100 confirmed acceptance criteria; split the approved workflow scope first')

@@ -11,6 +11,8 @@ const pauseReasons: Record<string, string> = {
   invalid_tool_batch: '模型连续两轮返回无效的工具调用，任务已暂停。可以补充说明后点“继续”。',
   no_progress: '提醒过一次之后，模型仍在重复相同的操作且没有新结果，任务已暂停。可以补充说明后点“继续”。',
   independent_verification_plan_invalid: '未能生成有效的独立验收检查，编码尚未继续。请核对需求是否明确、能否自动验证，再补充说明或继续尝试。',
+  independent_verification_preflight_unavailable: '独立验收的预检环境未能运行，编码尚未继续。请检查依赖安装和执行记录。',
+  independent_verification_invalid: '验收检查自身出错，尚不能判断实现是否正确。候选修改已保留，交付内容已恢复；请先排查检查程序。',
   independent_verification_repair_limit: '独立验收仍未通过，两轮自动返修已用完。请检查未通过的验收条目后再决定是否继续。',
 }
 const retryReasons: Record<CodingModelRetryReason, string> = { rate_limited: '模型服务限流（HTTP 429）', overloaded: '模型服务过载（HTTP 503）', server_error: '模型服务出错（HTTP 5xx）', connection_not_sent: '未能连接模型服务，请求没有发出' }
@@ -60,7 +62,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     {snapshot.pauseReason ? <p>{pauseReasons[snapshot.pauseReason] ?? snapshot.pauseReason}</p> : null}
     {pendingRetry ? <p>{retryReasons[pendingRetry.reason]}。约 {Math.ceil(pendingRetry.delayMs / 1000)} 秒后自动重新发送（第 {pendingRetry.number}/{pendingRetry.limit} 次{pendingRetry.retryAfterMs !== undefined ? '，等待时间由模型服务指定' : ''}；重试不计入步数）。</p> : null}
     {snapshot.controlUnavailableReason ? <p role="status">{snapshot.controlUnavailableReason}</p> : null}
-    {snapshot.independentVerification ? <p>{snapshot.independentVerification.status === 'preparing' ? '编码前将先生成并冻结独立验收检查。' : `已冻结 ${snapshot.independentVerification.criteriaCount} 条独立验收检查；自动返修 ${snapshot.independentVerification.repairRounds}/2 轮。`}{snapshot.independentVerification.lastResult === 'passed' ? '独立验收已通过。' : snapshot.independentVerification.lastResult === 'failed' ? '独立验收未通过。' : ''}</p> : null}
+    {snapshot.independentVerification ? <p>{snapshot.independentVerification.status === 'preparing' ? '编码前将先生成并冻结独立验收检查。' : `已冻结 ${snapshot.independentVerification.criteriaCount} 条独立验收检查；自动返修 ${snapshot.independentVerification.repairRounds}/2 轮。`}{snapshot.independentVerification.lastResult === 'passed' ? '独立验收已通过。' : snapshot.independentVerification.lastResult === 'failed' ? '独立验收未通过。' : snapshot.independentVerification.lastResult === 'invalid' ? '验收检查自身出错，尚不能判断实现是否正确。' : ''}</p> : null}
     <p className="meta">输入 {snapshot.cost.inputTokens ?? '未知'} / 输出 {snapshot.cost.outputTokens ?? '未知'} tokens · 费用 {snapshot.cost.costUsd === null ? '待权威账本核定' : `$${snapshot.cost.costUsd.toFixed(4)}`} · {snapshot.cost.pendingSettlements} 笔待结算 · {snapshot.cost.unknownAttempts} 笔用量待核对</p>
     {snapshot.cost.costUsd === null && snapshot.cost.knownCostUsd !== undefined ? <p>已确认费用小计 ${snapshot.cost.knownCostUsd.toFixed(4)}；另有 {snapshot.cost.unknownCostCount} 笔金额未确认。</p> : null}
     {!snapshot.controlUnavailableReason && snapshot.status === 'waiting_permission' && !snapshot.permission ? <div className="coding-permission-card">

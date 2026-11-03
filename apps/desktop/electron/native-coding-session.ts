@@ -65,6 +65,7 @@ export type NativeCodingSession = {
     permissionPolicy?: import('@ai-devflow/shared').CodingPermissionPolicy
     /** Required for newly authorized automatic V3 tasks; old records retain their historical semantics. */
     independentVerificationRequired?: boolean
+    independentVerificationVersion?: 2
   }
   deliveryEvidence: CodingDeliveryEvidence[]
   revisions: CodingRevision[]
@@ -120,6 +121,7 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
   if (session.independentVerification) validateIndependentVerification(session.independentVerification, previous?.independentVerification)
   else if (previous?.independentVerification) throw new Error('Independent verification history cannot be removed')
   if (session.binding?.independentVerificationRequired !== undefined && typeof session.binding.independentVerificationRequired !== 'boolean') throw new Error('Invalid independent verification requirement')
+  if (session.binding?.independentVerificationVersion !== undefined && session.binding.independentVerificationVersion !== 2) throw new Error('Invalid independent verification version')
   if (session.binding?.manualValidationPlan !== undefined && (typeof session.binding.manualValidationPlan !== 'string' || !session.binding.manualValidationPlan.trim() || session.binding.manualValidationPlan.length > 8000)) throw new Error('Invalid manual validation plan')
   if (session.rootStepAttempts && (new Set(session.rootStepAttempts).size !== session.rootStepAttempts.length || !session.rootStepAttempts.every(identifier))) throw new Error('Invalid root step reservations')
   const digest = (item: unknown) => typeof item === 'string' && /^[a-f0-9]{64}$/u.test(item)

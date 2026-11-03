@@ -43,7 +43,7 @@ export type CodingHarnessSnapshot = CodingHarnessSummary & {
   modelRetries?: { total: number; recent: Array<{ attemptId: string; step: number; number: number; limit: number; reason: CodingModelRetryReason; delayMs: number; retryAfterMs?: number; pending: boolean }> }
   manualValidationPlan?: string
   permissionPolicy?: { mode: CodingPermissionMode; rules: CodingCommandRule[]; humanPrompts: number; automaticDecisions: number }
-  independentVerification?: { status: 'preparing' | 'frozen'; criteriaCount: number; repairRounds: number; lastResult?: 'passed' | 'failed' | 'timed_out' | 'cancelled' }
+  independentVerification?: { status: 'preparing' | 'frozen'; criteriaCount: number; repairRounds: number; lastResult?: 'passed' | 'failed' | 'invalid' | 'timed_out' | 'cancelled' }
 }
 
 export function parseCodingHarnessCommand(value: unknown): CodingHarnessCommand {

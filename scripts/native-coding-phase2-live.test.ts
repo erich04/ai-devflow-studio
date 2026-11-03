@@ -44,3 +44,8 @@ it('does not turn zero completions, a partial sample or false completion into a 
   expect(phase2Score(tasks, rows)).toMatchObject({ qualityGatePassed: false, falseCompleted: 1 })
   expect(() => phase2Score(tasks, [rows[0], rows[0]])).toThrow(/Duplicate/)
 })
+it('reports candidate quality separately without turning an undelivered candidate into a phase pass', () => {
+  const rows = tasks.map(task => ({ taskId: task.id, claimedCompleted: false, independentPassed: false, candidateIndependent: { passed: true }, candidateObservationValid: true }))
+  expect(phase2Score(tasks, rows)).toMatchObject({ candidateObserved: 10, candidatePassed: 10, independentPassed: 0, qualityGatePassed: false })
+  expect(phase2Score(tasks, rows.map(row => ({ ...row, candidateObservationValid: false })))).toMatchObject({ candidatePassed: 0, candidateInvalidObservations: 10 })
+})

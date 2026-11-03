@@ -1,10 +1,11 @@
 // @vitest-environment node
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CodingCommandRunner } from './coding-command-runner'
 import { codingDigest } from './coding-candidate-workspace'
+import { vitestIndependentResult } from './native-coding-vitest-checks'
 import {
   freezeIndependentChecks, independentCheckResult, runIndependentChecks, validateFrozenIndependentChecks,
   type IndependentCheckSource,
@@ -20,6 +21,13 @@ const frozen = () => freezeIndependentChecks(source, { checks }, '2026-11-02T00:
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 
 describe('frozen independent acceptance', () => {
+  it('returns only failed test locations that quote the approved source, never private test descriptions', () => {
+    const result = vitestIndependentResult(frozen(), 'nonce', { status: 'failed', exitCode: 1 }, { nonce: 'nonce', rows: [
+      { id: 'criterion-value', status: 'failed', tests: 2, failedTitles: ['The exported value is 2.', 'PRIVATE-EXPECTED-DETAIL'] },
+    ] })
+    expect(result.failedRequirements).toEqual([{ id: 'criterion-value', text: source.criteria[0]!.text, sourceRef: 'approved-requirement@v1' }])
+    expect(JSON.stringify(result)).not.toContain('PRIVATE-EXPECTED-DETAIL')
+  })
   it('requires exact coverage of approved criteria and binds code, source, and objective into the digest', () => {
     const plan = frozen()
     expect(validateFrozenIndependentChecks(plan)).toEqual(plan)
@@ -60,9 +68,9 @@ describe('frozen independent acceptance', () => {
     for (const [index, body] of ['process.exit(0)', 'const unused = 2;', 'check("true")', 'try { check(false) } catch {} check(true)'].entries()) {
       const plan = freezeIndependentChecks(source, { checks: [{ criterionId: 'criterion-value', body }] }, '2026-11-02T00:00:00.000Z')
       const result = await runIndependentChecks({ plan, runner, directory, profile: { kind: 'trusted_local' }, operationId: `no-proof-${index}` })
-      expect(result.status).toBe('failed')
+      expect(result.status).toBe(index < 2 ? 'invalid' : 'failed')
     }
-    expect(independentCheckResult(frozen(), 'wrong-token', { status: 'passed', exitCode: 0, output: '{"passed":true}' }).status).toBe('failed')
+    expect(independentCheckResult(frozen(), 'wrong-token', { status: 'passed', exitCode: 0, output: '{"passed":true}' }).status).toBe('invalid')
   })
 
   it('keeps generated assertion values out of public failure evidence', async () => {
@@ -72,8 +80,48 @@ describe('frozen independent acceptance', () => {
     const privateValue = 'PRIVATE-EXPECTED-VALUE-48291'
     const plan = freezeIndependentChecks(source, { checks: [{ criterionId: 'criterion-value', body: `throw new Error(${JSON.stringify(privateValue)});` }] }, '2026-11-02T00:00:00.000Z')
     const result = await runIndependentChecks({ plan, runner, directory, profile: { kind: 'trusted_local' }, operationId: 'hidden' })
-    expect(result.status).toBe('failed')
+    expect(result.status).toBe('invalid')
     expect(JSON.stringify(result)).not.toContain(privateValue)
     expect(result.planDigest).toBe(codingDigest(JSON.stringify(Object.fromEntries(Object.entries(plan).filter(([key]) => key !== 'digest')))))
   })
+
+  it('distinguishes a broken check from an actual failed requirement without leaking private details', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-independent-')); roots.push(root)
+    const directory = path.join(root, 'verification'); await mkdir(directory)
+    const runner = new CodingCommandRunner(path.join(root, 'commands'))
+    for (const [index, body] of ['const report = ""/private/report.json""; check(true)', 'throw new TypeError("PRIVATE-FIXTURE-DETAIL")', 'check(false)'].entries()) {
+      const plan = freezeIndependentChecks(source, { checks: [{ criterionId: 'criterion-value', body }] }, '2026-11-02T00:00:00.000Z')
+      const result = await runIndependentChecks({ plan, runner, directory, profile: { kind: 'trusted_local' }, operationId: `fault-${index}` })
+      expect(result).toMatchObject(index < 2
+        ? { status: 'invalid', failedCriteria: [], invalidCriteria: ['criterion-value'] }
+        : { status: 'failed', failedCriteria: ['criterion-value'], invalidCriteria: [] })
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE-FIXTURE-DETAIL|private\/report/)
+    }
+  })
+
+  it('owns Vitest file paths and reports, rejecting invalid, skipped and assertion-free checks', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-independent-')); roots.push(root)
+    const directory = path.join(root, 'verification'); await mkdir(directory); await mkdir(path.join(directory, 'tests'))
+    await symlink(path.resolve('node_modules'), path.join(directory, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+    await writeFile(path.join(directory, 'package.json'), '{"type":"module"}')
+    await writeFile(path.join(directory, 'vitest.config.mjs'), "export default { test: { environment: 'node', include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'] } }")
+    await writeFile(path.join(directory, 'value.ts'), 'export const value = 2')
+    const runner = new CodingCommandRunner(path.join(root, 'commands'))
+    for (const [index, [body, status, extension]] of [
+      ["import { test, expect } from 'vitest'; import { value } from '../value'; test('behavior', () => expect(value).toBe(2));", 'passed'],
+      ["import { test, expect } from 'vitest'; import { value } from '../value'; test('behavior', () => expect(value).toBe(3));", 'failed'],
+      ['const report = ""/private/report.json"";', 'invalid'],
+      ["import { test } from 'vitest'; test('empty', () => {});", 'invalid'],
+      ["import { test, expect } from 'vitest'; test.skip('skipped', () => expect(true).toBe(true));", 'invalid'],
+      ["import { test } from 'vitest'; test('bad fixture', () => { throw new TypeError('PRIVATE-FIXTURE-DETAIL') });", 'invalid'],
+      ["import { test, expect } from 'vitest'; const React = { createElement: (type: string) => ({ type }) }; test('JSX fixture', () => expect((<div />).type).toBe('div'));", 'passed', 'tsx'],
+    ].entries()) {
+      const plan = freezeIndependentChecks({ ...source, adapter: { kind: 'vitest', directory: 'tests', extension: extension === 'tsx' ? 'tsx' : 'ts' } }, { checks: [{ criterionId: 'criterion-value', body, baselineExpectation: 'fail' }] }, '2026-11-02T00:00:00.000Z')
+      const result = await runIndependentChecks({ plan, runner, directory, profile: { kind: 'trusted_local' }, operationId: `framework-${index}` })
+      expect(result.status, `case ${index}`).toBe(status)
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE-FIXTURE-DETAIL|private\/report/)
+      expect(await readdir(path.join(directory, 'tests'))).toEqual([])
+      expect((await readdir(directory)).filter(name => name.startsWith('.devflow-'))).toEqual([])
+    }
+  }, 30000)
 })
