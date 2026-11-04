@@ -247,6 +247,7 @@ export async function fixturePlanning(
       key: `f${i + 1}:${a.id}`,
       title: redactSensitiveText(a.title).value.slice(0, 400),
       behavior: a.behavior,
+      ...(a.mockedPresentation ? { observes: 'rendered UI and mocked calls only' } : {}),
     })),
     production: evidence.files.find((item) => item.path === f.path.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1')),
   }))
@@ -278,9 +279,13 @@ export async function fixturePlanning(
       source,
       fixtures,
       phase: 'select',
+      requiredSubjects,
       request: {
         systemPrompt:
           selectPrompt +
+          (requiredSubjects.length && fixtures.some((f) => f.anchors.some((a) => a.mockedPresentation))
+            ? ' A fixture marked as observing only rendered UI and mocked calls can cover presentation. When the source separately asks that a named product operation actually runs, select a public working operation at its owning service as well.'
+            : '') +
           (rejected
             ? ' Review the previously tried public anchors, their stated preconditions and the added lines from the rejected program. A baseline case ID refers only to that earlier program. If you select the same anchor again, identify a materially different trigger or observation that addresses the recorded outcome.'
             : '') +

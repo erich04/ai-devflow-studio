@@ -8,7 +8,7 @@ import type { CodingCommandRunner, CodingExecutionProfile } from './coding-comma
 import type { NativeCodingSession } from './native-coding-session'
 import { checkOwnedFixtureInputs } from './native-coding-owned-fixtures'
 import { fixturePlanning, type AcceptancePlanning } from './native-coding-fixture-planning'
-import { sourceUnits, NoFixtureChangeWitness, fixtureWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
+import { sourceUnits, NoFixtureChangeWitness, fixtureWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, requireOperationalSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
 
 export type IndependentCheckSource = {
   objectiveVersion: number; baselineDigest: string; sourceDigest: string
@@ -173,7 +173,9 @@ function planToolValue(response: NativeConversationResponse, tool: string): unkn
   return JSON.parse(response.toolCalls[0]!.function.arguments)
 }
 export function fixtureSelectionFromResponse(planning: AcceptancePlanning, response: NativeConversationResponse) {
-  return readFixtureSelection(planning.source.criteria, planning.fixtures!, planToolValue(response, 'select_behavior_contract'))
+  const selection = readFixtureSelection(planning.source.criteria, planning.fixtures!, planToolValue(response, 'select_behavior_contract'))
+  requireOperationalSelection(planning.source.criteria, planning.fixtures!, planning.requiredSubjects ?? [], selection)
+  return selection
 }
 export function fixtureChecksFromResponse(planning: AcceptancePlanning, response: NativeConversationResponse, now: string) {
   const draft = planToolValue(response, 'submit_fixture_cases') as {

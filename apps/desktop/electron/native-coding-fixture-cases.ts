@@ -57,7 +57,8 @@ type Anchor = Region & {
   suite?: string
   control?: string
   selectable?: boolean
-  behavior?: { actions: string[]; faults: string[] }
+  mockedPresentation?: true
+  behavior?: { actions: string[]; faults: string[]; resolves?: string[] }
 }
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -308,10 +309,62 @@ ${body.slice(0, witness.start)}{ ${name}Reached=true; try { ${statement} } catch
 if (!${name}Reached) throw new Error('DevFlowFixtureWitnessNotReached');`
 }
 
+/** Rendering plus checking a mocked boundary proves that the UI issued a
+ * request. It does not observe the underlying operation's outcome. Leave any
+ * unrecognized assertion unclassified, so integrated UI tests remain usable. */
+function observesMockedPresentation(block: ts.Block, tree: ts.SourceFile) {
+  const text = block.getText(tree)
+  if (
+    !/\b(?:render|mount)\s*\(/u.test(text) ||
+    !/\b(?:vi|jest)\.(?:fn|spyOn)\s*\(/u.test(text) ||
+    !tree.text.includes('@testing-library/')
+  )
+    return false
+  let spyObservation = false,
+    other = false
+  function visit(node: ts.Node) {
+    if (other) return
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const matcher = node.expression.name.text
+      let receiver = node.expression.expression
+      while (ts.isPropertyAccessExpression(receiver) && ['not', 'resolves', 'rejects'].includes(receiver.name.text))
+        receiver = receiver.expression
+      if (ts.isCallExpression(receiver) && ts.isIdentifier(receiver.expression) && receiver.expression.text === 'expect') {
+        const subject = receiver.arguments[0]?.getText(tree) ?? ''
+        if (/^toHaveBeen(?:Called|LastCalled|NthCalled)/u.test(matcher)) spyObservation = true
+        else if (
+          !/^(?:toBeInTheDocument|toBeVisible|toBeEnabled|toBeDisabled|toHaveTextContent|toHaveAttribute|toHaveClass|toHaveFocus|toBeChecked|toHaveValue)$/u.test(
+            matcher,
+          ) &&
+          !/\b(?:screen\.|within\s*\()/u.test(subject)
+        )
+          other = true
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(block)
+  return spyObservation && !other
+}
+
 function fixtureBehavior(block: ts.Block, tree: ts.SourceFile) {
   const actions = new Set<string>(),
-    faults = new Set<string>()
+    faults = new Set<string>(),
+    resolves = new Set<string>()
   function visit(node: ts.Node) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === 'resolves' &&
+      ts.isCallExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'expect'
+    ) {
+      const subject = node.expression.arguments[0]
+      if (subject && ts.isCallExpression(subject) && resolves.size < 5) {
+        const call = subject.expression.getText(tree)
+        if (/^[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*){0,2}$/u.test(call)) resolves.add(call)
+      }
+    }
     if (ts.isAwaitExpression(node) && ts.isCallExpression(node.expression)) {
       const name = node.expression.expression.getText(tree)
       if (
@@ -338,7 +391,7 @@ function fixtureBehavior(block: ts.Block, tree: ts.SourceFile) {
     ts.forEachChild(node, visit)
   }
   visit(block)
-  return { actions: [...actions], faults: [...faults] }
+  return { actions: [...actions], faults: [...faults], ...(resolves.size ? { resolves: [...resolves] } : {}) }
 }
 
 function registrationRoot(expression: ts.Expression): ts.Expression {
@@ -410,6 +463,7 @@ export function fixtureTemplate(file: string, source: string) {
                   control,
                   selectable: control.length <= 12000 && hasProtectedAssertion(callback.body, tree),
                   behavior: fixtureBehavior(callback.body, tree),
+                  ...(observesMockedPresentation(callback.body, tree) ? { mockedPresentation: true as const } : {}),
                 }
               : {}),
             id: `t${anchors.length + 1}`,
@@ -550,6 +604,52 @@ export function readFixtureSelection(
     contextOnly: draft.contextOnly,
   })
   return { scenarios, contextOnly: checked.coverage.contextOnly }
+}
+
+export function requireOperationalSelection(
+  sources: AcceptanceCriterion[],
+  fixtures: FixtureTemplate[],
+  subjects: NamedFixtureSubject[],
+  selection: FixtureSelection,
+) {
+  if (!subjects.length || !fixtures.some((f) => f.anchors.some((a) => a.selectable && !a.mockedPresentation))) return
+  const spans = sourceUnits(sources)
+  const presentation = (text: string) =>
+    /(?:界面|页面|屏幕|按钮|显示|展示|渲染)|\b(?:UI|screen|button|display(?:ed)?|render(?:ed)?|visible|presentation|view)\b/iu.test(
+      text,
+    )
+  for (const subject of subjects) {
+    const span = spans.find((s) => s.id === subject.unit)
+    if (
+      !span ||
+      presentation(span.text) ||
+      !spans.some((s) => s.criterionId === span.criterionId && s.id !== span.id && presentation(s.text))
+    )
+      continue
+    const cases = selection.scenarios.filter((s) => s.units.includes(subject.unit))
+    if (
+      cases.some(
+        (s) => !fixtures[Number(s.fixture.slice(1)) - 1]?.anchors.find((a) => a.id === s.anchor)?.mockedPresentation,
+      )
+    )
+      continue
+    const keys = cases.map((s) => s.fixture + ':' + s.anchor).join(', ')
+    const examples = fixtures
+      .flatMap((f, i) =>
+        f.anchors
+          .filter((a) => a.selectable && !a.mockedPresentation && a.behavior?.resolves?.length)
+          .map((a) => 'f' + (i + 1) + ':' + a.id + ' (' + a.behavior!.resolves!.join(', ') + ')'),
+      )
+      .slice(0, 8)
+    const hint = examples.length
+      ? ' Public controls with resolved calls include ' + examples.join(', ') + '. Match the action to the approved source.'
+      : ''
+
+    throw new InvalidFixtureDraft(
+      `Operational source ${subject.unit} has only rendered UI / mocked-call evidence (${keys || 'no selected operation'}). Add a real product operation that takes the named subject and succeeds for a comparable original control. Keep separate UI checks for presentation. A spy call or DOM status alone cannot establish the operation's result or side effects.` +
+        hint,
+    )
+  }
 }
 
 export function validSelectionRecord(selection: FixtureSelection) {

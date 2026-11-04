@@ -189,3 +189,53 @@ it('returns an all-preservation declaration for re-selection without bootstrappi
   })
   expect(() => fixtureChecksFromResponse(p, r, '2026-11-04T17:00:00.000Z')).toThrow(/declared.*unchanged baseline/i)
 })
+
+it('requires a real operation alongside mocked UI evidence for a separate named capability', async () => {
+  const { fixtureSelectionFromResponse } = await import('./native-coding-independent-verification')
+  const page = fixtureTemplate(
+    'screen.test.tsx',
+    `import {it,expect,vi} from 'vitest'
+import {render,screen,fireEvent} from '@testing-library/react'
+it('opens the action',()=>{
+ const api=installBridge({save:vi.fn().mockResolvedValue({ok:true})})
+ render(<Screen api={api}/>)
+ fireEvent.click(screen.getByRole('button'))
+ expect(api.save).toHaveBeenCalled()
+ expect(screen.getByRole('status')).toHaveTextContent('saved')
+})`,
+  )
+  const service = fixtureTemplate(
+    'service.test.ts',
+    "import {save} from './service';it('saves an eligible job',async()=>{await expect(save(job)).resolves.toMatchObject({status:'saved'})})",
+  )
+  const source = {
+    objectiveVersion: 1,
+    sourceDigest: 'a'.repeat(64),
+    baselineDigest: 'b'.repeat(64),
+    criteria: [{ id: 'objective', sourceRef: 'approved', text: 'ARCHIVE jobs can be saved. The UI shows the action.' }],
+  }
+  expect(service.anchors[0]?.behavior?.resolves).toEqual(['save'])
+  const input = {
+    source,
+    phase: 'select' as const,
+    fixtures: [page, service],
+    requiredSubjects: [{ unit: 'r1.1', value: 'archive' }],
+    request: { systemPrompt: '', messages: [], tools: [] },
+  }
+  const scenario = (unit: string, anchor: string) => ({ units: [unit], anchor, precondition: 'An authorized existing job' })
+  const select = (rows: ReturnType<typeof scenario>[]) =>
+    codingToolReply('select', 'select_behavior_contract', { scenarios: rows, contextOnly: [] })
+  expect(() => fixtureSelectionFromResponse(input, select([scenario('r1.1', 'f1:t1'), scenario('r1.2', 'f1:t1')]))).toThrow(
+    /r1\.1.*f1:t1.*real/i,
+  )
+  const both = fixtureSelectionFromResponse(input, select([scenario('r1.1', 'f2:t1'), scenario('r1.2', 'f1:t1')]))
+  expect(both.scenarios.map((s) => s.fixture)).toEqual(['f2', 'f1'])
+  const independentUi = {
+    ...input,
+    source: {
+      ...source,
+      criteria: [{ id: 'objective', sourceRef: 'approved', text: 'ARCHIVE status is visible in the UI.' }],
+    },
+  }
+  expect(() => fixtureSelectionFromResponse(independentUi, select([scenario('r1.1', 'f1:t1')]))).not.toThrow()
+})
