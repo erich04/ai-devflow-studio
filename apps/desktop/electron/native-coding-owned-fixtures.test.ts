@@ -67,7 +67,7 @@ it('rejects a fabricated downstream payload and accepts the repaired upstream im
           scenarios: [{ units: ['r1.1'], anchor: 'f1:t1', precondition: 'A caller displays the list' }],
           contextOnly: [],
         })
-      const msg = JSON.parse(req.messages[0]!.content as string)
+      const msg = JSON.parse(req.messages.at(-1)!.content as string)
       cases++
       if (cases === 2) expect(msg.correction).toMatch(/project-owned ListView.*buildList/)
       const setup =
