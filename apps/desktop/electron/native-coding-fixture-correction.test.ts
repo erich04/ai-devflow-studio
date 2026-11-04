@@ -239,3 +239,68 @@ it('opens the action',()=>{
   }
   expect(() => fixtureSelectionFromResponse(independentUi, select([scenario('r1.1', 'f1:t1')]))).not.toThrow()
 })
+
+it('does not let an in-memory replacement stand in for a source that also requires persisted recovery to save successfully', async () => {
+  const { fixtureSelectionFromResponse } = await import('./native-coding-independent-verification')
+  const math = fixtureTemplate(
+    'rebuild.test.ts',
+    "it('builds a derived record',()=>{const updated=rebuild(original);expect(updated.id).not.toBe(original.id)})",
+  )
+  const disk = fixtureTemplate(
+    'journal.test.ts',
+    `import {readFile,writeFile,mkdtemp} from 'node:fs/promises'
+import {openJournal} from './journal-store'
+it('saves and reloads the journal',async()=>{
+ const folder=await mkdtemp('isolated-journal')
+ const store=await openJournal({dbPath:folder+'/journal.db'})
+ await store.saveEntry(original)
+ const readBack=await store.listEntries()
+ expect(readBack).toContainEqual(original)
+})`,
+  )
+  const source = {
+    objectiveVersion: 1,
+    sourceDigest: 'b'.repeat(64),
+    baselineDigest: 'c'.repeat(64),
+    criteria: [
+      { id: 'goal', sourceRef: 'approved', text: 'Repair the damaged persisted journal and allow a legitimate state save.' },
+    ],
+  }
+  const p = {
+    source,
+    phase: 'select' as const,
+    fixtures: [math, disk],
+    request: { systemPrompt: '', messages: [], tools: [] },
+  }
+  const sim = (key: string) =>
+    codingToolReply('selected', 'select_behavior_contract', {
+      scenarios: [
+        { units: ['r1.1'], anchor: key, precondition: 'Previously stored state contains a damaged derived record' },
+      ],
+      contextOnly: [],
+    })
+  expect(() => fixtureSelectionFromResponse(p, sim('f1:t1'))).toThrow(/r1.1.*store.*f2:t1/i)
+  expect(fixtureSelectionFromResponse(p, sim('f2:t1')).scenarios[0]?.fixture).toBe('f2')
+  const selected = fixtureSelectionFromResponse(p, sim('f2:t1'))
+  const writeLine = disk.anchors[0]!.control!.split('\n').findIndex((line) => line.includes('await store.saveEntry')) + 1
+  const noWrite = codingToolReply('wrong-route', 'submit_fixture_cases', {
+    cases: [
+      {
+        scenario: 's1',
+        baseline: 'fail',
+        edits: [{ line: writeLine, deleteCount: 1, insert: ' const localOnly = rebuild(original)' }],
+      },
+    ],
+  })
+  expect(() =>
+    fixtureChecksFromResponse({ ...p, phase: 'cases', selection: selected }, noWrite, '2026-11-04T19:00:00Z'),
+  ).toThrow(/real store write/i)
+  const inspection = {
+    ...p,
+    source: {
+      ...source,
+      criteria: [{ id: 'goal', sourceRef: 'approved', text: 'Inspect an initially persisted attachment before retrying.' }],
+    },
+  }
+  expect(() => fixtureSelectionFromResponse(inspection, sim('f1:t1'))).not.toThrow()
+})

@@ -1,3 +1,4 @@
+import { requestsDurableRoundTrip, variantHasStoreRoundTrip } from './native-coding-storage-fixtures'
 import { randomUUID } from 'node:crypto'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -8,7 +9,7 @@ import type { CodingCommandRunner, CodingExecutionProfile } from './coding-comma
 import type { NativeCodingSession } from './native-coding-session'
 import { checkOwnedFixtureInputs } from './native-coding-owned-fixtures'
 import { fixturePlanning, type AcceptancePlanning } from './native-coding-fixture-planning'
-import { sourceUnits, NoFixtureChangeWitness, fixtureWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, requireOperationalSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
+import { sourceUnits, NoFixtureChangeWitness, fixtureWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, requireOperationalSelection, requireStoredSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
 
 export type IndependentCheckSource = {
   objectiveVersion: number; baselineDigest: string; sourceDigest: string
@@ -175,6 +176,7 @@ function planToolValue(response: NativeConversationResponse, tool: string): unkn
 export function fixtureSelectionFromResponse(planning: AcceptancePlanning, response: NativeConversationResponse) {
   const selection = readFixtureSelection(planning.source.criteria, planning.fixtures!, planToolValue(response, 'select_behavior_contract'))
   requireOperationalSelection(planning.source.criteria, planning.fixtures!, planning.requiredSubjects ?? [], selection)
+  requireStoredSelection(planning.source.criteria, planning.fixtures!, selection)
   return selection
 }
 export function fixtureChecksFromResponse(planning: AcceptancePlanning, response: NativeConversationResponse, now: string) {
@@ -257,6 +259,19 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
         for (const id of missing) byScenario.delete(id)
         issues.push(`${missing.join(', ') || subject.unit}: ${error.message}`)
       }
+    }
+  }
+  if (!issues.length) {
+    for (const unit of sourceUnits(planning.source.criteria).filter(u => requestsDurableRoundTrip(u.text))) {
+      const routes = cases.flatMap(c => {
+        if (!c.units.includes(unit.id)) return []
+        const f = planning.fixtures![Number(c.fixture.slice(1))-1]
+        const pair = f?.anchors.find(a => a.id === c.anchor)?.storeRoundTrip
+        return f && pair ? [{c, path:f.path, pair}] : []
+      })
+      if (!routes.length || routes.some(({c,path,pair}) => variantHasStoreRoundTrip(path,c.body,pair))) continue
+      for (const {c} of routes) byScenario.delete(c.scenario)
+      issues.push(`Keep a real store write and subsequent read of the affected record in a case covering ${unit.id}. A reconstructed in-memory value alone cannot demonstrate persistence.`)
     }
   }
   if (issues.length) {

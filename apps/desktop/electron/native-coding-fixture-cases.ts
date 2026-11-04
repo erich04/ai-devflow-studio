@@ -1,3 +1,9 @@
+import {
+  hasFileStoreFixture,
+  publicStoreRoundTrip,
+  requestsDurableRoundTrip,
+  type PublicStoreRoundTrip,
+} from './native-coding-storage-fixtures'
 import ts from 'typescript'
 import { codingSourceDiagnostics } from './coding-source-diagnostics'
 import { codingDigest } from './coding-candidate-workspace'
@@ -58,6 +64,7 @@ type Anchor = Region & {
   control?: string
   selectable?: boolean
   mockedPresentation?: true
+  storeRoundTrip?: PublicStoreRoundTrip
   behavior?: { actions: string[]; faults: string[]; resolves?: string[] }
 }
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -415,6 +422,7 @@ export function fixtureTemplate(file: string, source: string) {
     true,
     file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   )
+  const fileStore = hasFileStoreFixture(tree)
   const testNames = new Set(['it', 'test']),
     suiteNames = new Set(['describe', 'suite'])
   for (const node of tree.statements) {
@@ -452,9 +460,18 @@ export function fixtureTemplate(file: string, source: string) {
             ts.isBlock(callback.body)
               ? callback.body.getText(tree).slice(1, -1)
               : undefined
+          const storeRoundTrip =
+            fileStore &&
+            control !== undefined &&
+            callback &&
+            (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+            ts.isBlock(callback.body)
+              ? publicStoreRoundTrip(callback.body, tree)
+              : undefined
           anchors.push({
             ...region,
             ...(scope ? { suite: scope } : {}),
+            ...(storeRoundTrip ? { storeRoundTrip } : {}),
             ...(control !== undefined &&
             callback &&
             (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
@@ -648,6 +665,31 @@ export function requireOperationalSelection(
     throw new InvalidFixtureDraft(
       `Operational source ${subject.unit} has only rendered UI / mocked-call evidence (${keys || 'no selected operation'}). Add a real product operation that takes the named subject and succeeds for a comparable original control. Keep separate UI checks for presentation. A spy call or DOM status alone cannot establish the operation's result or side effects.` +
         hint,
+    )
+  }
+}
+
+export function requireStoredSelection(
+  sources: AcceptanceCriterion[],
+  fixtures: FixtureTemplate[],
+  selection: FixtureSelection,
+) {
+  const units = sourceUnits(sources).filter((u) => requestsDurableRoundTrip(u.text))
+  if (!units.length) return
+  const options = fixtures.flatMap((f, i) =>
+    f.anchors
+      .filter((a) => a.selectable && a.storeRoundTrip && !a.mockedPresentation)
+      .map((a) => ({ key: 'f' + (i + 1) + ':' + a.id, pair: a.storeRoundTrip! })),
+  )
+  if (!options.length) return
+  for (const unit of units) {
+    const selected = selection.scenarios.filter((s) => s.units.includes(unit.id)).map((s) => s.fixture + ':' + s.anchor)
+    if (options.some((o) => selected.includes(o.key))) continue
+    throw new InvalidFixtureDraft(
+      `Durable source ${unit.id} requires a store operation and readback on that same source. An in-memory result or unrelated storage test cannot establish that the changed record can be saved and used again. Existing baseline write/read controls include ${options
+        .slice(0, 8)
+        .map((o) => o.key + ' (' + o.pair.write + ' / ' + o.pair.read + ')')
+        .join(', ')}.`,
     )
   }
 }

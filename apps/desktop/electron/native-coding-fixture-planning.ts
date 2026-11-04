@@ -1,3 +1,4 @@
+import { requestsDurableRoundTrip } from './native-coding-storage-fixtures'
 import { redactSensitiveText, type NativeConversationRequest, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
 import {
   acceptanceContext,
@@ -236,6 +237,9 @@ export async function fixturePlanning(
   const selection = matching.find(
     (d) => d.selection || d.reselect || (d.preflightStatus === 'invalid' && !d.correctCases),
   )?.selection
+  const durableUnits = sourceUnits(source.criteria)
+    .filter((u) => requestsDurableRoundTrip(u.text))
+    .map((u) => u.id)
   const indexed = fixtures.map((f, i) => ({
     fixture: `f${i + 1}`,
     path: f.path,
@@ -247,6 +251,7 @@ export async function fixturePlanning(
       key: `f${i + 1}:${a.id}`,
       title: redactSensitiveText(a.title).value.slice(0, 400),
       behavior: a.behavior,
+      ...(durableUnits.length && a.storeRoundTrip ? { storeRoundTrip: a.storeRoundTrip } : {}),
       ...(a.mockedPresentation ? { observes: 'rendered UI and mocked calls only' } : {}),
     })),
     production: evidence.files.find((item) => item.path === f.path.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1')),
@@ -266,6 +271,15 @@ export async function fixturePlanning(
     approved: source.criteria,
     units: approvedUnits,
     requiredOperationSubjects: requiredSubjects,
+    ...(durableUnits.length && fixtures.some((f) => f.anchors.some((a) => a.storeRoundTrip))
+      ? {
+          storageObservations: {
+            units: durableUnits,
+            instruction:
+              'Exercise the stored record through its real writer and next reader. An unrelated successful save or a newly generated value alone does not show that the recovered value can be persisted, reloaded and used. Vary independent damage causes separately; keep other state intact.',
+          },
+        }
+      : {}),
     ownedReadModelFixtures: ownedContracts.map((c) => ({
       ...c,
       producers: c.producers.map((p) => ({ module: p.module, name: p.name, inputType: p.inputType })),
