@@ -1,3 +1,4 @@
+import { checkObservedResultFields } from './native-coding-output-assertions'
 import { requestsDurableRoundTrip, variantHasStoreRoundTrip } from './native-coding-storage-fixtures'
 import { randomUUID } from 'node:crypto'
 import { readFile, rm, writeFile } from 'node:fs/promises'
@@ -201,7 +202,7 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
     throw new InvalidFixtureDraft(`Return only the pending scenarios: ${pending.join(', ')}`)
   const issues: string[] = []
   const ownership = planning.ownedContracts ?? []
-  const units = ownership.length ? sourceUnits(planning.source.criteria) : []
+  const units = sourceUnits(planning.source.criteria)
   const approvedFor = (ids: string[]) =>
     units
       .filter((unit) => ids.includes(unit.id))
@@ -209,13 +210,13 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       .join('\n')
   // In-progress drafts can survive an upgrade. Recheck retained private bodies
   // against B before treating them as part of a newly frozen plan.
-  if (ownership.length || planning.requireWitness)
-    for (const item of retained) {
+  for (const item of retained) {
       const scenario = selection.scenarios[Number(item.scenario.slice(1)) - 1]
       const fixture = scenario && planning.fixtures?.[Number(scenario.fixture.slice(1)) - 1]
       const control = fixture?.anchors.find((a) => a.id === scenario?.anchor)?.control
       try {
         if (!scenario || !fixture || !control) throw new InvalidFixtureDraft('Retained public fixture is unavailable')
+        checkObservedResultFields(fixture.path,control,item.body,approvedFor(scenario.units))
         checkOwnedFixtureInputs(fixture.path, control, item.body, ownership, approvedFor(scenario.units))
         if (planning.requireWitness && item.baseline === 'fail' && !item.contrast) fixtureWitness(fixture.path,item.body,control)
       } catch (error) {
@@ -234,6 +235,7 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       const control = fixture?.anchors.find((a) => a.id === selected.anchor)?.control
       if (control === undefined) throw new InvalidFixtureDraft('Missing public control')
       const body = varyPublicFixture(control, reply.edits, fixture!.path)
+      checkObservedResultFields(fixture!.path,control,body,approvedFor(selected.units))
       checkOwnedFixtureInputs(fixture!.path, control, body, ownership, approvedFor(selected.units))
       const contrast = bindFixtureContrast(reply.contrast, body, planning.namedInputs ?? [], planning.inputExamples)
       if (planning.requireWitness && reply.baseline === 'fail' && !contrast) fixtureWitness(fixture!.path,body,control)
@@ -262,7 +264,7 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
     }
   }
   if (!issues.length) {
-    for (const unit of sourceUnits(planning.source.criteria).filter(u => requestsDurableRoundTrip(u.text))) {
+    for (const unit of units.filter(u => requestsDurableRoundTrip(u.text))) {
       const routes = cases.flatMap(c => {
         if (!c.units.includes(unit.id)) return []
         const f = planning.fixtures![Number(c.fixture.slice(1))-1]

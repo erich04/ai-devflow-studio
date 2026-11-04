@@ -304,3 +304,57 @@ it('saves and reloads the journal',async()=>{
   }
   expect(() => fixtureSelectionFromResponse(inspection, sim('f1:t1'))).not.toThrow()
 })
+
+it('rejects an acceptance assertion that searches undocumented aliases for a single output field', () => {
+  const file = 'delivery.test.ts',
+    fixture = fixtureTemplate(
+      file,
+      "it('reads a completed attempt',()=>{\n const result=readReceipt()\n expect(result.id).toBe('job')\n})",
+    )
+  const source = {
+    adapter: { kind: 'vitest' as const, directory: '.' },
+    objectiveVersion: 1,
+    sourceDigest: 'a'.repeat(64),
+    baselineDigest: 'b'.repeat(64),
+    criteria: [{ id: 'approved', text: 'Expose the authoritative delivery outcome.', sourceRef: 'request' }],
+  }
+  const p = {
+    source,
+    phase: 'cases' as const,
+    fixtures: [fixture],
+    request: { systemPrompt: '', messages: [], tools: [] },
+    selection: {
+      scenarios: [{ fixture: 'f1', anchor: 't1', units: ['r1.1'], precondition: 'Known receipt' }],
+      contextOnly: [],
+    },
+  }
+  const reply = (expression: string) =>
+    codingToolReply('draft', 'submit_fixture_cases', {
+      cases: [
+        {
+          scenario: 's1',
+          baseline: 'fail',
+          edits: [
+            {
+              line: 4,
+              deleteCount: 0,
+              insert: ` const observed=${expression}\n expect(String(observed ?? '')).toBe('ready')`,
+            },
+          ],
+        },
+      ],
+    })
+  const aliases = 'result?.deliveryState ?? result?.delivery?.status ?? result?.outcome'
+  expect(() => fixtureChecksFromResponse(p, reply(aliases), '2026-11-04T20:00:00Z')).toThrow(/unverified.*aliases/i)
+  expect(() => fixtureChecksFromResponse(p, reply('result.deliveryState ?? null'), '2026-11-04T20:00:00Z')).not.toThrow()
+  const approved = {
+    ...p,
+    source: {
+      ...source,
+      criteria: [
+        { ...source.criteria[0]!, text: 'Accept deliveryState, delivery.status or outcome from supported formats.' },
+      ],
+    },
+  }
+  expect(() => fixtureChecksFromResponse(approved, reply(aliases), '2026-11-04T20:00:00Z')).not.toThrow()
+})
