@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { lstat, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { codingDigest, codingFilePath, type CodingCandidateWorkspace } from './coding-candidate-workspace'
-import { privatePreflightDiagnostics } from './native-coding-preflight-diagnostics'
+import { privateAcceptancePath } from './native-coding-acceptance-context'
+import { preflightFrameReader, privatePreflightDiagnostics } from './native-coding-preflight-diagnostics'
 import { fixtureTemplate, type FixtureTemplate } from './native-coding-fixture-cases'
 import type { CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import type { FrozenIndependentChecks, IndependentCheckResult } from './native-coding-independent-verification'
@@ -92,31 +93,15 @@ export async function runVitestIndependentChecks(input: { plan: FrozenIndependen
     }
     tests.push({id:check.criterionId, file:path.posix.join(targetDirectory, `${stem}-${index}.test.${extension}`), body, title, matched})
   }
-  const reporter = `import { writeFileSync, realpathSync } from 'node:fs';
+  const framePaths = input.onDiagnostics ? (input.baseline?.identity.base.files ?? [])
+    .filter(f => !privateAcceptancePath.test(f.path) && /\.[cm]?[jt]sx?$/u.test(f.path) && !/\.(test|spec)\.[^.]+$/u.test(f.path) && f.path.length<=300).map(f=>f.path).slice(0,6000) : []
+  const reporter = `import { writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 export default class AcceptanceReporter {
   onFinished(files = [], unhandled = []) {
     const diagnostics = [];
-    const getFrames = error => {
-      if (!${Boolean(input.onDiagnostics && input.baseline)}) return [];
-      const roots = [process.cwd(), realpathSync('.')].map(root => root.split(path.sep).join('/') + '/');
-      const frames = [];
-      const lines = String(error.stackStr || error.stack || '').split('\\n').slice(1,18);
-      for (const line of lines) {
-        const normalized = line.split(path.sep).join('/');
-        for (const root of roots) {
-          const pos = normalized.indexOf(root);
-          if (pos < 0) continue;
-          const tail = normalized.slice(pos + root.length);
-          const hit = /^([a-zA-Z0-9_@./ -]+\\.[cm]?[jt]sx?):(\\d+):\\d+\\)?\\s*$/u.exec(tail);
-          if (hit && !hit[1].startsWith('node_modules/') && !hit[1].includes('devflow-acceptance-')) frames.push({file:hit[1],line:Number(hit[2])});
-          break;
-        }
-        if (frames.length >= 6) break;
-      }
-      return frames;
-    };
+    const getFrames = ${framePaths.length ? preflightFrameReader(framePaths) : '() => []'};
     const rows = ${JSON.stringify(tests.map(({ id, file, title, matched }) => ({ id, file, title, controlFile: matched?.file })))}.map(({id, file, title, controlFile}) => {
       const found = files.filter(item => path.resolve(item.filepath) === path.resolve(file));
       if (found.length !== 1) return { id, status: 'invalid', tests: 0 };

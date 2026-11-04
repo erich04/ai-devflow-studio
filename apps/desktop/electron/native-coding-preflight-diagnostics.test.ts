@@ -1,0 +1,54 @@
+// @vitest-environment node
+import { expect, it } from 'vitest'
+import { preflightFrameReader } from './native-coding-preflight-diagnostics'
+
+it('matches the immutable source name across Windows volume casing, short temp directories, Vite file URLs and native stacks', () => {
+  const get = new Function('return (' + preflightFrameReader(['guard.ts', 'app/guard.ts']) + ')')()
+  const input = {
+    stackStr:
+      'Error: example\n    at save (file:///d:/Users/RUNNER~1/AppData/Local/Temp/DF%20WORK/App/guard.ts:12:8)\n    at check (D:\\other\\node_modules\\lib\\guard.ts:1:2)',
+    stacks: [{ file: 'D:\\UniqueCheckout\\app\\guard.ts', line: 12, column: 8 }],
+  }
+  expect(get(input, true)).toEqual([{ file: 'app/guard.ts', line: 12 }])
+  expect(get({ stack: 'Error\n    at save (/private/tmp/work/guard.ts:3:5)' }, false)).toEqual([
+    { file: 'guard.ts', line: 3 },
+  ])
+  expect(get({ stack: 'Error\n    at save (/private/tmp/work/other.ts:6:8)' }, false)).toEqual([])
+})
+
+it('uses a unique verified baseline guard when transformed stack lines are offset, without echoing a dynamic error', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const { default: path } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { codingDigest, CodingCandidateWorkspace } = await import('./coding-candidate-workspace')
+  const { privatePreflightDiagnostics } = await import('./native-coding-preflight-diagnostics')
+  const root = await mkdtemp(path.join(tmpdir(), 'guard-offset-'))
+  try {
+    const delivery = path.join(root, 'delivery')
+    await mkdir(delivery)
+    await writeFile(
+      path.join(delivery, 'store.ts'),
+      "function save(v:number){\nif(v<1) throw new Error('Invalid saved revision')\n}\n",
+    )
+    const ws = await CodingCandidateWorkspace.create({
+      root: path.join(root, 'work'),
+      delivery,
+      baseCommitSha: 'a'.repeat(40),
+      excludedPaths: [],
+    })
+    const item = {
+      id: 'c',
+      kind: 'TestSetupError',
+      messageDigest: codingDigest('Invalid saved revision'),
+      frames: [{ file: 'store.ts', line: 3 }],
+    }
+    expect(JSON.parse(await privatePreflightDiagnostics([item], ['c'], ws))[0].baselineGuard.location).toBe('store.ts:2')
+    expect(
+      JSON.parse(
+        await privatePreflightDiagnostics([{ ...item, messageDigest: codingDigest('secret runtime value') }], ['c'], ws),
+      )[0].baselineGuard,
+    ).toBeUndefined()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

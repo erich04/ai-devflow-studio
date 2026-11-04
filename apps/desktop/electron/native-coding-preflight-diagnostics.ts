@@ -48,21 +48,34 @@ export async function privatePreflightDiagnostics(items: unknown, ids: string[],
           if (codingDigest(bytes) !== source.hash) continue
           files.set(source.hash, bytes.toString('utf8').split('\n'))
         }
-        const line = files.get(source.hash)?.[frame.line - 1]?.trim()
-        if (!line || line.length > 600) continue
-        const literal = /\bthrow new (?:Error|RangeError|TypeError)\((['"])([\p{L}\p{N} .,:_-]{2,120})\1\)/u.exec(line)
-        if (
-          !literal ||
-          codingDigest(literal[2]!) !== item.messageDigest ||
-          redactSensitiveText(literal[2]!).value !== literal[2]
-        )
-          continue
-        const condition = /^if\s*\((.{1,320})\)\s*\{?\s*throw new /u.exec(line)?.[1]
-        guard = {
-          location: `${source.path}:${frame.line}`,
-          reason: literal[2]!,
-          ...(condition && /^[\w\s.!<>=&|?:+()\[\]-]+$/u.test(condition) ? { condition } : {}),
+        const lines = files.get(source.hash)!
+        const literalOn = (index: number) => {
+          const line = lines[index]?.trim()
+          if (!line || line.length > 600 || !line.includes('throw new')) return undefined
+          const literal = /\bthrow new (?:Error|RangeError|TypeError)\((['"])([\p{L}\p{N} .,:_-]{2,120})\1\)/u.exec(line)
+          if (
+            !literal ||
+            codingDigest(literal[2]!) !== item.messageDigest ||
+            redactSensitiveText(literal[2]!).value !== literal[2]
+          )
+            return undefined
+          const condition = /^if\s*\((.{1,320})\)\s*\{?\s*throw new /u.exec(line)?.[1]
+          return {
+            location: `${source.path}:${index + 1}`,
+            reason: literal[2]!,
+            ...(condition && /^[\w\s.!<>=&|?:+()\[\]-]+$/u.test(condition) ? { condition } : {}),
+          }
         }
+        guard = literalOn(frame.line - 1)
+        if (!guard) {
+          const nearby = []
+          for (let index = Math.max(0, frame.line - 5); index < Math.min(lines.length, frame.line + 4); index++) {
+            const match = literalOn(index)
+            if (match) nearby.push(match)
+          }
+          if (nearby.length === 1) guard = nearby[0]
+        }
+        if (!guard) continue
         break
       }
     }
@@ -71,4 +84,35 @@ export async function privatePreflightDiagnostics(items: unknown, ids: string[],
     notes.push(note)
   }
   return JSON.stringify(notes)
+}
+
+/** The reporter returns only known manifest paths. Hosted Windows runners may use
+ * a short temp directory internally and a long or URI-encoded path in stacks. */
+export function preflightFrameReader(paths: string[]) {
+  const names = [...paths].sort((a, b) => b.length - a.length)
+  return `function frames(error, windows = process.platform === 'win32') {
+    const names = ${JSON.stringify(names)};
+    const out = [];
+    const normalize = input => {
+      let value = String(input);
+      try { value = decodeURIComponent(value); } catch {}
+      value = value.replaceAll(String.fromCharCode(92), '/');
+      return windows ? value.toLowerCase() : value;
+    };
+    const candidates = names.map(name => [name,normalize(name)]);
+    function add(file, number) {
+      const value = normalize(file), line = Number(number);
+      if (!Number.isSafeInteger(line) || line < 1 || value.includes('/node_modules/') || value.includes('devflow-acceptance-')) return;
+      const name = candidates.find(([,part]) => value === part || value.endsWith('/'+part))?.[0];
+      if (name && !out.some(f => f.file===name && f.line===line) && out.length<6) out.push({file:name,line});
+    }
+    for (const frame of (Array.isArray(error.stacks) ? error.stacks : []).slice(0,18)) add(frame.file,frame.line);
+    for (const stack of [error.stackStr,error.stack]) {
+      for (const line of String(stack || '').split('\\n').slice(1,18)) {
+        const hit = /:(\\d+):\\d+\\)?\\s*$/.exec(line);
+        if (hit) add(line.slice(0,hit.index),hit[1]);
+      }
+    }
+    return out;
+  }`
 }
