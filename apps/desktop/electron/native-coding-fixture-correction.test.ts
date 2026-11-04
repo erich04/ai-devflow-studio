@@ -461,3 +461,24 @@ ${replyDeliveryBody(body, lost)}
     await expect(check('try { await __devflowLoseReplyAfterCommit(() => { throw new Error("write failed") }) } catch {}', lost, [])).rejects.toThrow('DevFlowCommittedEffectNotReached')
   }
 })
+
+it('requires an actual clock stimulus for a requested time-boundary scenario', () => {
+  const fixture=fixtureTemplate('recovery.test.ts',`it('resumes safely',async()=>{
+ let calls=0
+ const handle=()=>++calls
+ await exercise(handle)
+ expect(calls).toBe(1)
+})`)
+  const source={objectiveVersion:1,sourceDigest:'b'.repeat(64),baselineDigest:'a'.repeat(64),
+    criteria:[{id:'goal',sourceRef:'approved',text:'Finish bounded recovery when the elapsed-time boundary arrives.'}],
+    adapter:{kind:'vitest' as const,directory:'.'}}
+  const selection={scenarios:[{units:['r1.1'],fixture:'f1',anchor:'t1',precondition:'An already active step crosses its wall-clock deadline.'}],contextOnly:[]}
+  const planning={source,fixtures:[fixture],selection,phase:'cases' as const,request:{systemPrompt:'',messages:[],tools:[]}}
+  const reply=(setup:string)=>codingToolReply('case','submit_fixture_cases',{cases:[{
+    scenario:'s1',baseline:'fail',edits:[{line:2,deleteCount:0,insert:setup},{line:6,deleteCount:0,insert:'expect(calls<=12).toBe(true)'}],
+  }]})
+  expect(()=>fixtureChecksFromResponse(planning,reply('const maxCalls=12'),'2026-11-04T22:00:00Z')).toThrow(/clock|time boundary/i)
+  expect(()=>fixtureChecksFromResponse(planning,reply("vi.spyOn(Date,'now').mockImplementation(()=>advancedTime)"),'2026-11-04T22:00:00Z')).not.toThrow()
+  const countGoal={...planning,source:{...source,criteria:[{...source.criteria[0]!,text:'Finish after no more than twelve calls.'}]}}
+  expect(()=>fixtureChecksFromResponse(countGoal,reply('const maxCalls=12'),'2026-11-04T22:00:00Z')).not.toThrow()
+})

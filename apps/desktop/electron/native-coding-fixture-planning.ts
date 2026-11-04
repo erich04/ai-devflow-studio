@@ -1,3 +1,4 @@
+import { requestsTimeBoundary } from './native-coding-clock-fixtures'
 import { requestsLostAcknowledgement } from './native-coding-lost-reply'
 import { requestsDurableRoundTrip } from './native-coding-storage-fixtures'
 import { redactSensitiveText, type NativeConversationRequest, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
@@ -285,6 +286,12 @@ export async function fixturePlanning(
     approved: source.criteria,
     units: approvedUnits,
     requiredOperationSubjects: requiredSubjects,
+    ...(approvedUnits.some((u) => requestsTimeBoundary(u.text))
+      ? { clockBoundaries: {
+          units: approvedUnits.filter((u) => requestsTimeBoundary(u.text)).map((u) => u.id),
+          instruction: 'Exercise the actual time boundary using the public fixture clock or a controlled deadline. Assert its cleanup and persisted state. A step count or request count is a separate limit. Distinguish repeated effects from permitted new recovery attempts.',
+        } }
+      : {}),
     ...(lostReplyUnits.length
       ? {
           lostAcknowledgement: {

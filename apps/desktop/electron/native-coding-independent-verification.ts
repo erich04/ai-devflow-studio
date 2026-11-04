@@ -1,3 +1,4 @@
+import { requestsTimeBoundary, hasClockStimulus } from './native-coding-clock-fixtures'
 import { hasCommitThenLostReply, lostReplyHelper, requestsLostAcknowledgement } from './native-coding-lost-reply'
 import { checkObservedResultFields } from './native-coding-output-assertions'
 import { requestsDurableRoundTrip, variantHasStoreRoundTrip } from './native-coding-storage-fixtures'
@@ -301,6 +302,14 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       const callers = scoped.filter((c) => planning.fixtures![Number(c.fixture.slice(1)) - 1]?.anchors.find((a) => a.id === c.anchor)?.replySeam)
       for (const c of callers.length ? callers : scoped) byScenario.delete(c.scenario)
       issues.push(`For ${unit}, make the caller's reply fail after the committed effect with ${lostReplyHelper} and observe what its next read shows.`)
+    }
+  }
+  if (!issues.length) {
+    for (const unit of units.filter((u) => requestsTimeBoundary(u.text))) {
+      const scoped = cases.filter((c) => c.units.includes(unit.id))
+      if (scoped.some((c) => hasClockStimulus(planning.fixtures![Number(c.fixture.slice(1)) - 1]!.path, c.body))) continue
+      for (const c of scoped) byScenario.delete(c.scenario)
+      issues.push(`The source ${unit.id} requires a time boundary. Exercise the clock, elapsed time or deadline through the baseline's supported fixture before observing cleanup. A total request count or step cap does not establish that time has expired, nor distinguish a new permitted attempt from replaying an existing effect.`)
     }
   }
   if (issues.length) {
