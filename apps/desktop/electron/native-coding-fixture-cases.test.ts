@@ -67,3 +67,53 @@ it('runs the new assertion inside the chosen baseline fixture scope and removes 
   expect(body).toContain('expect(run()).toBe(3)')
   expect(body).not.toMatch(/public display|public execution|describe\('screen'/)
 })
+
+it('distinguishes a failure reached during the original public call from a separately initiated manual retry', () => {
+  const f = fixtureTemplate(
+    'service.test.ts',
+    `
+    import {it, expect} from 'vitest'
+    it('handles work', async () => {
+      const service = harness(() => { throw new TransportError({code:'busy',retryable:true}) })
+      const result = await submit(service)
+      expect(result).toBe('done')
+    })
+    it('handles another case', async () => {
+      await submit(service)
+      const result = await service.retry()
+      expect(result).toBe('done')
+    })`,
+  )
+  expect(f.anchors[0]?.behavior).toEqual({ actions: ['submit'], faults: ['TransportError: busy'] })
+  expect(f.anchors[1]?.behavior).toEqual({ actions: ['submit', 'service.retry'], faults: [] })
+})
+
+it('preserves the meaning and order of original assertions, allowing harmless whitespace and rejecting a changed operator', () => {
+  const original = 'const value = 1\nexpect(!value || value === 1).toBe(true)'
+  const formatted = [{ line: 1, deleteCount: 2, insert: 'const value = 2\nexpect( !value || value===1 ).toBe(true);' }]
+  expect(varyPublicFixture(original, formatted)).toContain('value = 2')
+  const changed = [{ line: 2, deleteCount: 1, insert: 'expect(~value || value === 1).toBe(true)' }]
+  expect(() => varyPublicFixture(original, changed)).toThrow(/assertion.*line 2/i)
+})
+
+it('permits inspecting one awaited public result without changing its original resolves matcher or invoking the product twice', () => {
+  const original = 'await expect(load(item)).resolves.toMatchObject({ok:true})'
+  const captured = 'const record = await load(item)\nexpect(record).toMatchObject({ok:true})\nexpect(record.id).toBe(4)'
+  const program = varyPublicFixture(original, [{ line: 1, deleteCount: 1, insert: captured }])
+  expect(program.split('load(item)')).toHaveLength(2)
+  expect(program).toContain('__devflowAssert')
+  for (const altered of [
+    captured.replace('load(item)', 'load(other)'),
+    captured.replace('ok:true', 'ok:false'),
+    captured.replace('const record', 'let record'),
+    captured.replace('expect(record)', 'touch(record); expect(record)'),
+  ]) {
+    expect(() => varyPublicFixture(original, [{ line: 1, deleteCount: 1, insert: altered }])).toThrow(/assertion/i)
+  }
+})
+
+it('reports the edited callback location when a variation drops a closing delimiter', () => {
+  const original = 'await expect(load({id:1})).resolves.toEqual({ok:true})'
+  const malformed = 'const record = await load({id:1,\nexpect(record).toEqual({ok:true})'
+  expect(() => varyPublicFixture(original, [{ line: 1, deleteCount: 1, insert: malformed }])).toThrow(/syntax.*line.*TS\d+/i)
+})

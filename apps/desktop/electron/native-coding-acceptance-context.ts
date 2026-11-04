@@ -116,6 +116,43 @@ function excerpt(text: string, limit: number): string {
   return text.slice(0, head) + marker + text.slice(-(limit - marker.length - head))
 }
 
+export function focusFixtureEvidence(file: Evidence | undefined, query: string, limit: number): Evidence | undefined {
+  if (!file || file.content.length <= limit) return file
+  const chunks: Array<{ index: number; text: string }> = []
+  let lines: string[] = [],
+    size = 0
+  for (const line of file.content.split('\n')) {
+    if (size + line.length > 1000 && lines.length) {
+      chunks.push({ index: chunks.length, text: lines.join('\n') })
+      lines = []
+      size = 0
+    }
+    lines.push(line)
+    size += line.length + 1
+  }
+  if (lines.length) chunks.push({ index: chunks.length, text: lines.join('\n') })
+  const ranked = rankMemoryByRelevance(chunks, query, (c) => c.text, { minMatchedTerms: 1 })
+  if (!ranked.length) return { ...file, content: excerpt(file.content, limit), truncated: true }
+  const marker = '\n[... omitted ...]\n'
+  const picked = new Map<number, string>()
+  let remaining = limit
+  for (const chunk of [ranked[0]!.item, chunks[0]!, chunks[chunks.length - 1]!, ...ranked.map((r) => r.item)]) {
+    if (!picked.has(chunk.index) && remaining > marker.length + 80) {
+      const text = excerpt(chunk.text, Math.min(remaining - marker.length, 1100))
+      picked.set(chunk.index, text)
+      remaining -= text.length + marker.length
+    }
+  }
+  return {
+    ...file,
+    content: [...picked]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, text]) => text)
+      .join(marker),
+    truncated: true,
+  }
+}
+
 /** Use only immutable B blobs. Repository conventions help interpret approved terms,
  * while the approved objective remains the source of acceptance requirements. */
 export async function acceptanceContext(

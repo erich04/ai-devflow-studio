@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { lstat, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { codingDigest, codingFilePath, type CodingCandidateWorkspace } from './coding-candidate-workspace'
+import { privatePreflightDiagnostics } from './native-coding-preflight-diagnostics'
 import { fixtureTemplate, type FixtureTemplate } from './native-coding-fixture-cases'
 import type { CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import type { FrozenIndependentChecks, IndependentCheckResult } from './native-coding-independent-verification'
@@ -91,11 +92,31 @@ export async function runVitestIndependentChecks(input: { plan: FrozenIndependen
     }
     tests.push({id:check.criterionId, file:path.posix.join(targetDirectory, `${stem}-${index}.test.${extension}`), body, title, matched})
   }
-  const reporter = `import { writeFileSync } from 'node:fs';
+  const reporter = `import { writeFileSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 export default class AcceptanceReporter {
   onFinished(files = [], unhandled = []) {
     const diagnostics = [];
+    const getFrames = error => {
+      if (!${Boolean(input.onDiagnostics && input.baseline)}) return [];
+      const roots = [process.cwd(), realpathSync('.')].map(root => root.split(path.sep).join('/') + '/');
+      const frames = [];
+      const lines = String(error.stackStr || error.stack || '').split('\\n').slice(1,18);
+      for (const line of lines) {
+        const normalized = line.split(path.sep).join('/');
+        for (const root of roots) {
+          const pos = normalized.indexOf(root);
+          if (pos < 0) continue;
+          const tail = normalized.slice(pos + root.length);
+          const hit = /^([a-zA-Z0-9_@./ -]+\\.[cm]?[jt]sx?):(\\d+):\\d+\\)?\\s*$/u.exec(tail);
+          if (hit && !hit[1].startsWith('node_modules/') && !hit[1].includes('devflow-acceptance-')) frames.push({file:hit[1],line:Number(hit[2])});
+          break;
+        }
+        if (frames.length >= 6) break;
+      }
+      return frames;
+    };
     const rows = ${JSON.stringify(tests.map(({ id, file, title, matched }) => ({ id, file, title, controlFile: matched?.file })))}.map(({id, file, title, controlFile}) => {
       const found = files.filter(item => path.resolve(item.filepath) === path.resolve(file));
       if (found.length !== 1) return { id, status: 'invalid', tests: 0 };
@@ -114,7 +135,7 @@ export default class AcceptanceReporter {
       const errors = tests.flatMap(task => task.result?.errors ?? []);
       for (const error of [...suiteErrors, ...errors].slice(0, 4)) {
         const kind = error.message === 'DevFlowFixtureInputMismatch' ? 'MismatchedInput' : ['AssertionError','SyntaxError','TypeError','ReferenceError'].includes(error.name) ? error.name : 'TestSetupError';
-        diagnostics.push({id, kind});
+        diagnostics.push({id, kind, ...(kind === 'TestSetupError' ? {messageDigest:createHash('sha256').update(String(error.message || '')).digest('hex'), frames:getFrames(error)}:{})});
       }
       const broken = (title !== undefined && (tests.length !== 2 || !tests.some(t => t.name === title) || !tests.some(t => t.name === 'devflow:original-control' && t.result?.state === 'pass'))) || unhandled.length || suiteErrors.length || !tests.length || tests.some(task => !['pass','fail'].includes(task.result?.state) || ['skip','todo'].includes(task.mode)) || errors.some(error => error.name !== 'AssertionError' || /any number of assertion|number of assertions to be called/i.test(error.message ?? ''));
       return { id, status: broken ? 'invalid' : tests.some(task => task.result?.state === 'fail') ? 'failed' : 'passed', tests: tests.length, failedTitles: tests.filter(task => task.result?.state === 'fail').slice(0, 20).map(task => task.name) };
@@ -145,8 +166,8 @@ export default class AcceptanceReporter {
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error }
     const result = vitestIndependentResult(plan, nonce, receipt, report)
     if (input.onDiagnostics && report && typeof report === 'object') {
-      const diagnostics = (report as { diagnostics?: Array<{ id: string; kind: string }> }).diagnostics
-      if (Array.isArray(diagnostics)) input.onDiagnostics(JSON.stringify(diagnostics.filter(item => plan.criteria.some(criterion => criterion.id === item.id) && ['AssertionError', 'SyntaxError', 'TypeError', 'ReferenceError', 'TestSetupError', 'MatchedControlFailed', 'MismatchedInput'].includes(item.kind)).map(({ id, kind }) => ({id, kind}))).slice(0, 4000))
+      const diagnostics = (report as {diagnostics?:unknown}).diagnostics
+      input.onDiagnostics(await privatePreflightDiagnostics(diagnostics, plan.criteria.map(c=>c.id), input.baseline))
     }
     return result
   } finally {

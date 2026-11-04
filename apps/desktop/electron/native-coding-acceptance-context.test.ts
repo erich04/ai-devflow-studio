@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expect, it } from 'vitest'
-import { acceptanceContext, fixtureInputExamples } from './native-coding-acceptance-context'
+import { acceptanceContext, fixtureInputExamples, focusFixtureEvidence } from './native-coding-acceptance-context'
 import { codingDigest } from './coding-candidate-workspace'
 
 it('keeps the baseline definition and every named execution surface when a large early suite would otherwise consume the input budget', async () => {
@@ -62,4 +62,65 @@ it('grounds a named mode in the data actually imported by the public test, inclu
   expect(result[0]).toMatchObject({ path: 'packages/data/src/data.ts', term: 'BATCH', field: 'mode', value: 'batch' })
   expect(result[0]?.observedValues).toEqual(['batch', 'live'])
   expect(result[0]?.excerpt).toContain('job-b')
+})
+
+it('keeps a relevant middle implementation slice within the model input allowance while retaining its original path', () => {
+  const source = [
+    ...Array.from({ length: 250 }, (_, i) => 'export const unrelatedColor' + i + ' = "grey"'),
+    'function resumeInterruptedPayment() { /* 支付中断恢复时核对账本 */ }',
+    ...Array.from({ length: 250 }, (_, i) => 'export const noise' + i + ' = "blue"'),
+  ].join('\n')
+  const focus = focusFixtureEvidence(
+    { path: 'payments.ts', content: source, truncated: false },
+    '支付中断恢复 resumeInterruptedPayment',
+    3600,
+  )
+  expect(focus?.content).toContain('resumeInterruptedPayment')
+  expect(focus?.content.length).toBeLessThanOrEqual(3600)
+  expect(focus).toMatchObject({ path: 'payments.ts', truncated: true })
+})
+
+it('keeps all named suites as context when only some of them offer eligible public controls', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const { default: path } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { CodingCandidateWorkspace } = await import('./coding-candidate-workspace')
+  const { fixturePlanning } = await import('./native-coding-fixture-planning')
+  const root = await mkdtemp(path.join(tmpdir(), 'fixture-menu-')),
+    delivery = path.join(root, 'delivery')
+  try {
+    await mkdir(delivery)
+    await writeFile(
+      path.join(delivery, 'platform.test.ts'),
+      "import {it,expect} from 'vitest'; it.each([1,2])('platform %s',n=>expect(n).toBeGreaterThan(0))",
+    )
+    await writeFile(
+      path.join(delivery, 'behavior.test.ts'),
+      "import {it,expect} from 'vitest'; it('positive',()=>{expect(1).toBe(1)})",
+    )
+    const ws = await CodingCandidateWorkspace.create({
+      root: path.join(root, 'work'),
+      delivery,
+      baseCommitSha: 'a'.repeat(40),
+      excludedPaths: ['node_modules'],
+    })
+    const plan = await fixturePlanning(
+      {
+        objectiveVersion: 1,
+        baselineDigest: ws.identity.base.digest,
+        sourceDigest: 'b'.repeat(64),
+        criteria: [{ id: 'goal', sourceRef: 'approved', text: 'Work across modes.' }],
+      },
+      ws,
+      ['platform.test.ts', 'behavior.test.ts'],
+    )
+    expect(plan?.phase).toBe('select')
+    const payload = JSON.parse(plan!.request.messages[0]!.content as string)
+    expect(payload.fixtures.map((f: { path: string; anchors: unknown[] }) => [f.path, f.anchors.length])).toEqual([
+      ['platform.test.ts', 0],
+      ['behavior.test.ts', 1],
+    ])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })

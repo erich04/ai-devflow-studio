@@ -7,7 +7,7 @@ import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-
 import type { CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import type { NativeCodingSession } from './native-coding-session'
 import { fixturePlanning, type AcceptancePlanning } from './native-coding-fixture-planning'
-import { InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
+import { NoFixtureChangeWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
 
 export type IndependentCheckSource = {
   objectiveVersion: number; baselineDigest: string; sourceDigest: string
@@ -26,7 +26,7 @@ export type IndependentCheckResult = {
 export type IndependentVerificationState = {
   plans: FrozenIndependentChecks[]
   humanInputs: Array<{ id: string; text: string; objectiveVersion: number }>
-  drafts?: Array<{ attemptId: string; objectiveVersion: number; sourceDigest: string; feedback: string; preflightStatus?: 'valid' | 'invalid' | 'unavailable'; correctCases?: true; plan?: FrozenIndependentChecks; selection?: FixtureSelection }>
+  drafts?: Array<{ attemptId: string; objectiveVersion: number; sourceDigest: string; feedback: string; preflightStatus?: 'valid' | 'invalid' | 'unavailable'; correctCases?: true; reselect?:true; retainedCaseIds?:string[]; partial?:PartialFixtureCases; plan?: FrozenIndependentChecks; selection?: FixtureSelection }>
 }
 const digestPattern = /^[a-f0-9]{64}$/u
 const identifier = /^[a-zA-Z0-9_.:-]{1,200}$/u
@@ -69,6 +69,9 @@ export function validateIndependentVerification(state: IndependentVerificationSt
   if (previous && (!isDeepStrictEqual(state.plans.slice(0, previous.plans.length), previous.plans) || !isDeepStrictEqual(state.humanInputs.slice(0, previous.humanInputs.length), previous.humanInputs))) throw new Error('Frozen independent verification is append-only')
   if (state.drafts && (!Array.isArray(state.drafts) || new Set(state.drafts.map(item => item.attemptId)).size !== state.drafts.length || state.drafts.some(item => !identifier.test(item.attemptId) || !Number.isSafeInteger(item.objectiveVersion) || item.objectiveVersion < 1 || !digestPattern.test(item.sourceDigest) || typeof item.feedback !== 'string' || item.feedback.length > 8000))) throw new Error('Invalid independent check drafts')
   for (const draft of state.drafts ?? []) {
+    if (draft.reselect !== undefined && (draft.reselect!==true || draft.plan || draft.partial || draft.preflightStatus || draft.selection)) throw new Error('Invalid fixture re-selection receipt')
+    if (draft.partial && (draft.selection || draft.plan || draft.preflightStatus || !validPartialFixtureCases(draft.partial))) throw new Error('Invalid partial independent fixture draft')
+    if (draft.retainedCaseIds && (!draft.correctCases || !Array.isArray(draft.retainedCaseIds) || new Set(draft.retainedCaseIds).size!==draft.retainedCaseIds.length || draft.retainedCaseIds.some(id=>!draft.plan?.checks.some(check=>check.criterionId===id)))) throw new Error('Invalid retained baseline cases')
     if (draft.correctCases !== undefined && (draft.correctCases !== true || draft.preflightStatus !== 'invalid' || !draft.plan?.coverage)) throw new Error('Invalid independent fixture correction')
     if (draft.selection && (!validSelectionRecord(draft.selection) || draft.plan || draft.preflightStatus)) throw new Error('Invalid independent fixture selection')
     if (draft.preflightStatus !== undefined && !['valid', 'invalid', 'unavailable'].includes(draft.preflightStatus)) throw new Error('Invalid independent preflight receipt')
@@ -172,22 +175,73 @@ export function fixtureSelectionFromResponse(planning: AcceptancePlanning, respo
   return readFixtureSelection(planning.source.criteria, planning.fixtures!, planToolValue(response, 'select_behavior_contract'))
 }
 export function fixtureChecksFromResponse(planning: AcceptancePlanning, response: NativeConversationResponse, now: string) {
-  const draft = planToolValue(response, 'submit_fixture_cases') as {cases?: Array<{scenario: string; edits: unknown; baseline: string; contrast?: unknown}>} | null
+  const draft = planToolValue(response, 'submit_fixture_cases') as {
+    cases?: Array<{ scenario: string; edits: unknown; baseline: string; contrast?: unknown }>
+  } | null
   const selection = planning.selection!
-  if (!draft || !Array.isArray(draft.cases) || draft.cases.length !== selection.scenarios.length || new Set(draft.cases.map(c=>c?.scenario)).size !== draft.cases.length) throw new InvalidFixtureDraft('Incomplete fixture cases')
-  const cases = selection.scenarios.map((scenario, i) => {
-    const reply = draft.cases!.find(c => c.scenario === `s${i + 1}`)
-    if (!reply) throw new InvalidFixtureDraft('Missing selected scenario')
-    const fixture = planning.fixtures![Number(scenario.fixture.slice(1)) - 1]
-    const control = fixture?.anchors.find(a => a.id === scenario.anchor)?.control
-    if (control === undefined) throw new InvalidFixtureDraft('Missing public control')
-    const body = varyPublicFixture(control, reply.edits)
-    const contrast = bindFixtureContrast(reply.contrast, body, planning.namedInputs ?? [], planning.inputExamples)
-    return { ...scenario, body, baseline: reply.baseline, contrast }
+  const selectionDigest = codingDigest(JSON.stringify(selection))
+  const retained =
+    planning.partial && validPartialFixtureCases(planning.partial) && planning.partial.selectionDigest === selectionDigest
+      ? planning.partial.cases
+      : []
+  const byScenario = new Map(retained.map((c) => [c.scenario, c]))
+  const pending = selection.scenarios.map((_, i) => `s${i + 1}`).filter((id) => !byScenario.has(id))
+  if (
+    !draft ||
+    !Array.isArray(draft.cases) ||
+    draft.cases.length > pending.length ||
+    new Set(draft.cases.map((c) => c?.scenario)).size !== draft.cases.length ||
+    draft.cases.some((c) => !c || !pending.includes(c.scenario))
+  )
+    throw new InvalidFixtureDraft(`Return only the pending scenarios: ${pending.join(', ')}`)
+  const issues: string[] = []
+  for (const id of pending) {
+    try {
+      const reply = draft.cases.find((c) => c.scenario === id)
+      if (!reply || (reply.baseline !== 'pass' && reply.baseline !== 'fail'))
+        throw new InvalidFixtureDraft('Missing variation or baseline expectation')
+      const selected = selection.scenarios[Number(id.slice(1)) - 1]!
+      const fixture = planning.fixtures![Number(selected.fixture.slice(1)) - 1]
+      const control = fixture?.anchors.find((a) => a.id === selected.anchor)?.control
+      if (control === undefined) throw new InvalidFixtureDraft('Missing public control')
+      const body = varyPublicFixture(control, reply.edits, fixture!.path)
+      const contrast = bindFixtureContrast(reply.contrast, body, planning.namedInputs ?? [], planning.inputExamples)
+      byScenario.set(id, { scenario: id, baseline: reply.baseline, body, ...(contrast ? { contrast } : {}) })
+    } catch (error) {
+      if (!(error instanceof InvalidFixtureDraft)) throw error
+      issues.push(`${id}: ${error.message}`)
+    }
+  }
+  const cases = selection.scenarios.flatMap((selected, i) => {
+    const value = byScenario.get(`s${i + 1}`)
+    return value ? [{ ...selected, ...value }] : []
   })
-  requireNamedFixtureSubjects(planning.requiredSubjects ?? [], cases)
-  const bound = bindFixtureCases(planning.source.criteria, planning.fixtures!, {cases, contextOnly:selection.contextOnly})
-  return freezeIndependentChecks({...planning.source, criteria:bound.criteria}, {checks:bound.checks}, now, bound.coverage)
+  if (!issues.length) {
+    for (const subject of planning.requiredSubjects ?? []) {
+      try {
+        requireNamedFixtureSubjects([subject], cases)
+      } catch (error) {
+        if (!(error instanceof InvalidFixtureDraft)) throw error
+        const missing = cases.filter((c) => c.units.includes(subject.unit)).map((c) => c.scenario)
+        for (const id of missing) byScenario.delete(id)
+        issues.push(`${missing.join(', ') || subject.unit}: ${error.message}`)
+      }
+    }
+  }
+  if (issues.length) {
+    const feedback = issues.join(' ').slice(0, 4000)
+    const partial = partialFixtureCases(selectionDigest, [...byScenario.values()])
+    if (validPartialFixtureCases(partial)) throw new FixtureCaseCorrection(feedback, partial)
+    throw new InvalidFixtureDraft(feedback)
+  }
+  if (cases.every((c) => c.baseline === 'pass')) throw new NoFixtureChangeWitness()
+  const bound = bindFixtureCases(planning.source.criteria, planning.fixtures!, { cases, contextOnly: selection.contextOnly })
+  return freezeIndependentChecks(
+    { ...planning.source, criteria: bound.criteria },
+    { checks: bound.checks },
+    now,
+    bound.coverage,
+  )
 }
 export function independentChecksFromResponse(source: IndependentCheckSource, response: NativeConversationResponse, now: string): FrozenIndependentChecks {
   try {

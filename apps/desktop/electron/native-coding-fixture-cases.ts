@@ -1,14 +1,50 @@
 import ts from 'typescript'
+import { codingSourceDiagnostics } from './coding-source-diagnostics'
 import { codingDigest } from './coding-candidate-workspace'
 
 export class InvalidFixtureDraft extends Error {}
+export class NoFixtureChangeWitness extends InvalidFixtureDraft {
+  constructor() {
+    super(
+      'Every variation was declared to pass on the unchanged baseline. No test was run. Choose a public control and stimulus that witness the requested change.',
+    )
+  }
+}
 
 export type AcceptanceCriterion = { id: string; text: string; sourceRef: string }
 type FixtureContrast = { control: string; requested: string; field?: string; boundCall?: true }
+export type AuthoredFixtureCase = { scenario: string; baseline: 'pass' | 'fail'; body: string; contrast?: FixtureContrast }
+export type PartialFixtureCases = { selectionDigest: string; cases: AuthoredFixtureCase[]; digest: string }
+export function partialFixtureCases(selectionDigest: string, cases: AuthoredFixtureCase[]): PartialFixtureCases {
+  return { selectionDigest, cases, digest: codingDigest(JSON.stringify({ selectionDigest, cases })) }
+}
+export class FixtureCaseCorrection extends InvalidFixtureDraft {
+  constructor(
+    message: string,
+    readonly partial: PartialFixtureCases,
+  ) {
+    super(message)
+  }
+}
+export function validPartialFixtureCases(partial: PartialFixtureCases) {
+  return (
+    !!partial &&
+    /^[a-f0-9]{64}$/u.test(partial.selectionDigest) &&
+    Array.isArray(partial.cases) &&
+    partial.cases.length > 0 &&
+    partial.cases.length <= 16 &&
+    JSON.stringify(partial.cases).length <= 128000 &&
+    partial.digest === codingDigest(JSON.stringify({ selectionDigest: partial.selectionDigest, cases: partial.cases })) &&
+    new Set(partial.cases.map((c) => c?.scenario)).size === partial.cases.length &&
+    partial.cases.every(
+      (c) => c && /^s[1-9]\d*$/u.test(c.scenario) && ['pass', 'fail'].includes(c.baseline) && bounded(c.body, 64000),
+    )
+  )
+}
 export type FixtureBinding = { path: string; hash: string; anchor: string; units: string[]; contrast?: FixtureContrast }
 export type CoverageRecord = { sources: AcceptanceCriterion[]; contextOnly: Array<{ unit: string; reason: string }> }
 type Region = { start: number; end: number }
-type Anchor = Region & { id: string; title: string; control?: string }
+type Anchor = Region & { id: string; title: string; control?: string; behavior?: { actions: string[]; faults: string[] } }
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
 const bounded = (value: unknown, limit: number): value is string =>
@@ -166,6 +202,39 @@ export function requireNamedFixtureSubjects(
   }
 }
 
+function fixtureBehavior(block: ts.Block, tree: ts.SourceFile) {
+  const actions = new Set<string>(),
+    faults = new Set<string>()
+  function visit(node: ts.Node) {
+    if (ts.isAwaitExpression(node) && ts.isCallExpression(node.expression)) {
+      const name = node.expression.expression.getText(tree)
+      if (
+        actions.size < 7 &&
+        /^[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*){0,2}$/u.test(name) &&
+        !/^(?:expect|vi|Promise)\b/u.test(name)
+      )
+        actions.add(name)
+    }
+    if (faults.size < 3 && ts.isThrowStatement(node) && ts.isNewExpression(node.expression)) {
+      const construction = node.expression
+      const name = construction.expression.getText(tree)
+      if (/^[a-zA-Z_$][\w$]{0,60}$/u.test(name)) {
+        const options = construction.arguments?.[0]
+        const code =
+          options && ts.isObjectLiteralExpression(options)
+            ? options.properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText(tree) === 'code')
+            : undefined
+        const value =
+          code && ts.isPropertyAssignment(code) && ts.isStringLiteral(code.initializer) ? code.initializer.text : ''
+        faults.add(value && /^[a-zA-Z0-9_-]{1,60}$/u.test(value) ? name + ': ' + value : name)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(block)
+  return { actions: [...actions], faults: [...faults] }
+}
+
 function registrationRoot(expression: ts.Expression): ts.Expression {
   while (
     ts.isCallExpression(expression) ||
@@ -222,7 +291,12 @@ export function fixtureTemplate(file: string, source: string) {
               : undefined
           anchors.push({
             ...region,
-            ...(control !== undefined ? { control } : {}),
+            ...(control !== undefined &&
+            callback &&
+            (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+            ts.isBlock(callback.body)
+              ? { control, behavior: fixtureBehavior(callback.body, tree) }
+              : {}),
             id: `t${anchors.length + 1}`,
             title: name && ts.isStringLiteralLike(name) ? name.text : '(dynamic title)',
           })
@@ -445,7 +519,7 @@ export function validateCoverageBinding(
 
 /** Apply line edits against the immutable callback. Offsets always refer to the
  * displayed original; existing assertion statements must survive as statements. */
-export function varyPublicFixture(control: string, edits: unknown): string {
+export function varyPublicFixture(control: string, edits: unknown, fileName = 'fixture.tsx'): string {
   if (!Array.isArray(edits) || !edits.length || edits.length > 8)
     throw new InvalidFixtureDraft('Invalid public fixture variation')
   const lines = control.split('\n'),
@@ -475,31 +549,122 @@ export function varyPublicFixture(control: string, edits: unknown): string {
   }
   const result = lines.join('\n')
   if (result === control || result.length > 64000) throw new InvalidFixtureDraft('Empty or oversized fixture variation')
-  function assertions(body: string) {
+  return preservePublicAssertions(control, result, fileName)
+}
+
+function preservePublicAssertions(control: string, result: string, fileName: string) {
+  type Capture = { start: number; end: number; subject: string }
+  type Assertion = { key: string; line: number; promised?: string; capture?: Capture }
+  const prefix = 'async function exercise(){\n'
+  const bytes = Buffer.from(prefix + result + '\n}')
+  const syntax = codingSourceDiagnostics(fileName, bytes, codingDigest(bytes))
+  if (syntax?.status === 'syntax_error' && 'diagnostics' in syntax && syntax.diagnostics[0]) {
+    const { line, column, code } = syntax.diagnostics[0]
+    throw new InvalidFixtureDraft(
+      `Variation syntax error after applying edits at callback line ${Math.max(1, line - 1)}, column ${column} (TS${code}). Use original callback line numbers for the correction.`,
+    )
+  }
+  function assertions(body: string): Assertion[] {
     const file = ts.createSourceFile(
-        'body.tsx',
-        `async function exercise(){\n${body}\n}`,
-        ts.ScriptTarget.Latest,
-        true,
-        ts.ScriptKind.TSX,
-      ),
-      found: string[] = []
+      fileName,
+      prefix + body + '\n}',
+      ts.ScriptTarget.Latest,
+      true,
+      fileName.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    )
+    const found: Assertion[] = []
+    function signature(node: ts.Node): string {
+      const children = node.getChildren(file)
+      return children.length
+        ? node.kind + '(' + children.map(signature).join(',') + ')'
+        : JSON.stringify([node.kind, ts.isStringLiteral(node) ? node.text : node.getText(file)])
+    }
+    function awaitedSubject(statement: ts.ExpressionStatement, matcher: ts.CallExpression) {
+      if (!ts.isPropertyAccessExpression(matcher.expression) || matcher.questionDotToken || matcher.typeArguments)
+        return undefined
+      const receiver = matcher.expression.expression
+      const promised =
+        ts.isPropertyAccessExpression(receiver) &&
+        receiver.name.text === 'resolves' &&
+        ts.isAwaitExpression(statement.expression)
+      const expectation = promised && ts.isPropertyAccessExpression(receiver) ? receiver.expression : receiver
+      if (
+        !ts.isCallExpression(expectation) ||
+        !ts.isIdentifier(expectation.expression) ||
+        expectation.expression.text !== 'expect' ||
+        expectation.arguments.length !== 1 ||
+        expectation.questionDotToken
+      )
+        return undefined
+      const argument = expectation.arguments[0]!
+      const key = (subject: ts.Expression) =>
+        JSON.stringify([
+          signature(subject),
+          matcher.expression.getLastToken(file)?.getText(file),
+          ...matcher.arguments.map(signature),
+        ])
+      if (promised) return { promised: key(argument) }
+      if (!ts.isIdentifier(argument) || !ts.isBlock(statement.parent)) return undefined
+      const previous = statement.parent.statements[statement.parent.statements.indexOf(statement) - 1]
+      if (
+        !previous ||
+        !ts.isVariableStatement(previous) ||
+        !(previous.declarationList.flags & ts.NodeFlags.Const) ||
+        previous.declarationList.declarations.length !== 1
+      )
+        return undefined
+      const decl = previous.declarationList.declarations[0]!
+      const init = decl.initializer
+      if (!ts.isIdentifier(decl.name) || decl.name.text !== argument.text || !init || !ts.isAwaitExpression(init))
+        return undefined
+      return {
+        promised: key(init.expression),
+        capture: {
+          start: init.getStart(file) - prefix.length,
+          end: init.end - prefix.length,
+          subject: init.expression.getText(file),
+        },
+      }
+    }
     function visit(node: ts.Node) {
-      if (ts.isExpressionStatement(node) && /^(?:await\s+)?expect(?:\s*\(|\.)/u.test(node.getText(file)))
-        found.push(node.getText(file))
-      else ts.forEachChild(node, visit)
+      if (ts.isExpressionStatement(node) && /^(?:await\s+)?expect(?:\s*\(|\.)/u.test(node.getText(file))) {
+        const expr = ts.isAwaitExpression(node.expression) ? node.expression.expression : node.expression
+        found.push({
+          key: signature(node.expression),
+          line: file.getLineAndCharacterOfPosition(node.getStart(file)).line,
+          ...(ts.isCallExpression(expr) ? awaitedSubject(node, expr) : {}),
+        })
+      } else ts.forEachChild(node, visit)
     }
     visit(file)
     return found
   }
   const expected = assertions(control),
-    actual = assertions(result)
+    actual = assertions(result),
+    captures: Capture[] = []
   if (!expected.length) throw new InvalidFixtureDraft('Public fixture has no supported original assertion')
   let at = 0
   for (const assertion of expected) {
-    at = actual.indexOf(assertion, at)
-    if (at < 0) throw new InvalidFixtureDraft('Variation removed or changed a public assertion')
-    at++
+    const match = actual.findIndex(
+      (item, index) =>
+        index >= at &&
+        (item.key === assertion.key ||
+          (assertion.promised && !assertion.capture && item.capture && item.promised === assertion.promised)),
+    )
+    if (match < 0)
+      throw new InvalidFixtureDraft(
+        `Variation removed or changed a public assertion at original callback line ${assertion.line}. Keep that assertion and change its stimulus instead.`,
+      )
+    const item = actual[match]!
+    if (item.key !== assertion.key && item.capture) captures.push(item.capture)
+    at = match + 1
   }
-  return result
+  let guarded = result
+  for (const capture of captures.reverse()) {
+    // Preserve the thenable requirement and rejection semantics of the original
+    // resolves assertion while evaluating its actual subject exactly once.
+    const expression = `await ((pending) => { if (typeof pending?.then !== 'function') __devflowAssert.fail('Public assertion expected a promise'); return Promise.resolve(pending).catch(() => __devflowAssert.fail('Public assertion expected resolution')); })(${capture.subject})`
+    guarded = guarded.slice(0, capture.start) + expression + guarded.slice(capture.end)
+  }
+  return guarded
 }

@@ -5,7 +5,7 @@ import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-
 import { updateNativeCodingSession, type NativeCodingSession, type CodingModelAttempt, type CodingModelRetry, type CodingToolReceipt } from './native-coding-session'
 import { codingContext } from './native-coding-context'
 import { fixtureSelectionFromResponse, fixtureChecksFromResponse, independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, needsIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
-import { InvalidFixtureDraft } from './native-coding-fixture-cases'
+import { NoFixtureChangeWitness, FixtureCaseCorrection, InvalidFixtureDraft } from './native-coding-fixture-cases'
 import type { IndependentPreflight } from './native-coding-check-preflight'
 import { codingRepairBudget } from './native-coding-repair-budget'
 
@@ -320,7 +320,7 @@ export class NativeCodingLoop {
               draft.independentVerification ??= { plans: [], humanInputs: [] }
               if (preflight && preflight.status !== 'valid') {
                 draft.independentVerification.drafts ??= []
-                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, ...(preflight.correctCases ? {correctCases: true} : {}), plan })
+                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, ...(preflight.correctCases ? {correctCases: true, ...(preflight.retainedCaseIds?.length ? {retainedCaseIds:preflight.retainedCaseIds} : {})} : {}), plan })
                 const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === plan.objectiveVersion && item.sourceDigest === plan.sourceDigest && !item.selection).length
                 if (preflight.status === 'unavailable' || failures >= 3) { draft.status = 'paused'; draft.pauseReason = preflight.status === 'unavailable' ? 'independent_verification_preflight_unavailable' : 'independent_verification_plan_invalid' }
                 return
@@ -384,9 +384,12 @@ export class NativeCodingLoop {
             if (attempt.status === 'unknown') { draft.status = 'reconciling'; draft.pauseReason = 'model_delivery_unknown'; return }
             const writing = draft.writer?.owner === this.owner && draft.writer.epoch === epoch && !controller.signal.aborted
             if (writing && planning && responseReceived && failure.kind === 'pause' && ['independent_verification_plan_invalid', 'invalid_model_response'].includes(failure.reason)) {
+              if (draft.pendingInput.length || draft.objectiveVersion !== planning.source.objectiveVersion || independentCheckSourceDigest(draft) !== planning.source.sourceDigest) return
               draft.independentVerification ??= { plans: [], humanInputs: [] }
               draft.independentVerification.drafts ??= []
               draft.independentVerification.drafts.push({ attemptId, objectiveVersion: planning.source.objectiveVersion, sourceDigest: planning.source.sourceDigest,
+                ...(error instanceof FixtureCaseCorrection ? {partial:error.partial} : {}),
+                ...(error instanceof NoFixtureChangeWitness ? {reselect:true} : {}),
                 feedback: planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs, cover every approved source unit, and return a single well-formed JSON object. No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.' })
               const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === planning.source.objectiveVersion && item.sourceDigest === planning.source.sourceDigest && !item.selection).length
               if (failures < 3) return
