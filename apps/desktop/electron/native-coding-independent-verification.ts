@@ -1,3 +1,4 @@
+import { validPrivateAuthorTurn, type PrivateAuthorTurn } from './native-coding-author-continuation'
 import { requestsTimeBoundary, hasClockStimulus } from './native-coding-clock-fixtures'
 import { hasCommitThenLostReply, lostReplyHelper, requestsLostAcknowledgement } from './native-coding-lost-reply'
 import { checkObservedResultFields } from './native-coding-output-assertions'
@@ -31,7 +32,7 @@ export type IndependentCheckResult = {
 export type IndependentVerificationState = {
   plans: FrozenIndependentChecks[]
   humanInputs: Array<{ id: string; text: string; objectiveVersion: number }>
-  drafts?: Array<{ attemptId: string; objectiveVersion: number; sourceDigest: string; feedback: string; preflightStatus?: 'valid' | 'invalid' | 'unavailable'; correctCases?: true; reselect?:true; progress?:true; retainedCaseIds?:string[]; partial?:PartialFixtureCases; plan?: FrozenIndependentChecks; selection?: FixtureSelection }>
+  drafts?: Array<{ attemptId: string; objectiveVersion: number; sourceDigest: string; feedback: string; authorTurn?:PrivateAuthorTurn; preflightStatus?: 'valid' | 'invalid' | 'unavailable'; correctCases?: true; reselect?:true; progress?:true; retainedCaseIds?:string[]; partial?:PartialFixtureCases; plan?: FrozenIndependentChecks; selection?: FixtureSelection }>
 }
 const digestPattern = /^[a-f0-9]{64}$/u
 const identifier = /^[a-zA-Z0-9_.:-]{1,200}$/u
@@ -74,6 +75,7 @@ export function validateIndependentVerification(state: IndependentVerificationSt
   if (previous && (!isDeepStrictEqual(state.plans.slice(0, previous.plans.length), previous.plans) || !isDeepStrictEqual(state.humanInputs.slice(0, previous.humanInputs.length), previous.humanInputs))) throw new Error('Frozen independent verification is append-only')
   if (state.drafts && (!Array.isArray(state.drafts) || new Set(state.drafts.map(item => item.attemptId)).size !== state.drafts.length || state.drafts.some(item => !identifier.test(item.attemptId) || !Number.isSafeInteger(item.objectiveVersion) || item.objectiveVersion < 1 || !digestPattern.test(item.sourceDigest) || typeof item.feedback !== 'string' || item.feedback.length > 8000))) throw new Error('Invalid independent check drafts')
   for (const draft of state.drafts ?? []) {
+    if (draft.authorTurn !== undefined && !validPrivateAuthorTurn(draft.authorTurn)) throw new Error('Invalid private author continuation')
     if (draft.reselect !== undefined && (draft.reselect!==true || draft.plan || draft.partial || draft.preflightStatus || draft.selection)) throw new Error('Invalid fixture re-selection receipt')
     if (draft.partial && (draft.selection || draft.plan || draft.preflightStatus || !validPartialFixtureCases(draft.partial))) throw new Error('Invalid partial independent fixture draft')
     if (draft.progress !== undefined && (draft.progress !== true || !draft.partial || draft.reselect || draft.correctCases)) throw new Error('Invalid independent author progress')

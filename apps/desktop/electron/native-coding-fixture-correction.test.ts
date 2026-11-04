@@ -115,7 +115,7 @@ it('uses the retained cases through the normal governed plan-authoring loop', as
           })),
           contextOnly: [],
         })
-      const form = JSON.parse(request.messages[0]!.content as string)
+      const form = JSON.parse(request.messages.at(-1)!.content as string)
       cases++
       const changed = {
         scenario: 's1',
@@ -504,7 +504,10 @@ it('retains successful bounded batches without counting them as failed author at
   const snapshots: Array<{ frozen: number; retained: number }> = []
   let inspectState: () => Promise<void>
   const fixture = await codingHarnessFixture(
-    async () => codingToolReply('stop', 'report_blocked', { reason: 'The complete independent plan is now frozen' }),
+    async (request) => {
+      expect(JSON.stringify(request)).not.toContain('private author step')
+      return codingToolReply('stop', 'report_blocked', { reason: 'The complete independent plan is now frozen' })
+    },
     'node node_modules/vitest/vitest.mjs run value.test.ts',
     {},
     async (request) => {
@@ -517,17 +520,20 @@ it('retains successful bounded batches without counting them as failed author at
           })),
           contextOnly: [],
         })
-      const form = JSON.parse(request.messages[0]!.content as string)
+      const form = JSON.parse(request.messages.at(-1)!.content as string)
+      if (requests.length)
+        expect(request.messages.some(message => message.role === 'assistant' && message.reasoning_content === 'private author step '+requests.length)).toBe(true)
       await inspectState()
       const offered = form.scenarios.map((s: { id: string }) => s.id)
       requests.push(offered)
-      return codingToolReply('batch', 'submit_fixture_cases', {
+      const reply = codingToolReply('batch-'+requests.length, 'submit_fixture_cases', {
         cases: offered.slice(0, 4).map((id: string) => ({
           scenario: id,
           baseline: 'fail',
           edits: [{ line: 2, deleteCount: 1, insert: " const value='changed'" }],
         })),
       })
+      return { ...reply, assistantMessage: { ...reply.assistantMessage, reasoning_content: 'private author step '+requests.length } }
     },
     {
       userInstruction: Array.from({ length: 14 }, (_, i) => 'Behavior ' + (i + 1) + ' works.').join(' '),

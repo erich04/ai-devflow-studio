@@ -1,3 +1,4 @@
+import { capturePrivateAuthorTurn, continuePrivateAuthor, type PrivateAuthorTurn } from './native-coding-author-continuation'
 import { randomUUID } from 'node:crypto'
 import { AgentProviderRequestError, nativeCallEnvelope, validateNativeHistory, nativeToolValueProblem, type NativeToolJsonSchema, type AgentProvider, type AgentProviderUsage, type CodingModelRetryReason, type NativeConversationRequest, type NativeToolCall, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
@@ -290,7 +291,7 @@ export class NativeCodingLoop {
           ...(session.taskBudget ? { taskBudget: session.taskBudget } : {}),
           onUsage: async (usage: AgentProviderUsage) => { await this.change(id, draft => { const attempt = draft.attempts.find(item => item.id === attemptId); if (attempt) attempt.usage = usage }) },
           maxOutputTokens: provider.resolveRequestPolicy?.({}).maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192, signal: controller.signal }
-        const context = planning ? { request: { ...planning.request, ...requestOptions }, compact: undefined }
+        const context = planning ? { request: { ...planning.request, messages: continuePrivateAuthor(planning.source, planning.request.messages, session.independentVerification), ...requestOptions }, compact: undefined }
           : codingContext(session, provider, { systemPrompt: session.parent?.mode === 'read_only' ? readOnlySystemPrompt : systemPrompt, messages: session.transcript, tools: [...this.host.tools.definitions, ...controlTools], ...requestOptions }, JSON.stringify(runtimeState))
         const request: NativeConversationRequest = context.request
         request.maxOutputTokens = provider.resolveRequestPolicy?.(request).maxOutputTokens ?? request.maxOutputTokens ?? 8192
@@ -305,7 +306,7 @@ export class NativeCodingLoop {
           if (!retryOf) draft.steps++
           draft.attempts.push({ id: attemptId, operationKey, requestDigest, step: retryOf?.step ?? draft.steps, objectiveVersion: draft.objectiveVersion, status: 'started', createdAt: this.now(), ...(retryOf ? { retryOf: retryOf.id } : {}) })
         })
-        let received = false, receivedUsage: AgentProviderUsage | undefined
+        let received = false, receivedUsage: AgentProviderUsage | undefined, receivedTurn: PrivateAuthorTurn | undefined
         try {
           const response = await provider.completeNativeConversation(request)
           received = true; receivedUsage = response.usage
@@ -318,12 +319,13 @@ export class NativeCodingLoop {
             })
           }
           if (response.kind === 'tools') {
-            const used = current.transcript.flatMap(message => message.role === 'assistant' ? message.tool_calls?.map(call => call.id) ?? [] : [])
+            const used = [...current.transcript, ...(planning ? request.messages : [])].flatMap(message => message.role === 'assistant' ? message.tool_calls?.map(call => call.id) ?? [] : [])
             try { nativeCallEnvelope(response.toolCalls, request.tools.map(tool => tool.function.name), used) }
             catch (error) { throw context.compact ? error : new InvalidToolBatch(envelopeProblem(error), response.usage) }
             if (JSON.stringify(response.assistantMessage.tool_calls) !== JSON.stringify(response.toolCalls)) throw new Error('Mismatched provider tool envelope')
           }
           if (planning) {
+            receivedTurn = capturePrivateAuthorTurn(planning.source.baselineDigest, planning.request.messages, response.assistantMessage)
             if (planning.phase === 'select') {
               const selection = fixtureSelectionFromResponse(planning, response)
               session = await this.change(id, draft => {
@@ -332,7 +334,7 @@ export class NativeCodingLoop {
                 if (draft.status !== 'running' || draft.writer?.owner !== this.owner || draft.writer.epoch !== epoch || controller.signal.aborted || draft.pendingInput.length || draft.objectiveVersion !== planning.source.objectiveVersion || independentCheckSourceDigest(draft) !== planning.source.sourceDigest) { attempt.error = 'Fixture selection superseded'; return }
                 draft.independentVerification ??= { plans: [], humanInputs: [] }
                 draft.independentVerification.drafts ??= []
-                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: draft.objectiveVersion, sourceDigest: planning.source.sourceDigest, selection, feedback: 'Public fixtures selected before implementation.' })
+                draft.independentVerification.drafts.push({ attemptId, ...(receivedTurn ? {authorTurn:receivedTurn} : {}), objectiveVersion: draft.objectiveVersion, sourceDigest: planning.source.sourceDigest, selection, feedback: 'Public fixtures selected before implementation.' })
               })
               continue
             }
@@ -359,6 +361,7 @@ export class NativeCodingLoop {
                 draft.independentVerification.drafts ??= []
                 draft.independentVerification.drafts.push({
                   attemptId,
+                  ...(receivedTurn ? { authorTurn: receivedTurn } : {}),
                   objectiveVersion: draft.objectiveVersion,
                   sourceDigest: planning.source.sourceDigest,
                   partial: plan,
@@ -377,14 +380,14 @@ export class NativeCodingLoop {
               draft.independentVerification ??= { plans: [], humanInputs: [] }
               if (preflight && preflight.status !== 'valid') {
                 draft.independentVerification.drafts ??= []
-                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, ...(preflight.correctCases ? {correctCases: true, ...(preflight.retainedCaseIds?.length ? {retainedCaseIds:preflight.retainedCaseIds} : {})} : {}), plan })
+                draft.independentVerification.drafts.push({ attemptId, ...(receivedTurn ? {authorTurn:receivedTurn} : {}), objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, ...(preflight.correctCases ? {correctCases: true, ...(preflight.retainedCaseIds?.length ? {retainedCaseIds:preflight.retainedCaseIds} : {})} : {}), plan })
                 const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === plan.objectiveVersion && item.sourceDigest === plan.sourceDigest && !item.selection && !item.progress).length
                 if (preflight.status === 'unavailable' || failures >= 3) { draft.status = 'paused'; draft.pauseReason = preflight.status === 'unavailable' ? 'independent_verification_preflight_unavailable' : 'independent_verification_plan_invalid' }
                 return
               }
               if (plan.adapter && preflight) {
                 draft.independentVerification.drafts ??= []
-                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, plan })
+                draft.independentVerification.drafts.push({ attemptId, ...(receivedTurn ? {authorTurn:receivedTurn} : {}), objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, plan })
               }
               draft.independentVerification.plans.push(plan)
               draft.binding!.testPlanDigest = codingDigest(JSON.stringify({ testPlan: draft.binding!.testPlan, independentChecks: plan.digest }))
@@ -444,7 +447,7 @@ export class NativeCodingLoop {
               if (draft.pendingInput.length || draft.objectiveVersion !== planning.source.objectiveVersion || independentCheckSourceDigest(draft) !== planning.source.sourceDigest) return
               draft.independentVerification ??= { plans: [], humanInputs: [] }
               draft.independentVerification.drafts ??= []
-              draft.independentVerification.drafts.push({ attemptId, objectiveVersion: planning.source.objectiveVersion, sourceDigest: planning.source.sourceDigest,
+              draft.independentVerification.drafts.push({ attemptId, ...(receivedTurn ? {authorTurn:receivedTurn} : {}), objectiveVersion: planning.source.objectiveVersion, sourceDigest: planning.source.sourceDigest,
                 ...(error instanceof FixtureCaseCorrection ? {partial:error.partial} : {}),
                 ...(error instanceof NoFixtureChangeWitness ? {reselect:true} : {}),
                 feedback: planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs and return a single well-formed JSON object. ${planning.phase === 'cases' ? 'Return only the displayed pending batch. Other valid cases stay retained, and the host checks full coverage before freezing.' : 'Cover every approved source unit in the selection.'} No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.' })
