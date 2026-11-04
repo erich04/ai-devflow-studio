@@ -136,6 +136,53 @@ const casePrompt =
   trust +
   'For each assigned scenario the host executes the original public fixture as a positive control, then a separate variant with fresh fixture setup. At least one variation must expose the approved change as a failing assertion on immutable B. A declaration that all variants already pass is returned before execution. Change an existing input, clock or injected callback at the requested transition. Keep the variation to a few lines whenever possible. Do not create an unrelated persisted state or hand-write application revision metadata. Exercise new states via public operations or documented injection seams. Make the smallest change to its stimulus that exercises the assigned source units at the owning production entry point. Preserve the original assertion statements and their reachability. A permitted distinct attempt is different from duplicating an existing effect. Have the original setup reach the named precondition before you perturb it. Choose a trigger late enough that unrelated subsequent stages do not invalidate the original assertions; the selected positive action must still be able to finish. Include additional assertions about explicit changed behavior if needed. Use numbered lines of the original callback. Edits refer only to these original lines and are applied from bottom to top. New imports, fixture side effects, or an expectation copied from the current broken behavior do not establish the required contract. Use assertion matchers when an ordinary product refusal must fail a required positive action. Declare whether the variant should pass or fail on unchanged B. Return exactly one variation per selected scenario.'
 
+/** Each author call is stateless. A private case number alone cannot tell the
+ * next selector which public operation it tried or why B disproved the plan. */
+function rejectedFixtureSelection(
+  history: NonNullable<IndependentVerificationState['drafts']>,
+  fixtures: FixtureTemplate[],
+) {
+  const at = history.findIndex((d) => d.reselect || (d.preflightStatus === 'invalid' && !d.correctCases))
+  if (at < 0) return undefined
+  const rejection = history[at]!
+  const selection = history.slice(at + 1).find((d) => d.selection)?.selection
+  if (!selection) return undefined
+  const chars = Math.min(720, Math.floor(3600 / selection.scenarios.length))
+  const scenarios = selection.scenarios.map((item, i) => {
+    const fixture = fixtures[Number(item.fixture.slice(1)) - 1]
+    const check = rejection.plan?.checks[i]
+    const anchor = fixture?.anchors.find((a) => a.id === item.anchor)
+    const original = new Set(anchor?.control?.split('\n').map((line) => line.trim()))
+    const bound = check?.fixture
+    const verified =
+      bound && fixture && bound.path === fixture.path && bound.hash === fixture.hash && bound.anchor === item.anchor
+    const lines = verified
+      ? check.body
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line && !original.has(line))
+          .join('\n')
+      : ''
+    return {
+      anchor: item.fixture + ':' + item.anchor,
+      units: item.units,
+      precondition: redactSensitiveText(item.precondition).value.slice(0, 400),
+      ...(verified
+        ? {
+            caseId: check.criterionId,
+            declared: check.baselineExpectation,
+            variantLines: redactSensitiveText(lines).value.slice(0, chars),
+          }
+        : {}),
+    }
+  })
+  return {
+    stage: rejection.plan ? 'baseline_preflight' : 'proposal_only',
+    outcome: redactSensitiveText(rejection.feedback).value.slice(0, 2000),
+    scenarios,
+  }
+}
+
 export async function fixturePlanning(
   source: IndependentCheckSource,
   workspace: CodingCandidateWorkspace,
@@ -204,6 +251,7 @@ export async function fixturePlanning(
     production: evidence.files.find((item) => item.path === f.path.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1')),
   }))
   const previous = matching.find((d) => !d.selection)
+  const rejected = !selection ? rejectedFixtureSelection(matching, fixtures) : undefined
   const examples = await fixtureInputExamples(
     base.files,
     (h) => workspace.blob(h),
@@ -233,6 +281,9 @@ export async function fixturePlanning(
       request: {
         systemPrompt:
           selectPrompt +
+          (rejected
+            ? ' Review the previously tried public anchors, their stated preconditions and the added lines from the rejected program. A baseline case ID refers only to that earlier program. If you select the same anchor again, identify a materially different trigger or observation that addresses the recorded outcome.'
+            : '') +
           (nearby.length
             ? ' The regression command may exercise neighboring infrastructure. Additional public suites on B name the requested feature and import the listed modules. Trace the actual entry and its resource lifecycle before selecting a caller. The extra examples do not add requirements.'
             : '') +
@@ -243,6 +294,7 @@ export async function fixturePlanning(
             role: 'user',
             content: JSON.stringify({
               ...input,
+              ...(rejected ? { rejectedSelection: rejected } : {}),
               fixtures: indexed.map((f) => ({
                 ...f,
                 production: focusFixtureEvidence(

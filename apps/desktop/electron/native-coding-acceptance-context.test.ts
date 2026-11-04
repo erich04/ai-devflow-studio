@@ -219,3 +219,107 @@ it('distinguishes a project observation of the affected route from requirements 
     [...context.observations, ...context.files, ...context.contracts].reduce((n, v) => n + v.content.length, 0),
   ).toBeLessThanOrEqual(6000)
 })
+
+it('gives a private selector the public route and actual stimulus behind a rejected baseline case number', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const path = await import('node:path'),
+    { tmpdir } = await import('node:os')
+  const { CodingCandidateWorkspace } = await import('./coding-candidate-workspace')
+  const { fixturePlanning } = await import('./native-coding-fixture-planning')
+  const { fixtureSelectionFromResponse, fixtureChecksFromResponse } = await import(
+    './native-coding-independent-verification'
+  )
+  const { codingToolReply } = await import('./native-coding-test-fixture')
+  const root = await mkdtemp(path.join(tmpdir(), 'private-reselect-')),
+    delivery = path.join(root, 'project')
+  try {
+    await mkdir(delivery)
+    await writeFile(
+      path.join(delivery, 'route.test.ts'),
+      "import {it,expect} from 'vitest'\nit('finishes after pressing resume',()=>{\n const operation='manual'\n expect(operation).toBeTruthy()\n})\nit('finishes an active job',()=>{expect(true).toBe(true)})",
+    )
+    const ws = await CodingCandidateWorkspace.create({
+      root: path.join(root, 'ws'),
+      delivery,
+      baseCommitSha: 'a'.repeat(40),
+      excludedPaths: [],
+    })
+    const source = {
+      objectiveVersion: 1,
+      sourceDigest: 'b'.repeat(64),
+      baselineDigest: ws.identity.base.digest,
+      criteria: [{ id: 'goal', text: 'Finish an active job.', sourceRef: 'approved' }],
+      adapter: { kind: 'vitest' as const, directory: '.' },
+    }
+    const select = (await fixturePlanning(source, ws, ['route.test.ts']))!
+    const selection = fixtureSelectionFromResponse(
+      select,
+      codingToolReply('select', 'select_behavior_contract', {
+        scenarios: [{ units: ['r1.1'], anchor: 'f1:t1', precondition: 'The user explicitly resumes a stopped job.' }],
+        contextOnly: [],
+      }),
+    )
+    const stamp = { sourceDigest: source.sourceDigest, objectiveVersion: 1 }
+    const selected = { ...stamp, attemptId: 'select', selection, feedback: 'Source selected' }
+    const generate = (await fixturePlanning(source, ws, ['route.test.ts'], {
+      plans: [],
+      humanInputs: [],
+      drafts: [selected],
+    }))!
+    const plan = fixtureChecksFromResponse(
+      generate,
+      codingToolReply('draft', 'submit_fixture_cases', {
+        cases: [
+          {
+            scenario: 's1',
+            baseline: 'fail',
+            edits: [{ line: 2, deleteCount: 1, insert: " const operation='another-manual-run'" }],
+          },
+        ],
+      }),
+      new Date().toISOString(),
+    )
+    const feedback = 'case-1 (declared fail, observed pass)'
+    const rejected = { ...stamp, attemptId: 'invalid', feedback, preflightStatus: 'invalid' as const, plan }
+    const retry = (await fixturePlanning(source, ws, ['route.test.ts'], {
+      plans: [],
+      humanInputs: [],
+      drafts: [selected, rejected],
+    }))!
+    const data = JSON.parse(retry.request.messages[0]!.content as string)
+    expect(data.rejectedSelection).toMatchObject({
+      stage: 'baseline_preflight',
+      outcome: feedback,
+      scenarios: [
+        {
+          caseId: 'case-1',
+          anchor: 'f1:t1',
+          units: ['r1.1'],
+          precondition: 'The user explicitly resumes a stopped job.',
+          variantLines: expect.stringContaining('another-manual-run'),
+        },
+      ],
+    })
+    const noExecution = (await fixturePlanning(source, ws, ['route.test.ts'], {
+      plans: [],
+      humanInputs: [],
+      drafts: [
+        selected,
+        { ...rejected, correctCases: true },
+        { ...stamp, attemptId: 'proposal', reselect: true, feedback: 'All variations predict pass.' },
+      ],
+    }))!
+    const proposed = JSON.parse(noExecution.request.messages[0]!.content as string).rejectedSelection
+    expect(proposed.stage).toBe('proposal_only')
+    expect(proposed.scenarios[0]).toMatchObject({ anchor: 'f1:t1' })
+    expect(proposed.scenarios[0]).not.toHaveProperty('caseId')
+    const other = (await fixturePlanning({ ...source, objectiveVersion: 2 }, ws, ['route.test.ts'], {
+      plans: [],
+      humanInputs: [],
+      drafts: [selected, rejected],
+    }))!
+    expect(JSON.parse(other.request.messages[0]!.content as string).rejectedSelection).toBeUndefined()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
