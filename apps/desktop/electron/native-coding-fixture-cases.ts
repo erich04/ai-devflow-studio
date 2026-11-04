@@ -44,7 +44,7 @@ export function validPartialFixtureCases(partial: PartialFixtureCases) {
 export type FixtureBinding = { path: string; hash: string; anchor: string; units: string[]; contrast?: FixtureContrast }
 export type CoverageRecord = { sources: AcceptanceCriterion[]; contextOnly: Array<{ unit: string; reason: string }> }
 type Region = { start: number; end: number }
-type Anchor = Region & { id: string; title: string; control?: string; behavior?: { actions: string[]; faults: string[] } }
+type Anchor = Region & { id: string; title: string; control?: string; selectable?: boolean; behavior?: { actions: string[]; faults: string[] } }
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
 const bounded = (value: unknown, limit: number): value is string =>
@@ -202,6 +202,23 @@ export function requireNamedFixtureSubjects(
   }
 }
 
+/** Protect the awaited polling call as a whole. Removing the wait changes a
+ * real asynchronous check into a timing-dependent snapshot. The menu and the
+ * edit validator must agree about which original assertions they can preserve. */
+function protectedPublicAssertion(node: ts.Node, tree: ts.SourceFile): node is ts.ExpressionStatement {
+  if (!ts.isExpressionStatement(node)) return false
+  if (/^(?:await\s+)?expect(?:\s*\(|\.)/u.test(node.getText(tree))) return true
+  if (!ts.isAwaitExpression(node.expression) || !ts.isCallExpression(node.expression.expression)) return false
+  const call = node.expression.expression
+  const callback = call.arguments[0]
+  if (!['vi.waitFor', 'waitFor'].includes(call.expression.getText(tree)) || !callback || !ts.isArrowFunction(callback)) return false
+  return ts.isCallExpression(callback.body) && /^expect\s*\(/u.test(callback.body.getText(tree))
+}
+
+function hasProtectedAssertion(node: ts.Node, tree: ts.SourceFile): boolean {
+  return protectedPublicAssertion(node, tree) || ts.forEachChild(node, child => hasProtectedAssertion(child, tree) || undefined) === true
+}
+
 function fixtureBehavior(block: ts.Block, tree: ts.SourceFile) {
   const actions = new Set<string>(),
     faults = new Set<string>()
@@ -295,7 +312,7 @@ export function fixtureTemplate(file: string, source: string) {
             callback &&
             (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
             ts.isBlock(callback.body)
-              ? { control, behavior: fixtureBehavior(callback.body, tree) }
+              ? { control, selectable: control.length <= 12000 && hasProtectedAssertion(callback.body, tree), behavior: fixtureBehavior(callback.body, tree) }
               : {}),
             id: `t${anchors.length + 1}`,
             title: name && ts.isStringLiteralLike(name) ? name.text : '(dynamic title)',
@@ -425,14 +442,7 @@ export function readFixtureSelection(
       throw new InvalidFixtureDraft('Describe the precondition in one or two sentences, at most 1800 characters')
     const [fixture, anchor, extra] = scenario.anchor.split(':')
     const target = fixtures.find((_, index) => fixture === `f${index + 1}`)?.anchors.find((item) => item.id === anchor)
-    if (
-      !fixture ||
-      !anchor ||
-      extra !== undefined ||
-      !target?.control ||
-      target.control.length > 12000 ||
-      !/\bexpect\s*[(.]/u.test(target.control)
-    )
+    if (!fixture || !anchor || extra !== undefined || !target?.selectable)
       throw new InvalidFixtureDraft('Unknown or unsupported selected fixture')
     return { units: scenario.units, fixture, anchor, precondition: scenario.precondition }
   })
@@ -627,7 +637,7 @@ function preservePublicAssertions(control: string, result: string, fileName: str
       }
     }
     function visit(node: ts.Node) {
-      if (ts.isExpressionStatement(node) && /^(?:await\s+)?expect(?:\s*\(|\.)/u.test(node.getText(file))) {
+      if (protectedPublicAssertion(node, file)) {
         const expr = ts.isAwaitExpression(node.expression) ? node.expression.expression : node.expression
         found.push({
           key: signature(node.expression),

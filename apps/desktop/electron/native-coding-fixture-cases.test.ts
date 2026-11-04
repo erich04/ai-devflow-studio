@@ -8,6 +8,7 @@ import {
   bindFixtureContrast,
   namedFixtureSubjects,
   requireNamedFixtureSubjects,
+  readFixtureSelection,
 } from './native-coding-fixture-cases'
 import { codingDigest } from './coding-candidate-workspace'
 
@@ -116,4 +117,30 @@ it('reports the edited callback location when a variation drops a closing delimi
   const original = 'await expect(load({id:1})).resolves.toEqual({ok:true})'
   const malformed = 'const record = await load({id:1,\nexpect(record).toEqual({ok:true})'
   expect(() => varyPublicFixture(original, [{ line: 1, deleteCount: 1, insert: malformed }])).toThrow(/syntax.*line.*TS\d+/i)
+})
+
+it('keeps an awaited public polling assertion and rejects replacing its polling or its matcher', () => {
+  const control = "const operation = start('old')\nawait vi.waitFor(() => expect(operation.result).toBe('done'))"
+  const changes = [{ line: 1, deleteCount: 1, insert: "const operation = start('new')" }]
+  expect(varyPublicFixture(control, changes)).toContain("await vi.waitFor(() => expect(operation.result).toBe('done'))")
+  for (const alternate of [
+    "expect(operation.result).toBe('done')",
+    "vi.waitFor(() => expect(operation.result).toBe('done'))",
+    "await vi.waitFor(() => expect(operation.result).toBe('other'))",
+  ]) {
+    expect(() => varyPublicFixture(control, [{ line: 2, deleteCount: 1, insert: alternate }])).toThrow(/assertion/i)
+  }
+})
+
+it('offers only immutable callbacks with assertions the authoring host can protect', () => {
+  const fixture = fixtureTemplate('queue.test.ts', `
+    it('observes completion',async()=>{ await vi.waitFor(()=>expect(awaited.done).toBe(true)) })
+    it('contains an example string',()=>{ trace('expect(fake).toBe(true)') })
+  `)
+  const choose = (anchor: string) => readFixtureSelection([criteria[0]!], [fixture], {
+    scenarios: [{ anchor, units: ['r1.1'], precondition: 'The queue has an active operation' }],
+    contextOnly: [{unit:'r1.2',reason:'covered separately as a host limit'}],
+  })
+  expect(() => choose('f1:t1')).not.toThrow()
+  expect(() => choose('f1:t2')).toThrow(/unsupported/)
 })

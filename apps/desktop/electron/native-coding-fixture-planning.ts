@@ -154,8 +154,7 @@ export async function fixturePlanning(
     if (fixture.anchors.length > 500 || fixture.hash !== entry.hash) return undefined
     fixtures.push(fixture)
   }
-  const eligible = (a: FixtureTemplate['anchors'][number]) =>
-    Boolean(a.control && a.control.length <= 12000 && /\bexpect\s*[(.]/u.test(a.control))
+  const eligible = (a: FixtureTemplate['anchors'][number]) => a.selectable === true
   if (!fixtures.some((f) => f.anchors.some(eligible))) return undefined
   const objective = source.criteria.map((c) => c.text).join('\n')
   const evidence = await acceptanceContext(
