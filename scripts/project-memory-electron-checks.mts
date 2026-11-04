@@ -1,7 +1,7 @@
 // Live assertions used by the Electron full-chain runner in project-memory mode.
 import assert from 'node:assert/strict'
-import { expect } from '@playwright/test'
-import type { ProjectKnowledgePages, ProjectMemoryStatus } from '../packages/shared/src/project-memory.ts'
+import { expect, type Page } from '@playwright/test'
+import type { ProjectKnowledgePages, ProjectMemoryPage, ProjectMemoryStatus } from '../packages/shared/src/project-memory.ts'
 import type { ConversationResponse } from '../apps/desktop/electron/workbench-conversation-contract.ts'
 
 type Ipc = <T>(method: string, payload: unknown) => Promise<T>
@@ -50,4 +50,28 @@ export async function exerciseProjectMemoryChat(ipc: Ipc, projectId: string, pro
     openCodeMemory = assertMemoryDelivery('opencode', session.contextReceipt?.memory?.memories)
   }
   return { openCodeMemory, bankId: configured.bankId, pageBytes: Buffer.byteLength(await page() ?? ''), identities, answer }
+}
+
+export async function exerciseCurationPanel(page: Page, ipc: Ipc, projectId: string) {
+  await page.reload()
+  await page.getByRole('button', { name: '知识', exact: true }).click()
+  const panel = page.getByRole('region', { name: '项目记忆' })
+  const rows = panel.getByRole('list', { name: '记忆列表' })
+  await expect(rows.getByRole('listitem').first()).toBeVisible()
+  await expect(rows.getByRole('button', { name: /编辑|删除/u })).toHaveCount(0)
+  await panel.getByRole('tab', { name: '事实', exact: true }).click()
+  const facts = async () => (await ipc<ProjectMemoryPage>('listProjectMemories', { projectId, kind: 'world' })).items
+  const fact = (await facts())[0]
+  assert(fact)
+  const row = rows.getByRole('listitem').filter({ has: page.getByText(fact.text, { exact: true }) })
+  await row.getByRole('button', { name: '编辑', exact: true }).click()
+  const edited = '用户修订：合成 Todo 新注释使用英文，代码示例放在 README。'
+  await panel.getByRole('textbox', { name: '编辑记忆内容' }).fill(edited)
+  await panel.getByRole('button', { name: '保存修改' }).click()
+  await expect.poll(async () => (await facts()).find(item => item.id === fact.id)?.text).toBe(edited)
+  await rows.getByRole('listitem').filter({ hasText: edited }).getByRole('button', { name: '删除', exact: true }).click()
+  await expect.poll(async () => (await facts()).some(item => item.id === fact.id)).toBe(false)
+  await panel.getByRole('tab', { name: '观察', exact: true }).click()
+  await expect(panel.getByText(/观察由 Hindsight 从来源归纳/u)).toBeVisible()
+  return { observationReadOnly: true, editVerifiedInHindsight: true, deletedFactAbsent: true }
 }

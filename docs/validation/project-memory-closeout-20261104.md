@@ -16,7 +16,7 @@
 
 复验入口：
 
-- `scripts/hindsight-fullchain-electron.mts` 沿用原有的真实 Electron 验证配置，另设 `DEVFLOW_FULLCHAIN_PROJECT_MEMORY=1`。可加 `DEVFLOW_MEMORY_VERIFY_OPENCODE=1` 验证本机 OpenCode。Hindsight 的抽取目标应指向该 Electron 的记忆中继，所有上游模型请求经过同一个已授权的本机预算网关。
+- `scripts/hindsight-fullchain-electron.mts` 沿用原有的真实 Electron 验证配置，另设 `DEVFLOW_FULLCHAIN_PROJECT_MEMORY=1`。可加 `DEVFLOW_MEMORY_VERIFY_OPENCODE=1` 验证本机 OpenCode。`DEVFLOW_FULLCHAIN_PROJECT_MEMORY=curation` 则只跑真实聊天、后台采集及记忆页的编辑和删除，写后从 Hindsight 重新读取核对。Hindsight 的抽取目标应指向该 Electron 的记忆中继，所有上游模型请求经过同一个已授权的本机预算网关。
 - `scripts/project-memory-full-validation.mts` 覆盖长期采集、真实 Native 编码、两种讨论协议、阶段和 Gate、编辑、遗忘和清空。可按阶段续跑。运行时检查报告里的每一项检查。
 - `scripts/project-memory-retry-probe.mts` 使用完整脚本的合成评估工作目录（`DEVFLOW_MEMORY_FULL_RESUME`），在清空 bank 前运行。设置 `DEVFLOW_MEMORY_LIVE_AUTHORIZED=1` 并用 `DEVFLOW_FULLCHAIN_MODEL_ENDPOINT` 指定带有人民币累计硬上限的本机网关。
 

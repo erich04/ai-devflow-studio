@@ -22,7 +22,7 @@ import type {
   RunProjectTestsResult,
 } from '../apps/desktop/src/desktop-api.ts'
 import { HINDSIGHT_PROTOCOL } from '../apps/desktop/electron/hindsight-client.ts'
-import { assertMemoryDelivery, exerciseProjectMemoryChat } from './project-memory-electron-checks.mts'
+import { assertMemoryDelivery, exerciseCurationPanel, exerciseProjectMemoryChat } from './project-memory-electron-checks.mts'
 import { createHindsightTodoFixture } from './hindsight-todo-fixture.ts'
 import {
   createWorkspace, startTeamApi, createTeamProject, createPairingCode,
@@ -159,7 +159,8 @@ export async function runHindsightFullchainElectron() {
   assert.equal(process.env.DEVFLOW_FULLCHAIN_LIVE, '1', 'Explicit live synthetic project/provider/budget authorization is required')
   const hindsightEndpoint = loopbackEndpoint(process.env.HINDSIGHT_SMOKE_ENDPOINT, 'HINDSIGHT_SMOKE_ENDPOINT')
   const modelEndpoint = loopbackEndpoint(process.env.DEVFLOW_FULLCHAIN_MODEL_ENDPOINT, 'DEVFLOW_FULLCHAIN_MODEL_ENDPOINT')
-  const memoryMode = process.env.DEVFLOW_FULLCHAIN_PROJECT_MEMORY === '1'
+  const curationOnly = process.env.DEVFLOW_FULLCHAIN_PROJECT_MEMORY === 'curation'
+  const memoryMode = curationOnly || process.env.DEVFLOW_FULLCHAIN_PROJECT_MEMORY === '1'
   const workspace = await createWorkspace('devflow-hindsight-fullchain-')
   workspace.repoDir = path.join(workspace.tempRoot, 'todo')
   const output = path.resolve(process.env.DEVFLOW_FULLCHAIN_OUTPUT ?? path.join(workspace.tempRoot, 'evidence'))
@@ -252,6 +253,13 @@ export async function runHindsightFullchainElectron() {
       await step('project-memory:chat-and-capture')
       report.evidence.discussion = await exerciseProjectMemoryChat(ipc, project.id, providerId, hindsightEndpoint)
       await step('project-memory:ready')
+      if (curationOnly) {
+        report.evidence.curation = await exerciseCurationPanel(page, ipc, project.id)
+        await page.screenshot({ path: path.join(output, 'curation.png'), scale: 'css' })
+        report.passed = true
+        await step('project-memory:curation-passed')
+        return report
+      }
     } else {
       await ipc('configureHindsight', { projectId: project.id, endpoint: hindsightEndpoint,
         selectedPaths: fixture.selectedPaths, includeMemories: false, enabled: true, pairedProjectConsent: true })
@@ -458,7 +466,7 @@ export async function runHindsightFullchainElectron() {
     // behind an operator's back; the caller separately runs the audited cleanup/ledger closure.
     await app?.close().catch(() => undefined)
     await stopProcess(team?.process)
-    report.evidence.coverage = {
+    report.evidence.coverage = curationOnly ? { curation: Boolean(report.evidence.curation) } : {
       clarification: Boolean(report.evidence.clarify),
       clarificationReview: Boolean(report.evidence['clarify-review']),
       design: Boolean(report.evidence.design),
