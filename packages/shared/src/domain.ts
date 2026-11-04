@@ -318,6 +318,11 @@ export type StageAgentExecutorProvenance = {
   durationMs: number
   terminalReason: StageAgentTerminalReason
   contextDigest: string
+  /** Background actually sent after budgeting. Keep identities and digests, never memory text. */
+  backgroundMemory?: {
+    memories: Array<{ id: string; revision: number; contentDigest: string }>
+    omittedCount: number
+  }
   /** L0/L1 context bound into the prompt (ADR 0025); absent on older records. */
   knowledgeContext?: KnowledgeContextManifest
 }

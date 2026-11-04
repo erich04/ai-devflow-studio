@@ -30,7 +30,7 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { RunKnowledgeReviewInput, RunKnowledgeReviewResult } from './ipc-contract.js'
-import { assertProjectMemoryCurrent, executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
+import { assertScopedMemoryCurrent, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
 
 export type KnowledgeReviewProviderMetadata = Pick<AgentProvider, 'id' | 'name' | 'model' | 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking' | 'executorKind'>
 
@@ -183,7 +183,7 @@ export function createKnowledgeReviewRuntime(
       const recalled = await recallScopedMemory({
         store: deps.store, projectId: input.projectId, userId: input.requestedBy,
         runtimeId: `agent-runtime-review-${requestId}`, requestId: `review-memory-${requestId}`,
-        query, intents: splitRecallIntents(run.request), now: now(), budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
+        query, intents: splitRecallIntents(run.request), now: now(), budget: STAGE_AGENT_MEMORY_RECALL_BUDGET, includeCompactConventions: true,
       })
       if (recalled.projectMemory) recalledMemory = recalled
       context = await buildAgentReviewContext({
@@ -225,16 +225,9 @@ export function createKnowledgeReviewRuntime(
     }
     const assertMemoryCurrent = async () => {
       if (!recalledMemory) return
-      const scope = await executionScope({ store: deps.store, projectId: input.projectId,
-        userId: input.requestedBy, runtimeId: recalledMemory.runtimeId })
-      if (JSON.stringify(scope) !== JSON.stringify(recalledMemory.scope)) throw new Error('Review Memory scope changed')
-      let unchecked: readonly unknown[]
       try {
-        unchecked = await assertProjectMemoryCurrent(deps.store, { projectId: input.projectId, userId: input.requestedBy,
-          identities: context.manifest.backgroundMemory?.memories ?? [], recalledAt: recalledMemory.recalledAt })
+        await assertScopedMemoryCurrent(deps.store, recalledMemory, context.manifest.backgroundMemory?.memories ?? [])
       } catch { throw new Error('Review Memory changed, expired or was deleted') }
-      // Recall returns only project memory; anything it cannot re-check is not sent.
-      if (unchecked.length) throw new Error('Review Memory changed, expired or was deleted')
     }
 
     // Resolve once per review operation so repair attempts share one budget consent.

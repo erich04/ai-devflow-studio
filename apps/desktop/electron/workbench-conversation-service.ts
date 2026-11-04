@@ -191,14 +191,14 @@ export function packConversationContext(input: {
     ...(input.projectInstructions ? { projectInstructions: input.projectInstructions } : {}),
     history: [...input.history],
     rollingSummary: undefined as ConversationCompaction['summary'] | undefined,
-    ...(input.backgroundMemory?.length ? { backgroundMemory: input.backgroundMemory } : {}),
+    backgroundMemory: input.backgroundMemory?.length ? input.backgroundMemory : undefined,
     ...(input.criticalProposalInput ? { criticalProposalInput: input.criticalProposalInput } : {}),
     toolObservations: [...input.observations],
     latestWorkflow: { ...input.facts, runs: [...input.facts.runs], contextSummaryOnly: false },
     contextNotice: '',
     remainingSteps: input.remainingSteps,
     ...(input.proposalVerification ? { proposalVerification: input.proposalVerification } : {}),
-    ...(input.communicationPreferences?.length ? { communicationPreferences: input.communicationPreferences } : {}),
+    communicationPreferences: input.communicationPreferences?.length ? input.communicationPreferences : undefined,
     currentRequest: { id: currentUser.id, role: 'user' as const, text: currentUser.text },
   }
   const policy = input.provider.resolveRequestPolicy?.({ purpose: input.criticalProposalInput ? 'proposal' : 'conversation', ...(input.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.maxOutputTokens }) })
@@ -236,8 +236,10 @@ export function packConversationContext(input: {
   }
   // Recalled Memory is optional low-trust background: drop it (for this step) before
   // degrading verified tool evidence for the rest of the turn.
-  if (tooLarge() && context.backgroundMemory) {
-    markLimited(); delete context.backgroundMemory; delete context.communicationPreferences
+  if ((context.backgroundMemory || context.communicationPreferences) && tooLarge()) {
+    markLimited()
+    context.backgroundMemory = undefined
+    context.communicationPreferences = undefined
   }
   // Degrade older tool results to re-queryable placeholders before dropping chat history,
   // and write that back to the turn's observations so later steps keep a stable prefix.
@@ -274,6 +276,18 @@ export function packConversationContext(input: {
       const content = item.content.slice(0, Math.floor(item.content.length / 2))
       return { ...item, content, endOffset: item.offset + content.length, nextOffset: item.offset + content.length, truncated: true }
     })
+  }
+  // Compaction can release more room than the optional memory needed. Restore whole items
+  // without displacing the summary or evidence. Keep the original JSON key order for caching.
+  if (compaction) {
+    for (const key of ['communicationPreferences', 'backgroundMemory'] as const) {
+      if (context[key]) continue
+      for (const item of input[key] ?? []) {
+        const previous: BackgroundMemory[] | undefined = context[key]
+        context[key] = [...(previous ?? []), item]
+        if (tooLarge()) context[key] = previous
+      }
+    }
   }
   const prompt = serialize()
   if (prompt.length > maxChars || measure().overflow) throw new Error(input.criticalProposalInput ? '关键正文超过本轮完整上下文容量，不能可靠生成完整提案。请缩小提案范围或拆分需求；已有正文和对话均保留。' : '这条消息超出了模型上下文容量，请缩短后重试。')
@@ -693,7 +707,7 @@ export class WorkbenchConversationService {
       const recalled = isTrivialReply(latestUserText) ? undefined : await recallScopedMemory({
         store: memory, projectId, userId, runtimeId: `agent-runtime-conversation-${key}`,
         requestId: `conversation-memory-${codingPromptDigest(`${key}\n${recalledAt}`).slice(0, 32)}`,
-        query, intents: splitRecallIntents(latestUserText), now: recalledAt, budget: CONVERSATION_MEMORY_RECALL_BUDGET,
+        query, intents: splitRecallIntents(latestUserText), now: recalledAt, budget: CONVERSATION_MEMORY_RECALL_BUDGET, includeCompactConventions: true,
       })
       const preferenceRecall = await recallScopedMemory({
         store: memory, projectId, userId, runtimeId: `agent-runtime-conversation-${key}`,

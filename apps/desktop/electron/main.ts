@@ -233,7 +233,7 @@ import {
 } from './native-coding-executor-v2.js'
 import { verifyCodingChangeSetDigest } from './coding-change-set.js'
 import { createCodingRuntime } from './coding-runtime.js'
-import { codingPromptDigest, recallScopedMemory } from './coding-context.js'
+import { assertScopedMemoryCurrent, codingPromptDigest, recallScopedMemory } from './coding-context.js'
 import {
   createGitHubDeliveryRuntime,
   type GitHubDeliveryRuntime,
@@ -316,9 +316,9 @@ import { createCodingModelContext } from './coding-model-context'
 import { createHindsightClient, HINDSIGHT_PROTOCOL, normalizeHindsightEndpoint, type HindsightClient } from './hindsight-client'
 import { registerProjectMemoryRecall } from './coding-context'
 import { resolveProjectMemoryScope } from './project-memory-capture'
-import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
+import { emptyKnowledgePages, currentKnowledgePageText, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
 import { captureCommitProjectMemory } from './project-memory-commits'
-import { createProjectMemoryRecall, PROJECT_MEMORY_ESSENTIALS_ID, type ProjectMemoryRecallService } from './project-memory-recall'
+import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './project-memory-recall'
 import { hindsightPairingMatches } from './hindsight-store'
 import {
   activeProjectMemoryConfiguration, backfillConversationProjectMemory, conversationMemoryDocumentId, migrateLegacyProjectMemory, projectMemoryPairingBinding,
@@ -702,19 +702,9 @@ async function projectKnowledgePages(projectId: string): Promise<ProjectKnowledg
   const models = new Map((await client.listMentalModels(configuration.bankId)).map((model) => [model.id, model]))
   return { projectId, pages: PROJECT_KNOWLEDGE_PAGES.map((page) => {
     const model = models.get(knowledgePageModelId(page.id))
-    return { id: page.id, title: page.title, content: redactProjectMemoryText(model?.content ?? '').value, stale: model?.stale ?? false,
+    return { id: page.id, title: page.title, content: redactProjectMemoryText(currentKnowledgePageText(configuration, model)).value, stale: model?.stale ?? false,
       ...(model?.refreshedAt ? { refreshedAt: model.refreshedAt } : {}), ...(model?.failedAt ? { failedAt: model.failedAt } : {}) }
   }), ...(memoryRelay ? {} : { unavailableReason: '记忆模型中继未运行，知识页暂时不会更新。' }) }
-}
-/**
- * Editing or forgetting memory empties the knowledge pages, so they never show what was removed.
- * Marked after the clear: a coding run that read the essentials page before it was emptied sees it
- * as changed and stops at its next check.
- */
-async function emptyKnowledgePages(store: LocalStore, projectId: string, client: HindsightClient, bankId: string): Promise<void> {
-  try { await clearKnowledgePages(client, bankId) }
-  catch { console.warn('[project-memory] Knowledge pages were not emptied; they may show removed memory until refreshed.') }
-  await store.markProjectMemoryChanged(projectId, PROJECT_MEMORY_ESSENTIALS_ID)
 }
 async function listProjectMemories(input: ReturnType<typeof parseListProjectMemoriesInput>): Promise<ProjectMemoryPage> {
   const { store, configuration, client } = await ownedProjectMemory(input.projectId)
@@ -3478,6 +3468,7 @@ function registerIpcHandlers() {
         let executor: ReturnType<typeof createReadOnlyLocalStageAgentExecutor> | undefined
         let closeStageRelay: (() => Promise<void>) | undefined
         let activeStageKnowledge: RetrievedKnowledgeManifest | undefined
+        let verifySentStageMemory: (() => Promise<void>) | undefined
         if (executorKind === 'direct-provider') {
           if (!input.providerId) {
             throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
@@ -3513,7 +3504,10 @@ function registerIpcHandlers() {
             })
           if (!binding) throw new Error('请先保存项目所选 OpenCode Provider。')
           const budgetProxy=await createGovernedOpencodeProxy({binding,projectId:project.id,governance:await modelCallGovernance(store),
-            assertContextCurrent: async () => { if (activeStageKnowledge) await assertRetrievedKnowledgeCurrent(activeStageKnowledge) }})
+            assertContextCurrent: async () => {
+              if (activeStageKnowledge) await assertRetrievedKnowledgeCurrent(activeStageKnowledge)
+              await verifySentStageMemory?.()
+            } })
           closeStageRelay = budgetProxy.close
           const stageExecutor = createReadOnlyLocalStageAgentExecutor({
             projectId: project.id,
@@ -3552,10 +3546,10 @@ function registerIpcHandlers() {
             runtimeId: `agent-runtime-stage-${stageRuntimeKey}`,
             requestId: `stage-memory-${codingPromptDigest(`${stageRuntimeKey}\n${recalledAt}`).slice(0, 32)}`,
             query: [run.request, node.title, node.subtitle].join('\n'), intents: splitRecallIntents(run.request),
-            now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
+            now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET, includeCompactConventions: true,
           }).catch(() => {
             console.warn('[stage-agent] Memory recall failed; generating without recalled Memory.')
-            return { context: [] as Array<{ id: string; revision: number; statement: string }> }
+            return undefined
           })
           generated = await runWorkflowStageAgent({
             run,
@@ -3578,9 +3572,16 @@ function registerIpcHandlers() {
             requestedBy: actor.userId,
             runtime: 'electron',
             signal,
-            ...(stageMemory.context.length ? { memoryContext: stageMemory.context } : {}),
+            ...(stageMemory?.projectMemory ? {
+              memoryContext: stageMemory.context, omittedMemoryCount: stageMemory.omittedMemoryCount,
+              assertMemoryCurrent: async (identities) => {
+                verifySentStageMemory = () => assertScopedMemoryCurrent(store, stageMemory, identities)
+                await verifySentStageMemory()
+              },
+            } : {}),
           })
           signal.throwIfAborted()
+          await verifySentStageMemory?.()
           const usedKnowledge = generated.provenance.knowledgeContext?.retrievedKnowledge
           if (usedKnowledge) await assertRetrievedKnowledgeCurrent(usedKnowledge)
           if (input.designRevision) {

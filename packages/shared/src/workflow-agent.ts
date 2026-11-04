@@ -135,6 +135,8 @@ export type RunWorkflowStageAgentInput = {
   now?: () => string
   /** Scoped, ranked Memory recalled by the Electron main process (ADR 0024). */
   memoryContext?: { id: string; revision: number; statement: string }[]
+  omittedMemoryCount?: number
+  assertMemoryCurrent?: (memories: Array<{ id: string }>) => Promise<void>
   /** Host-selected current source excerpts, never an executor-controlled retrieval request. */
   retrievedKnowledge?: RetrievedKnowledgeContext
   /** Main revalidates exactly the references retained after optional context trimming. */
@@ -671,8 +673,10 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
       (artifact.kind !== 'clarification' || artifact.id === approved.artifact.id))) &&
     (!revision || artifact.kind !== 'design' || artifact.id === revision.previous.id)) })
   // One line per statement: a multi-line Memory must not imitate this prompt's section markers.
-  const memoryLines = (input.memoryContext ?? []).map((memory) =>
-    `- Memory ${memory.id} revision ${memory.revision}: ${redactSensitiveText(memory.statement).value.replace(/\s+/gu, ' ').trim()}`)
+  let sentMemory = (input.memoryContext ?? []).map((memory) => ({
+    ...memory, statement: redactSensitiveText(memory.statement).value.replace(/\s+/gu, ' ').trim(),
+  }))
+  const memoryLines = sentMemory.map((memory) => `- Memory ${memory.id} revision ${memory.revision}: ${memory.statement}`)
   if (input.retrievedKnowledge && (
     input.retrievedKnowledge.manifest.scope.projectId !== input.run.projectId ||
     input.retrievedKnowledge.manifest.scope.userId !== input.requestedBy ||
@@ -733,6 +737,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   // Memory is optional: drop it rather than refuse a request that fits without it.
   if (memoryBlock.length && (encodedBytes({ request, context, prompt }) > bounds.maxInputBytes || contextBudget().overflow)) {
     prompt = basePrompt.join('\n')
+    sentMemory = []
   }
   if (encodedBytes({ request, context, prompt }) > bounds.maxInputBytes || contextBudget().overflow) {
     throw new StageAgentExecutionError('input_limit', 'Workflow stage Agent input exceeds the configured context limit')
@@ -777,6 +782,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
         if (knowledgeContext?.manifest.retrievedKnowledge) {
           await input.assertRetrievedKnowledgeCurrent?.(knowledgeContext.manifest.retrievedKnowledge)
         }
+        if (sentMemory.length) await input.assertMemoryCurrent?.(sentMemory.map(({ id }) => ({ id })))
         if (executionController.signal.aborted) throw abortFailure()
         return executor.execute({
           request,
@@ -870,6 +876,11 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     durationMs: execution.durationMs ?? Math.max(0, Date.now() - started),
     terminalReason: 'success',
     contextDigest,
+    ...(input.memoryContext?.length || input.omittedMemoryCount ? { backgroundMemory: {
+      memories: await Promise.all(sentMemory.map(async ({ id, revision, statement }) =>
+        ({ id, revision, contentDigest: `sha256:${await sha256Text(statement)}` }))),
+      omittedCount: (input.omittedMemoryCount ?? 0) + (input.memoryContext?.length ?? 0) - sentMemory.length,
+    } } : {}),
     ...(knowledgeContext ? { knowledgeContext: knowledgeContext.manifest } : {}),
   }
 

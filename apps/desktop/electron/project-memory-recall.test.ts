@@ -150,6 +150,20 @@ it('keeps the whole request\'s memory when an ask fails, and none when the whole
   expect(degraded.length).toBeGreaterThan(0)
 })
 
+it('rejects an old or undated essentials page after curation, but accepts a newer rewrite', async () => {
+  const { recall, client, store, owner } = await fixture()
+  const config = await store.markProjectMemoryChanged('project', PROJECT_MEMORY_ESSENTIALS_ID)
+  const cleared = Date.parse(config.changedMemories![PROJECT_MEMORY_ESSENTIALS_ID]!)
+  const page = { id: PROJECT_MEMORY_ESSENTIALS_ID, content: '- A rule', stale: false }
+  const list = vi.fn<() => Promise<Array<typeof page & { refreshedAt?: string }>>>()
+  Object.assign(client, { listMentalModels: list })
+  const read = () => recall.conventions({ projectId: 'project', userId: owner, compact: true })
+  list.mockResolvedValue([page]); expect(await read()).toBeNull()
+  list.mockResolvedValue([{ ...page, refreshedAt: new Date(cleared).toISOString() }]); expect(await read()).toBeNull()
+  list.mockResolvedValue([{ ...page, refreshedAt: new Date(cleared + 1000).toISOString() }])
+  expect((await read())?.statement).toContain('A rule')
+})
+
 it('gives the coding brief the essentials page, whole lines within its limit, and nothing when it is empty or unavailable', async () => {
   const { recall, client, owner } = await fixture()
   const listMentalModels = vi.fn(async () => [
@@ -164,6 +178,11 @@ it('gives the coding brief the essentials page, whole lines within its limit, an
   expect(item!.statement).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
   expect(new TextEncoder().encode(item!.statement.slice(item!.statement.indexOf('\n') + 1)).byteLength).toBeLessThanOrEqual(2_500)
   expect(item!.statement.endsWith('- 很长的规则说明')).toBe(true)
+  const compact = await recall.conventions({ projectId: 'project', userId: owner, compact: true })
+  expect(Buffer.byteLength(compact!.statement)).toBeLessThanOrEqual(600)
+  expect(compact!.statement).toContain('- 代码注释统一用英文')
+  expect(compact!.statement.endsWith('- 很长的规则说明')).toBe(true)
+  expect(compact!.contentDigest).not.toBe(item!.contentDigest)
 
   listMentalModels.mockImplementation(async () => [{ id: 'devflow-essentials', content: '  ', stale: false }])
   expect(await recall.conventions({ projectId: 'project', userId: owner })).toBeNull()
