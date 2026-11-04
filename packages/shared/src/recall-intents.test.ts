@@ -11,6 +11,12 @@ describe('recall intents', () => {
       .toEqual(['Set the archive undo window to the delete one', 'and write comments in the agreed language'])
   })
 
+  it('looks up the referenced property when a request copies an existing value', () => {
+    expect(splitRecallIntents('把归档的撤销时长设成和删除任务的撤销窗口相同的时长（以我们最后商定的为准），注释按项目约定的语言写。'))
+      .toEqual(['删除任务的撤销窗口时长', '注释按项目约定的语言写'])
+    expect(splitRecallIntents('批量导出使用与单条导出相同的格式')).toEqual(['单条导出格式'])
+  })
+
   it('leaves a single ask whole and drops fragments too short to search', () => {
     expect(splitRecallIntents('撤销窗口现在是多少秒？')).toEqual([])
     expect(splitRecallIntents('How long is the undo window after deleting a task?')).toEqual([])

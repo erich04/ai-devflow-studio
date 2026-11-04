@@ -19,12 +19,12 @@ import {
   AgentProviderRequestError, CODING_MEMORY_RECALL_BUDGET, CONVERSATION_MEMORY_RECALL_BUDGET, PROJECT_KNOWLEDGE_PAGES,
   PROJECT_MEMORY_MAX_DOCUMENT_BYTES, PROJECT_MEMORY_MISSIONS, STAGE_AGENT_MEMORY_RECALL_BUDGET, advanceWorkflowAfterGateApproval, approveClarificationRevision,
   buildCodingBrief, completeWorkflowAgentNode, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, governAgentProvider,
-  redactSensitiveText, resolveDeepSeekPricingSnapshot, runWorkflowStageAgent, selectMemoryWithinBudget,
+  redactSensitiveText, resolveDeepSeekPricingSnapshot, runWorkflowStageAgent, selectMemoryWithinBudget, splitRecallIntents,
   type AgentProvider, type AgentProviderUsage, type Artifact, type LocalProject, type MemoryRecallBudget, type ModelCallGovernance,
   type ModelCallQuote, type ModelCallSettlement, type NativeConversationRequest, type ProjectMemoryConfiguration, type ProjectMemoryDocumentInput,
   type WorkflowRun,
 } from '../packages/shared/src/index.ts'
-import { assertCodingContextCurrent, recallCodingMemory, recallScopedMemory, registerProjectMemoryRecall } from '../apps/desktop/electron/coding-context.js'
+import { assertCodingContextCurrent, buildCodingMemoryQuery, recallCodingMemory, recallScopedMemory, registerProjectMemoryRecall } from '../apps/desktop/electron/coding-context.js'
 import { createCodingRuntime } from '../apps/desktop/electron/coding-runtime.js'
 import { CODING_BRIEF_MAX_BYTES } from '../apps/desktop/electron/coding-runtime-configuration.js'
 import { createHindsightClient } from '../apps/desktop/electron/hindsight-client.js'
@@ -692,7 +692,9 @@ async function agentsPhase() {
   for (const artifact of workflowArtifacts) await store.saveArtifact(artifact)
   state!.codingWorkflowId = workflowId
   await step('coding brief keeps recalled memory whole under compaction', async () => {
-    const recalled = await recallCodingMemory({ store, run: workflow, codingRunId: `brief-check-${suffix}`, userId: owner(), query: `${request}\n${workflow.nodes[1]!.title}`, now: now() })
+    const recalled = await recallCodingMemory({ store, run: workflow, codingRunId: `brief-check-${suffix}`, userId: owner(),
+      query: buildCodingMemoryQuery({ run: workflow, node: workflow.nodes[1]!, userInstruction: request, artifacts: workflowArtifacts }),
+      intents: splitRecallIntents(request), now: now() })
     const brief = buildCodingBrief({ run: workflow, node: workflow.nodes[1]!, project: project!, upstreamArtifacts: workflowArtifacts, knowledgeReferences: [],
       governanceChecks: [], gateDecisions: [], testEvidence: [], userInstruction: request, worktreePath: '<worktree>', branchName: '<branch>',
       maxContextBytes: CODING_BRIEF_MAX_BYTES, memoryContext: recalled.context })
