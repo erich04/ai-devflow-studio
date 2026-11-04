@@ -17,6 +17,7 @@ import {
   type FixtureTemplate,
   type NamedFixtureSubject,
 } from './native-coding-fixture-cases'
+import { relatedPublicFixtures } from './native-coding-related-fixtures'
 import { ownedFixtureContracts, type OwnedFixtureContract } from './native-coding-owned-fixtures'
 import type { IndependentCheckSource, IndependentVerificationState } from './native-coding-independent-verification'
 
@@ -154,9 +155,13 @@ export async function fixturePlanning(
     if (fixture.anchors.length > 500 || fixture.hash !== entry.hash) return undefined
     fixtures.push(fixture)
   }
+  const objective = source.criteria.map((c) => c.text).join('\n')
+  const originalFixtures = [...fixtures]
+  const nearby = await relatedPublicFixtures(workspace, paths, objective)
+  for (const item of nearby) fixtures.push(item.fixture)
+  const ownersFor = (name: string) => nearby.find((n) => n.fixture.path === name)?.owners
   const eligible = (a: FixtureTemplate['anchors'][number]) => a.selectable === true
   if (!fixtures.some((f) => f.anchors.some(eligible))) return undefined
-  const objective = source.criteria.map((c) => c.text).join('\n')
   const evidence = await acceptanceContext(
     base.files,
     (h) => workspace.blob(h),
@@ -185,7 +190,11 @@ export async function fixturePlanning(
   const indexed = fixtures.map((f, i) => ({
     fixture: `f${i + 1}`,
     path: f.path,
+    ...(ownersFor(f.path)
+      ? { additionalBaselineModules: ownersFor(f.path)!.map(({ path, exports }) => ({ path, exports })) }
+      : {}),
     anchors: f.anchors.filter(eligible).map((a) => ({
+      ...(ownersFor(f.path) && a.suite ? { suite: redactSensitiveText(a.suite).value.slice(0, 240) } : {}),
       key: `f${i + 1}:${a.id}`,
       title: redactSensitiveText(a.title).value.slice(0, 400),
       behavior: a.behavior,
@@ -197,7 +206,7 @@ export async function fixturePlanning(
     base.files,
     (h) => workspace.blob(h),
     source.criteria.map((c) => c.text).join('\n'),
-    fixtures,
+    originalFixtures,
   )
   const namedInputs = [...new Set(examples.map((e) => e.value))]
   const approvedUnits = sourceUnits(source.criteria)
@@ -220,7 +229,12 @@ export async function fixturePlanning(
       phase: 'select',
       request: {
         systemPrompt:
-          selectPrompt + (namedInputs.length ? ' ' + selectInputPrompt : '') + (ownedContracts.length ? ownedPrompt : ''),
+          selectPrompt +
+          (nearby.length
+            ? ' The regression command may exercise neighboring infrastructure. Additional public suites on B name the requested feature and import the listed modules. Trace the actual entry and its resource lifecycle before selecting a caller. The extra examples do not add requirements.'
+            : '') +
+          (namedInputs.length ? ' ' + selectInputPrompt : '') +
+          (ownedContracts.length ? ownedPrompt : ''),
         messages: [
           {
             role: 'user',
@@ -285,6 +299,7 @@ export async function fixturePlanning(
     return {
       fixture: key,
       path: f.path,
+      ...(ownersFor(f.path) ? { additionalBaselineModules: ownersFor(f.path) } : {}),
       setup: redactSensitiveText(f.scaffold).value.slice(0, 26000),
       production: focusFixtureEvidence(
         indexed[index]!.production,

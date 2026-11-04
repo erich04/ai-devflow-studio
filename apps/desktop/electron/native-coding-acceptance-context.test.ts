@@ -124,3 +124,65 @@ it('keeps all named suites as context when only some of them offer eligible publ
     await rm(root, { recursive: true, force: true })
   }
 })
+
+it('finds the normal named feature in immutable nearby public fixtures even when the regression command lists only transport tests', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const { default: path } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { CodingCandidateWorkspace } = await import('./coding-candidate-workspace')
+  const { fixturePlanning } = await import('./native-coding-fixture-planning')
+  const { fixtureSelectionFromResponse } = await import('./native-coding-independent-verification')
+  const { codingToolReply } = await import('./native-coding-test-fixture')
+  const root = await mkdtemp(path.join(tmpdir(), 'fixture-owner-')),
+    delivery = path.join(root, 'project')
+  try {
+    await mkdir(delivery)
+    const files = {
+      'framekit-transport.test.ts': "import {it, expect} from 'vitest'; it('starts the transport',()=>{expect(1).toBe(1)})",
+      'framekit-profile.ts': 'export function openProfile() { return {active:true} }',
+      'framekit-audit.ts': 'export function unrelatedAudit() { return 3 }',
+      'tenant.test.ts':
+        "import {describe,it,expect} from 'vitest';describe('FrameKit tenant profiles',()=>{it('opens for a tenant',async()=>{const {openProfile}=await import('./framekit-profile');expect(openProfile().active).toBe(true)})});describe('other',()=>{it('displays unrelated state',async()=>{await import('./framekit-audit');expect(2).toBe(2)})})",
+      'unrelated.test.ts':
+        "import {describe,it,expect} from 'vitest'; describe('FrameKit mentioned only',()=>{it('matches a string',()=>{expect('unused').toBe('unused')})})",
+    }
+    for (const [name, content] of Object.entries(files)) await writeFile(path.join(delivery, name), content)
+    const ws = await CodingCandidateWorkspace.create({
+      root: path.join(root, 'work'),
+      delivery,
+      baseCommitSha: 'c'.repeat(40),
+      excludedPaths: ['node_modules'],
+    })
+    await writeFile(path.join(delivery, 'tenant.test.ts'), '// CANDIDATE-ONLY-TRAP')
+    const source = {
+      objectiveVersion: 1,
+      baselineDigest: ws.identity.base.digest,
+      sourceDigest: 'd'.repeat(64),
+      criteria: [{ id: 'goal', sourceRef: 'request', text: 'Keep FrameKit tenant profiles isolated.' }],
+    }
+    const plan = (await fixturePlanning(source, ws, ['framekit-transport.test.ts']))!
+    const payload = JSON.parse(plan.request.messages[0]!.content as string)
+    expect(payload.fixtures.map((f: { path: string }) => f.path)).toEqual(['framekit-transport.test.ts', 'tenant.test.ts'])
+    expect(payload.fixtures[1].anchors.map((a: { key: string }) => a.key)).toEqual(['f2:t1'])
+    expect(JSON.stringify(payload.fixtures[1])).toContain('openProfile')
+    expect(JSON.stringify(payload.fixtures[1])).not.toContain('framekit-audit')
+    expect(JSON.stringify(payload)).not.toContain('CANDIDATE-ONLY-TRAP')
+    const reply = (anchor: string) =>
+      codingToolReply('select', 'select_behavior_contract', {
+        scenarios: [{ units: ['r1.1'], anchor, precondition: 'The normal tenant entry opens a profile' }],
+        contextOnly: [],
+      })
+    expect(() => fixtureSelectionFromResponse(plan, reply('f2:t2'))).toThrow(/unsupported/)
+    const selection = fixtureSelectionFromResponse(plan, reply('f2:t1'))
+    const next = (await fixturePlanning(source, ws, ['framekit-transport.test.ts'], {
+      plans: [],
+      humanInputs: [],
+      drafts: [{ attemptId: 'sel', sourceDigest: source.sourceDigest, objectiveVersion: 1, selection, feedback: 'OK' }],
+    }))!
+    const writing = JSON.parse(next.request.messages[0]!.content as string)
+    expect(writing.fixtures.map((f: { path: string }) => f.path)).toEqual(['tenant.test.ts'])
+    expect(JSON.stringify(writing.fixtures[0])).toContain('framekit-profile.ts')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

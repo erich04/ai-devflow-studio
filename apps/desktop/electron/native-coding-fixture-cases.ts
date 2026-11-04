@@ -44,7 +44,14 @@ export function validPartialFixtureCases(partial: PartialFixtureCases) {
 export type FixtureBinding = { path: string; hash: string; anchor: string; units: string[]; contrast?: FixtureContrast }
 export type CoverageRecord = { sources: AcceptanceCriterion[]; contextOnly: Array<{ unit: string; reason: string }> }
 type Region = { start: number; end: number }
-type Anchor = Region & { id: string; title: string; control?: string; selectable?: boolean; behavior?: { actions: string[]; faults: string[] } }
+type Anchor = Region & {
+  id: string
+  title: string
+  suite?: string
+  control?: string
+  selectable?: boolean
+  behavior?: { actions: string[]; faults: string[] }
+}
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
 const bounded = (value: unknown, limit: number): value is string =>
@@ -211,12 +218,16 @@ function protectedPublicAssertion(node: ts.Node, tree: ts.SourceFile): node is t
   if (!ts.isAwaitExpression(node.expression) || !ts.isCallExpression(node.expression.expression)) return false
   const call = node.expression.expression
   const callback = call.arguments[0]
-  if (!['vi.waitFor', 'waitFor'].includes(call.expression.getText(tree)) || !callback || !ts.isArrowFunction(callback)) return false
+  if (!['vi.waitFor', 'waitFor'].includes(call.expression.getText(tree)) || !callback || !ts.isArrowFunction(callback))
+    return false
   return ts.isCallExpression(callback.body) && /^expect\s*\(/u.test(callback.body.getText(tree))
 }
 
 function hasProtectedAssertion(node: ts.Node, tree: ts.SourceFile): boolean {
-  return protectedPublicAssertion(node, tree) || ts.forEachChild(node, child => hasProtectedAssertion(child, tree) || undefined) === true
+  return (
+    protectedPublicAssertion(node, tree) ||
+    ts.forEachChild(node, (child) => hasProtectedAssertion(child, tree) || undefined) === true
+  )
 }
 
 function fixtureBehavior(block: ts.Block, tree: ts.SourceFile) {
@@ -288,13 +299,17 @@ export function fixtureTemplate(file: string, source: string) {
   }
   const anchors: Anchor[] = [],
     suites: Region[] = []
-  function visit(node: ts.Node) {
+  function visit(node: ts.Node, scope?: string) {
     if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)) {
       const call = node.expression,
         root = registrationRoot(call.expression)
       if (ts.isIdentifier(root)) {
         const region = { start: node.getStart(tree), end: node.end }
-        if (suiteNames.has(root.text)) suites.push(region)
+        if (suiteNames.has(root.text)) {
+          suites.push(region)
+          const title = call.arguments[0]
+          if (title && ts.isStringLiteralLike(title)) scope = scope ? scope + ' / ' + title.text : title.text
+        }
         if (testNames.has(root.text)) {
           const name = call.arguments[0],
             callback = call.arguments[1]
@@ -308,11 +323,16 @@ export function fixtureTemplate(file: string, source: string) {
               : undefined
           anchors.push({
             ...region,
+            ...(scope ? { suite: scope } : {}),
             ...(control !== undefined &&
             callback &&
             (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
             ts.isBlock(callback.body)
-              ? { control, selectable: control.length <= 12000 && hasProtectedAssertion(callback.body, tree), behavior: fixtureBehavior(callback.body, tree) }
+              ? {
+                  control,
+                  selectable: control.length <= 12000 && hasProtectedAssertion(callback.body, tree),
+                  behavior: fixtureBehavior(callback.body, tree),
+                }
               : {}),
             id: `t${anchors.length + 1}`,
             title: name && ts.isStringLiteralLike(name) ? name.text : '(dynamic title)',
@@ -321,7 +341,7 @@ export function fixtureTemplate(file: string, source: string) {
         }
       }
     }
-    ts.forEachChild(node, visit)
+    ts.forEachChild(node, (child) => visit(child, scope))
   }
   visit(tree)
   function replace(chosen?: Anchor, replacement = ';') {

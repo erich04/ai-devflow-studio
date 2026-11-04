@@ -133,14 +133,18 @@ it('keeps an awaited public polling assertion and rejects replacing its polling 
 })
 
 it('offers only immutable callbacks with assertions the authoring host can protect', () => {
-  const fixture = fixtureTemplate('queue.test.ts', `
+  const fixture = fixtureTemplate(
+    'queue.test.ts',
+    `
     it('observes completion',async()=>{ await vi.waitFor(()=>expect(awaited.done).toBe(true)) })
     it('contains an example string',()=>{ trace('expect(fake).toBe(true)') })
-  `)
-  const choose = (anchor: string) => readFixtureSelection([criteria[0]!], [fixture], {
-    scenarios: [{ anchor, units: ['r1.1'], precondition: 'The queue has an active operation' }],
-    contextOnly: [{unit:'r1.2',reason:'covered separately as a host limit'}],
-  })
+  `,
+  )
+  const choose = (anchor: string) =>
+    readFixtureSelection([criteria[0]!], [fixture], {
+      scenarios: [{ anchor, units: ['r1.1'], precondition: 'The queue has an active operation' }],
+      contextOnly: [{ unit: 'r1.2', reason: 'covered separately as a host limit' }],
+    })
   expect(() => choose('f1:t1')).not.toThrow()
   expect(() => choose('f1:t2')).toThrow(/unsupported/)
 })
