@@ -482,3 +482,88 @@ it('requires an actual clock stimulus for a requested time-boundary scenario', (
   const countGoal={...planning,source:{...source,criteria:[{...source.criteria[0]!,text:'Finish after no more than twelve calls.'}]}}
   expect(()=>fixtureChecksFromResponse(countGoal,reply('const maxCalls=12'),'2026-11-04T22:00:00Z')).not.toThrow()
 })
+
+it('retains successful bounded batches without counting them as failed author attempts or freezing an incomplete plan', async () => {
+  const deps = await import('./coding-dependency-preparation')
+  const { symlink, rm } = await import('node:fs/promises')
+  const path = await import('node:path')
+  const requests: string[][] = []
+  const snapshots: Array<{ frozen: number; retained: number }> = []
+  let inspectState: () => Promise<void>
+  const fixture = await codingHarnessFixture(
+    async () => codingToolReply('stop', 'report_blocked', { reason: 'The complete independent plan is now frozen' }),
+    'node node_modules/vitest/vitest.mjs run value.test.ts',
+    {},
+    async (request) => {
+      if (request.tools[0]?.function.name === 'select_behavior_contract')
+        return codingToolReply('select', 'select_behavior_contract', {
+          scenarios: Array.from({ length: 14 }, (_, i) => ({
+            units: ['r1.' + (i + 1)],
+            anchor: 'f1:t1',
+            precondition: 'Existing successful public fixture',
+          })),
+          contextOnly: [],
+        })
+      const form = JSON.parse(request.messages[0]!.content as string)
+      await inspectState()
+      const offered = form.scenarios.map((s: { id: string }) => s.id)
+      requests.push(offered)
+      return codingToolReply('batch', 'submit_fixture_cases', {
+        cases: offered.slice(0, 4).map((id: string) => ({
+          scenario: id,
+          baseline: 'fail',
+          edits: [{ line: 2, deleteCount: 1, insert: " const value='changed'" }],
+        })),
+      })
+    },
+    {
+      userInstruction: Array.from({ length: 14 }, (_, i) => 'Behavior ' + (i + 1) + ' works.').join(' '),
+      baselineFiles: {
+        'package.json': '{"type":"module","devDependencies":{"vitest":"3.2.6"}}',
+        'pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
+        'vitest.config.mjs': "export default {test:{environment:'node',include:['*.test.ts']}}",
+        'value.test.ts':
+          "import {it,expect} from 'vitest'\nit('accepts original',()=>{\n const value='original'\n expect(value).toBe('original')\n})",
+      },
+    },
+  )
+  inspectState = async () => {
+    const current = (await fixture.store.getNativeCodingSession('native-coding'))!.independentVerification!
+    validateIndependentVerification(JSON.parse(JSON.stringify(current)))
+    snapshots.push({
+      frozen: current.plans.length,
+      retained: current.drafts?.filter((d) => d.progress).at(-1)?.partial?.cases.length ?? 0,
+    })
+  }
+  const prepare = vi.spyOn(deps, 'prepareCodingDependencies').mockImplementation(async (input) => {
+    await symlink(
+      path.resolve('node_modules'),
+      path.join(input.directory, 'node_modules'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+    return { inputDigest: input.plan.inputDigest }
+  })
+  try {
+    await fixture.authorize()
+    await fixture.executor.settled('coding')
+    const session = (await fixture.store.getNativeCodingSession('native-coding'))!,
+      state = session.independentVerification!
+    expect(state.plans).toHaveLength(1)
+    expect(state.plans[0]?.checks).toHaveLength(14)
+    expect(requests.map((r) => r.length)).toEqual([4, 4, 4, 2])
+    expect(snapshots).toEqual([0, 4, 8, 12].map((retained) => ({ frozen: 0, retained })))
+    expect(new Set(requests.flat()).size).toBe(14)
+    expect(state.drafts?.filter((d) => d.partial).map((d) => d.partial!.cases.length)).toEqual([4, 8, 12])
+    expect(state.drafts?.filter((d) => d.preflightStatus).map((d) => d.preflightStatus)).toEqual(['valid'])
+    validateIndependentVerification(JSON.parse(JSON.stringify(state)))
+    const malformed = structuredClone(state)
+    const progress = malformed.drafts!.find((d) => d.progress)!
+    delete progress.partial
+    expect(() => validateIndependentVerification(malformed)).toThrow(/progress/i)
+  } finally {
+    prepare.mockRestore()
+    await fixture.executor.shutdown()
+    await fixture.store.close()
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+}, 30000)

@@ -42,7 +42,8 @@ export function validPartialFixtureCases(partial: PartialFixtureCases) {
     Array.isArray(partial.cases) &&
     partial.cases.length > 0 &&
     partial.cases.length <= 16 &&
-    JSON.stringify(partial.cases).length <= 128000 &&
+    // Retaining a batch must support the same sixteen bounded bodies as a full plan.
+    JSON.stringify(partial.cases).length <= 1_100_000 &&
     partial.digest === codingDigest(JSON.stringify({ selectionDigest: partial.selectionDigest, cases: partial.cases })) &&
     new Set(partial.cases.map((c) => c?.scenario)).size === partial.cases.length &&
     partial.cases.every(

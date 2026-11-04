@@ -31,7 +31,7 @@ export type IndependentCheckResult = {
 export type IndependentVerificationState = {
   plans: FrozenIndependentChecks[]
   humanInputs: Array<{ id: string; text: string; objectiveVersion: number }>
-  drafts?: Array<{ attemptId: string; objectiveVersion: number; sourceDigest: string; feedback: string; preflightStatus?: 'valid' | 'invalid' | 'unavailable'; correctCases?: true; reselect?:true; retainedCaseIds?:string[]; partial?:PartialFixtureCases; plan?: FrozenIndependentChecks; selection?: FixtureSelection }>
+  drafts?: Array<{ attemptId: string; objectiveVersion: number; sourceDigest: string; feedback: string; preflightStatus?: 'valid' | 'invalid' | 'unavailable'; correctCases?: true; reselect?:true; progress?:true; retainedCaseIds?:string[]; partial?:PartialFixtureCases; plan?: FrozenIndependentChecks; selection?: FixtureSelection }>
 }
 const digestPattern = /^[a-f0-9]{64}$/u
 const identifier = /^[a-zA-Z0-9_.:-]{1,200}$/u
@@ -76,6 +76,7 @@ export function validateIndependentVerification(state: IndependentVerificationSt
   for (const draft of state.drafts ?? []) {
     if (draft.reselect !== undefined && (draft.reselect!==true || draft.plan || draft.partial || draft.preflightStatus || draft.selection)) throw new Error('Invalid fixture re-selection receipt')
     if (draft.partial && (draft.selection || draft.plan || draft.preflightStatus || !validPartialFixtureCases(draft.partial))) throw new Error('Invalid partial independent fixture draft')
+    if (draft.progress !== undefined && (draft.progress !== true || !draft.partial || draft.reselect || draft.correctCases)) throw new Error('Invalid independent author progress')
     if (draft.retainedCaseIds && (!draft.correctCases || !Array.isArray(draft.retainedCaseIds) || new Set(draft.retainedCaseIds).size!==draft.retainedCaseIds.length || draft.retainedCaseIds.some(id=>!draft.plan?.checks.some(check=>check.criterionId===id)))) throw new Error('Invalid retained baseline cases')
     if (draft.correctCases !== undefined && (draft.correctCases !== true || draft.preflightStatus !== 'invalid' || !draft.plan?.coverage)) throw new Error('Invalid independent fixture correction')
     if (draft.selection && (!validSelectionRecord(draft.selection) || draft.plan || draft.preflightStatus)) throw new Error('Invalid independent fixture selection')
@@ -183,7 +184,15 @@ export function fixtureSelectionFromResponse(planning: AcceptancePlanning, respo
   requireReplySelection(planning.source.criteria, planning.fixtures!, selection)
   return selection
 }
-export function fixtureChecksFromResponse(planning: AcceptancePlanning, response: NativeConversationResponse, now: string) {
+export function fixtureChecksFromResponse(
+  planning: AcceptancePlanning, response: NativeConversationResponse, now: string,
+): FrozenIndependentChecks
+export function fixtureChecksFromResponse(
+  planning: AcceptancePlanning, response: NativeConversationResponse, now: string, collectProgress: true,
+): FrozenIndependentChecks | PartialFixtureCases
+export function fixtureChecksFromResponse(
+  planning: AcceptancePlanning, response: NativeConversationResponse, now: string, collectProgress = false,
+): FrozenIndependentChecks | PartialFixtureCases {
   const draft = planToolValue(response, 'submit_fixture_cases') as {
     cases?: Array<{ scenario: string; edits: unknown; baseline: string; contrast?: unknown }>
   } | null
@@ -194,11 +203,14 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       ? planning.partial.cases
       : []
   const byScenario = new Map(retained.map((c) => [c.scenario, c]))
-  const pending = selection.scenarios.map((_, i) => `s${i + 1}`).filter((id) => !byScenario.has(id))
+  const pending = selection.scenarios
+    .map((_, i) => `s${i + 1}`)
+    .filter((id) => !byScenario.has(id) && (!planning.scenarioBatch || planning.scenarioBatch.includes(id)))
   if (
     !draft ||
     !Array.isArray(draft.cases) ||
     draft.cases.length > pending.length ||
+    (collectProgress && pending.length > 0 && draft.cases.length === 0) ||
     new Set(draft.cases.map((c) => c?.scenario)).size !== draft.cases.length ||
     draft.cases.some((c) => !c || !pending.includes(c.scenario))
   )
@@ -239,7 +251,7 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
         issues.push(`${item.scenario}: ${error.message}`)
       }
     }
-  for (const id of pending) {
+  for (const id of collectProgress ? draft.cases.map((c) => c.scenario) : pending) {
     try {
       const reply = draft.cases.find((c) => c.scenario === id)
       if (!reply || (reply.baseline !== 'pass' && reply.baseline !== 'fail'))
@@ -268,6 +280,16 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
     return [{ ...selected, ...value, ...(witnessed ? { witnessed: true } : {}),
       ...(value.body.includes(lostReplyHelper) ? { lostReply: true } : {}) }]
   })
+  if (collectProgress && cases.length < selection.scenarios.length) {
+    const partial = partialFixtureCases(selectionDigest, [...byScenario.values()])
+    if (issues.length) {
+      const feedback = issues.join(' ').slice(0, 4000)
+      if (validPartialFixtureCases(partial)) throw new FixtureCaseCorrection(feedback, partial)
+      throw new InvalidFixtureDraft(feedback)
+    }
+    if (byScenario.size <= retained.length) throw new InvalidFixtureDraft('This batch made no new progress')
+    return partial
+  }
   if (!issues.length && planning.requiredSubjects?.length) {
     const operations = separateOperationUnits(planning.source.criteria, planning.fixtures!)
     for (const subject of planning.requiredSubjects) {

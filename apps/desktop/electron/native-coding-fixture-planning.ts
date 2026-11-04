@@ -37,6 +37,7 @@ export type AcceptancePlanning = {
   inputExamples?: Array<{ field: string; value: string; observedValues: string[] }>
   requiredSubjects?: NamedFixtureSubject[]
   partial?: PartialFixtureCases
+  scenarioBatch?: string[]
   requireWitness?: boolean
   ownedContracts?: OwnedFixtureContract[]
 }
@@ -327,6 +328,7 @@ export async function fixturePlanning(
       request: {
         systemPrompt:
           selectPrompt +
+          ' Choose the smallest scenario set that demonstrates all requested behavioral differences. Every selected case already runs its unchanged original control. Avoid extra cases that only repeat the same observation.' +
           (fixtures.some((f) => f.anchors.some((a) => a.selectable && a.row))
             ? ' Some existing public tests exercise concrete parameter rows. When the approved behavior depends on an existing setting, prefer its working row and the operation that actually receives it. Changing a similarly named field on a different adapter does not establish that precondition.'
             : '') +
@@ -398,7 +400,8 @@ export async function fixturePlanning(
           canBindFixtureSubject(subject.unit, selection.scenarios[Number(c.scenario.slice(1)) - 1], operationalUnits, fixtures),
       ),
   )
-  const pendingScenarios = selection.scenarios.map((s, i) => ({ ...s, id: `s${i + 1}` })).filter((s) => !retained.has(s.id))
+  const allPending = selection.scenarios.map((s, i) => ({ ...s, id: `s${i + 1}` })).filter((s) => !retained.has(s.id))
+  const pendingScenarios = allPending.slice(0, 4)
   const selectedFixtures = [...new Set(pendingScenarios.map((s) => s.fixture))].map((key) => {
     const index = Number(key.slice(1)) - 1,
       f = fixtures[index]!
@@ -473,6 +476,7 @@ export async function fixturePlanning(
     source,
     fixtures,
     phase: 'cases',
+    scenarioBatch: pendingScenarios.map((s) => s.id),
     requireWitness,
     selection,
     ownedContracts,
@@ -483,6 +487,7 @@ export async function fixturePlanning(
     request: {
       systemPrompt:
         casePrompt +
+        ' Author only the displayed batch. Other scenarios remain queued. The host retains valid batches unchanged and runs the full baseline preflight before any implementation.' +
         (selectedFixtures.some((f) => f.examples.some((example) => 'immutableParameters' in example))
           ? ' The host binds the displayed immutableParameters from the selected public table row in both the control and the variation. Use those parameters directly without declaring replacements. Trace the entry that actually receives their values.'
           : '') +
@@ -499,6 +504,7 @@ export async function fixturePlanning(
             requiredOperationSubjects: pendingSubjects,
             ownedReadModelFixtures: ownedContracts.filter((c) => selectedFixtures.some((f) => f.path === c.file)),
             scenarios,
+            batchProgress: { total: selection.scenarios.length, retained: retained.size, pendingAfterBatch: allPending.length - pendingScenarios.length },
             ...(retained.size
               ? {
                   retainedScenarios: [...retained],

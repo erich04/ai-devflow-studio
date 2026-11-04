@@ -336,7 +336,38 @@ export class NativeCodingLoop {
               })
               continue
             }
-            const plan = planning.phase === 'cases' ? fixtureChecksFromResponse(planning, response, this.now()) : independentChecksFromResponse(planning.source, response, this.now())
+            const plan = planning.phase === 'cases' ? fixtureChecksFromResponse(planning, response, this.now(), true) : independentChecksFromResponse(planning.source, response, this.now())
+            if ('selectionDigest' in plan) {
+              session = await this.change(id, draft => {
+                const attempt = draft.attempts.find(item => item.id === attemptId)!
+                attempt.status = 'completed'
+                attempt.completedAt = this.now()
+                if (response.usage) attempt.usage = response.usage
+                if (
+                  draft.status !== 'running' ||
+                  draft.writer?.owner !== this.owner ||
+                  draft.writer.epoch !== epoch ||
+                  controller.signal.aborted ||
+                  draft.pendingInput.length ||
+                  draft.objectiveVersion !== planning.source.objectiveVersion ||
+                  independentCheckSourceDigest(draft) !== planning.source.sourceDigest
+                ) {
+                  attempt.error = 'Author progress superseded by interruption or human input'
+                  return
+                }
+                draft.independentVerification ??= { plans: [], humanInputs: [] }
+                draft.independentVerification.drafts ??= []
+                draft.independentVerification.drafts.push({
+                  attemptId,
+                  objectiveVersion: draft.objectiveVersion,
+                  sourceDigest: planning.source.sourceDigest,
+                  partial: plan,
+                  progress: true,
+                  feedback: `Retained ${plan.cases.length} of ${planning.selection!.scenarios.length} private variations. Continue the pending batch. The full plan still requires baseline preflight.`,
+                })
+              })
+              continue
+            }
             const preflight = await this.host.preflightIndependentChecks?.(plan, `${session.id}:independent:preflight-${attemptId}`, controller.signal)
             if (plan.adapter && !preflight) throw new Error('Independent framework preflight is required')
             session = await this.change(id, draft => {
@@ -347,7 +378,7 @@ export class NativeCodingLoop {
               if (preflight && preflight.status !== 'valid') {
                 draft.independentVerification.drafts ??= []
                 draft.independentVerification.drafts.push({ attemptId, objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, ...(preflight.correctCases ? {correctCases: true, ...(preflight.retainedCaseIds?.length ? {retainedCaseIds:preflight.retainedCaseIds} : {})} : {}), plan })
-                const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === plan.objectiveVersion && item.sourceDigest === plan.sourceDigest && !item.selection).length
+                const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === plan.objectiveVersion && item.sourceDigest === plan.sourceDigest && !item.selection && !item.progress).length
                 if (preflight.status === 'unavailable' || failures >= 3) { draft.status = 'paused'; draft.pauseReason = preflight.status === 'unavailable' ? 'independent_verification_preflight_unavailable' : 'independent_verification_plan_invalid' }
                 return
               }
@@ -416,8 +447,8 @@ export class NativeCodingLoop {
               draft.independentVerification.drafts.push({ attemptId, objectiveVersion: planning.source.objectiveVersion, sourceDigest: planning.source.sourceDigest,
                 ...(error instanceof FixtureCaseCorrection ? {partial:error.partial} : {}),
                 ...(error instanceof NoFixtureChangeWitness ? {reselect:true} : {}),
-                feedback: planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs, cover every approved source unit, and return a single well-formed JSON object. No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.' })
-              const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === planning.source.objectiveVersion && item.sourceDigest === planning.source.sourceDigest && !item.selection).length
+                feedback: planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs and return a single well-formed JSON object. ${planning.phase === 'cases' ? 'Return only the displayed pending batch. Other valid cases stay retained, and the host checks full coverage before freezing.' : 'Cover every approved source unit in the selection.'} No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.' })
+              const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === planning.source.objectiveVersion && item.sourceDigest === planning.source.sourceDigest && !item.selection && !item.progress).length
               if (failures < 3) return
             }
             if (writing && retry) { attempt.retry = retry; return }
