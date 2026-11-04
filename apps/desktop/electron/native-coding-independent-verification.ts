@@ -6,8 +6,9 @@ import { redactSensitiveText, type NativeConversationRequest, type NativeConvers
 import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import type { CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import type { NativeCodingSession } from './native-coding-session'
+import { checkOwnedFixtureInputs } from './native-coding-owned-fixtures'
 import { fixturePlanning, type AcceptancePlanning } from './native-coding-fixture-planning'
-import { NoFixtureChangeWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
+import { sourceUnits, NoFixtureChangeWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
 
 export type IndependentCheckSource = {
   objectiveVersion: number; baselineDigest: string; sourceDigest: string
@@ -195,6 +196,29 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
   )
     throw new InvalidFixtureDraft(`Return only the pending scenarios: ${pending.join(', ')}`)
   const issues: string[] = []
+  const ownership = planning.ownedContracts ?? []
+  const units = ownership.length ? sourceUnits(planning.source.criteria) : []
+  const approvedFor = (ids: string[]) =>
+    units
+      .filter((unit) => ids.includes(unit.id))
+      .map((unit) => unit.text)
+      .join('\n')
+  // In-progress drafts can survive an upgrade. Recheck retained private bodies
+  // against B before treating them as part of a newly frozen plan.
+  if (ownership.length)
+    for (const item of retained) {
+      const scenario = selection.scenarios[Number(item.scenario.slice(1)) - 1]
+      const fixture = scenario && planning.fixtures?.[Number(scenario.fixture.slice(1)) - 1]
+      const control = fixture?.anchors.find((a) => a.id === scenario?.anchor)?.control
+      try {
+        if (!scenario || !fixture || !control) throw new InvalidFixtureDraft('Retained public fixture is unavailable')
+        checkOwnedFixtureInputs(fixture.path, control, item.body, ownership, approvedFor(scenario.units))
+      } catch (error) {
+        if (!(error instanceof InvalidFixtureDraft)) throw error
+        byScenario.delete(item.scenario)
+        issues.push(`${item.scenario}: ${error.message}`)
+      }
+    }
   for (const id of pending) {
     try {
       const reply = draft.cases.find((c) => c.scenario === id)
@@ -205,6 +229,7 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       const control = fixture?.anchors.find((a) => a.id === selected.anchor)?.control
       if (control === undefined) throw new InvalidFixtureDraft('Missing public control')
       const body = varyPublicFixture(control, reply.edits, fixture!.path)
+      checkOwnedFixtureInputs(fixture!.path, control, body, ownership, approvedFor(selected.units))
       const contrast = bindFixtureContrast(reply.contrast, body, planning.namedInputs ?? [], planning.inputExamples)
       byScenario.set(id, { scenario: id, baseline: reply.baseline, body, ...(contrast ? { contrast } : {}) })
     } catch (error) {

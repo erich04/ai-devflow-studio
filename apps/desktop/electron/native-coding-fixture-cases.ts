@@ -332,7 +332,7 @@ export function fixtureTemplate(file: string, source: string) {
       replace(anchor, original + '\n' + test(title, body))
     )
   }
-  return { path: file, hash: codingDigest(source), source, anchors, scaffold: replace(), render }
+  return { path: file, hash: codingDigest(source), source, tree, anchors, scaffold: replace(), render }
 }
 export type FixtureTemplate = ReturnType<typeof fixtureTemplate>
 
