@@ -1,6 +1,6 @@
 import { requestsTimeBoundary } from './native-coding-clock-fixtures'
 import { requestsLostAcknowledgement } from './native-coding-lost-reply'
-import { requestsDurableRoundTrip } from './native-coding-storage-fixtures'
+import { requestsDurableRoundTrip, requestsStoredRecovery } from './native-coding-storage-fixtures'
 import { redactSensitiveText, type NativeConversationRequest, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
 import {
   acceptanceContext,
@@ -306,8 +306,9 @@ export async function fixturePlanning(
       ? {
           storageObservations: {
             units: durableUnits,
+            recoveries: approvedUnits.filter((u) => requestsStoredRecovery(u.text)).map((u) => u.id),
             instruction:
-              'Exercise the stored record through its real writer and next reader. An unrelated successful save or a newly generated value alone does not show that the recovered value can be persisted, reloaded and used. Vary independent damage causes separately; keep other state intact.',
+              'Exercise the stored record through its real writer and next reader. An unrelated successful save or a newly generated value alone does not show that the recovered value can be persisted, reloaded and used. For a recovery source, the damaged-state write/read case must fail on unchanged B. Vary independent damage causes separately; keep other state intact.',
           },
         }
       : {}),

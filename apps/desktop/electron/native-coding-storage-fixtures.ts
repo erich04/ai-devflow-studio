@@ -69,3 +69,10 @@ export function requestsDurableRoundTrip(text: string) {
     )
   )
 }
+
+export function requestsStoredRecovery(text: string) {
+  return (
+    requestsDurableRoundTrip(text) &&
+    /损坏|重建|修复|恢复|\b(?:recover(?:y|ed|ing)?|repair(?:ed|ing)?|corrupt(?:ed|ion)?)\b/iu.test(text)
+  )
+}

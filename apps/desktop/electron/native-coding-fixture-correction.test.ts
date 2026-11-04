@@ -316,6 +316,19 @@ it('saves and reloads the journal',async()=>{
   expect(() =>
     fixtureChecksFromResponse({ ...p, phase: 'cases', selection: selected }, noWrite, '2026-11-04T19:00:00Z'),
   ).toThrow(/real store write/i)
+  const combined = {
+    ...p, phase: 'cases' as const,
+    source: { ...source, adapter: {kind:'vitest' as const,directory:'.'} },
+    selection: { scenarios: [
+      {units:['r1.1'],fixture:'f1',anchor:'t1',precondition:'A broken derived record'},
+      {units:['r1.1'],fixture:'f2',anchor:'t1',precondition:'The store must handle that same recovery'},
+    ],contextOnly:[] },
+  }
+  const separateHappySave = codingToolReply('separate','submit_fixture_cases',{cases:[
+    {scenario:'s1',baseline:'fail',edits:[{line:1,deleteCount:0,insert:'expect(rebuild(original)).toBeDefined()'}]},
+    {scenario:'s2',baseline:'pass',edits:[{line:2,deleteCount:0,insert:"expect(typeof openJournal).toBe('function')"}]},
+  ]})
+  expect(()=>fixtureChecksFromResponse(combined,separateHappySave,'2026-11-04T22:00:00Z')).toThrow(/fail.*unchanged|faulty.*store/i)
   const inspection = {
     ...p,
     source: {

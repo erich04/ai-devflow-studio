@@ -1,7 +1,7 @@
 import { requestsTimeBoundary, hasClockStimulus } from './native-coding-clock-fixtures'
 import { hasCommitThenLostReply, lostReplyHelper, requestsLostAcknowledgement } from './native-coding-lost-reply'
 import { checkObservedResultFields } from './native-coding-output-assertions'
-import { requestsDurableRoundTrip, variantHasStoreRoundTrip } from './native-coding-storage-fixtures'
+import { requestsDurableRoundTrip, requestsStoredRecovery, variantHasStoreRoundTrip } from './native-coding-storage-fixtures'
 import { randomUUID } from 'node:crypto'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -312,9 +312,11 @@ export function fixtureChecksFromResponse(
         const pair = f?.anchors.find(a => a.id === c.anchor)?.storeRoundTrip
         return f && pair ? [{c, path:f.path, pair}] : []
       })
-      if (!routes.length || routes.some(({c,path,pair}) => variantHasStoreRoundTrip(path,c.body,pair))) continue
+      if (!routes.length) continue
+      const recovery = requestsStoredRecovery(unit.text)
+      if (routes.some(({c,path,pair}) => (!recovery || c.baseline === 'fail') && variantHasStoreRoundTrip(path,c.body,pair))) continue
       for (const {c} of routes) byScenario.delete(c.scenario)
-      issues.push(`Keep a real store write and subsequent read of the affected record in a case covering ${unit.id}. A reconstructed in-memory value alone cannot demonstrate persistence.`)
+      issues.push(`Keep a real store write and subsequent read of the affected record in a case covering ${unit.id}. A reconstructed in-memory value alone cannot demonstrate persistence.${recovery ? ' The faulty-store recovery case must fail on unchanged B. An ordinary successful save in a separate case does not observe recovery from the damaged stored record.' : ''}`)
     }
   }
   if (!issues.length) {
