@@ -190,6 +190,7 @@ it('finds the normal named feature in immutable nearby public fixtures even when
     }))!
     const writing = JSON.parse(next.request.messages[0]!.content as string)
     expect(writing.fixtures.map((f: { path: string }) => f.path)).toEqual(['tenant.test.ts'])
+    expect(writing.fixtures[0].examples[0].protectedAssertionLines).toEqual([[1, 1]])
     expect(JSON.stringify(writing.fixtures[0])).toContain('framekit-profile.ts')
   } finally {
     await rm(root, { recursive: true, force: true })

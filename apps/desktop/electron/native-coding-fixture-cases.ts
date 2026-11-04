@@ -264,6 +264,16 @@ function publicStatements(fileName: string, body: string) {
   return { tree, statements }
 }
 
+/** Use precisely the assertions protected by the edit validator; positions are
+ * one-based in the numbered callback shown to the independent author. */
+export function protectedAssertionLines(fileName: string, body: string): Array<[number, number]> {
+  const { tree, statements } = publicStatements(fileName, body)
+  return statements.map((node) => [
+    tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1,
+    tree.getLineAndCharacterOfPosition(node.end - 1).line + 1,
+  ])
+}
+
 /** A compound test can fail during setup on both the baseline and a correct
  * implementation. Bind the claimed change to one real assertion before using
  * its baseline failure as evidence. Older frozen plans carry no witness flag. */
