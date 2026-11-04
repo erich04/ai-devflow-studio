@@ -18,9 +18,7 @@ const kinds = new Set([
 /** Only report small public enum shapes declared alongside a parser taking
  * unknown input. A dynamic exception or candidate-supplied type cannot enter
  * this path: the caller has already matched the exact B guard and its hash. */
-function parserResultShape(file: string, lines: string[], line: number) {
-  if (lines.length > 8000) return undefined
-  const source = ts.createSourceFile(file, lines.join('\n'), ts.ScriptTarget.Latest, true)
+function parserResultShape(source: ts.SourceFile, line: number) {
   const position = source.getLineStarts()[line - 1]
   if (position === undefined) return undefined
   const owner = source.statements.find(
@@ -65,11 +63,85 @@ function parserResultShape(file: string, lines: string[], line: number) {
   return fields.length ? { function: owner.name.text, type, fields } : undefined
 }
 
+/** A parser may use one fail() helper for many different invariants. Only
+ * expose the guard that actually calls that exact local helper on B. Literal
+ * values, comments and dynamic exception contents stay out of this feedback. */
+function verifiedGuardCaller(source: ts.SourceFile, throwLine: number, frames: Array<{ file: string; line: number }>) {
+  const position = source.getLineStarts()[throwLine - 1]
+  if (position === undefined) return undefined
+  const helpers = source.statements.filter(
+    (node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) &&
+      !!node.body &&
+      node.parameters.length === 0 &&
+      node.body.statements.length === 1 &&
+      ts.isThrowStatement(node.body.statements[0]!) &&
+      source.getLineAndCharacterOfPosition(node.body.statements[0]!.getStart(source)).line === throwLine - 1,
+  )
+  if (helpers.length !== 1 || !helpers[0]?.name) return undefined
+  const name = helpers[0].name.text
+  const guards: Array<{ line: number; condition: ts.Expression }> = []
+  function visit(node: ts.Node) {
+    if (ts.isIfStatement(node)) {
+      const then =
+        ts.isBlock(node.thenStatement) && node.thenStatement.statements.length === 1
+          ? node.thenStatement.statements[0]
+          : node.thenStatement
+      const call = then && (ts.isExpressionStatement(then) || ts.isReturnStatement(then)) ? then.expression : undefined
+      if (
+        call &&
+        ts.isCallExpression(call) &&
+        ts.isIdentifier(call.expression) &&
+        call.expression.text === name &&
+        !call.arguments.length
+      )
+        guards.push({
+          line: source.getLineAndCharacterOfPosition(call.getStart(source)).line + 1,
+          condition: node.expression,
+        })
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  for (const frame of frames.filter((f) => f && f.file === source.fileName && Number.isSafeInteger(f.line))) {
+    const exact = guards.filter((g) => g.line === frame.line)
+    // A nearby, ambiguous failure cannot safely identify the invariant.
+    const choices = exact.length ? exact : guards.filter((g) => Math.abs(g.line - frame.line) <= 3)
+    if (choices.length !== 1) continue
+    const guard = choices[0]!,
+      start = guard.condition.getStart(source)
+    let text = guard.condition.getText(source)
+    if (text.length > 1300 || /\/\/|\/\*/u.test(text)) return undefined
+    const masks: Array<{ start: number; end: number; replacement: string }> = []
+    function mask(node: ts.Node) {
+      if (
+        ts.isStringLiteralLike(node) ||
+        ts.isTemplateExpression(node) ||
+        ts.isRegularExpressionLiteral(node) ||
+        ts.isNumericLiteral(node)
+      ) {
+        masks.push({
+          start: node.getStart(source) - start,
+          end: node.end - start,
+          replacement: ts.isNumericLiteral(node) ? '<number>' : "'<literal>'",
+        })
+      } else ts.forEachChild(node, mask)
+    }
+    mask(guard.condition)
+    for (const m of masks.reverse()) text = text.slice(0, m.start) + m.replacement + text.slice(m.end)
+    text = text.replace(/\s+/gu, ' ').trim()
+    if (text.length > 950 || redactSensitiveText(text).value !== text) return undefined
+    return { location: source.fileName + ':' + guard.line, condition: text }
+  }
+  return undefined
+}
+
 /** Pre-implementation only. A stack can suggest a location, but only a literal
  * error in immutable B with the same digest can be shown to the private author. */
 export async function privatePreflightDiagnostics(items: unknown, ids: string[], baseline?: CodingCandidateWorkspace) {
   const notes = []
   const files = new Map<string, string[]>()
+  const trees = new Map<string, ts.SourceFile>()
   const shapes = new Map<string, ReturnType<typeof parserResultShape>>()
   let bytesLeft = 4 * 1024 * 1024
   const candidates = baseline?.identity.base.files ?? []
@@ -81,10 +153,12 @@ export async function privatePreflightDiagnostics(items: unknown, ids: string[],
           reason: string
           condition?: string
           declaredResult?: NonNullable<ReturnType<typeof parserResultShape>>
+          caller?: NonNullable<ReturnType<typeof verifiedGuardCaller>>
         }
       | undefined
     if (item.kind === 'TestSetupError' && baseline && Array.isArray(item.frames) && typeof item.messageDigest === 'string') {
-      for (const frame of item.frames.slice(0, 6)) {
+      const frames = item.frames.slice(0, 6)
+      for (const [frameIndex, frame] of frames.entries()) {
         if (
           !frame ||
           typeof frame.file !== 'string' ||
@@ -141,14 +215,19 @@ export async function privatePreflightDiagnostics(items: unknown, ids: string[],
           if (nearby.length === 1) guard = nearby[0]
         }
         if (!guard) continue
-        const key = source.hash + ':' + guard.location
-        if (!shapes.has(key))
-          shapes.set(
-            key,
-            parserResultShape(source.path, lines, Number(guard.location.slice(guard.location.lastIndexOf(':') + 1))),
-          )
-        const declaredResult = shapes.get(key)
-        if (declaredResult) guard.declaredResult = declaredResult
+        if (lines.length <= 8000) {
+          const treeKey = source.path + ':' + source.hash
+          if (!trees.has(treeKey))
+            trees.set(treeKey, ts.createSourceFile(source.path, lines.join('\n'), ts.ScriptTarget.Latest, true))
+          const tree = trees.get(treeKey)!,
+            line = Number(guard.location.slice(guard.location.lastIndexOf(':') + 1))
+          const key = source.hash + ':' + guard.location
+          if (!shapes.has(key)) shapes.set(key, parserResultShape(tree, line))
+          const declaredResult = shapes.get(key)
+          if (declaredResult) guard.declaredResult = declaredResult
+          const caller = verifiedGuardCaller(tree, line, frames.slice(frameIndex + 1))
+          if (caller) guard.caller = caller
+        }
         break
       }
     }

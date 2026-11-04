@@ -107,3 +107,55 @@ it('locates a localized baseline parser guard and describes its declared result 
     await rm(root, { recursive: true, force: true })
   }
 })
+
+it('resolves distinct failed conditions behind one verified local throw helper without copying private inputs', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises'),
+    path = await import('node:path'),
+    { tmpdir } = await import('node:os')
+  const { CodingCandidateWorkspace, codingDigest } = await import('./coding-candidate-workspace')
+  const { privatePreflightDiagnostics } = await import('./native-coding-preflight-diagnostics')
+  const root = await mkdtemp(path.join(tmpdir(), 'private-static-caller-')),
+    delivery = path.join(root, 'project')
+  try {
+    await mkdir(delivery)
+    await writeFile(
+      path.join(delivery, 'shape.ts'),
+      [
+        'function fail(): never {',
+        "  throw new Error('Invalid public shape')",
+        '}',
+        'export function decode(item:any){',
+        '  if (item.owner !== item.record.owner) fail()',
+        "  if (item.password === 'private-fixture-literal') fail()",
+        '}',
+      ].join('\n'),
+    )
+    const ws = await CodingCandidateWorkspace.create({
+      root: path.join(root, 'ws'),
+      delivery,
+      baseCommitSha: 'a'.repeat(40),
+      excludedPaths: [],
+    })
+    const entry = {
+      id: 'x',
+      kind: 'TestSetupError',
+      messageDigest: codingDigest('Invalid public shape'),
+      frames: [
+        { file: 'shape.ts', line: 2 },
+        { file: 'shape.ts', line: 5 },
+      ],
+    }
+    const good = JSON.parse(await privatePreflightDiagnostics([entry], ['x'], ws))[0].baselineGuard
+    expect(good.caller).toMatchObject({ location: 'shape.ts:5', condition: 'item.owner !== item.record.owner' })
+    const privateValue = await privatePreflightDiagnostics(
+      [{ ...entry, frames: [entry.frames[0], { file: 'shape.ts', line: 6 }] }],
+      ['x'],
+      ws,
+    )
+    expect(privateValue).not.toContain('private-fixture-literal')
+    const spoof = await privatePreflightDiagnostics([{ ...entry, messageDigest: codingDigest('unknown') }], ['x'], ws)
+    expect(spoof).not.toContain('item.record.owner')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
