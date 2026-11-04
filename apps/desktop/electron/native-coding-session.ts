@@ -42,6 +42,8 @@ export type NativeCodingSession = {
   steps: number
   rootStepAttempts?: string[]
   activeMilliseconds: number
+  /** Optional absolute cutoff enforced by the host of a wall-limited job. */
+  operatorDeadlineAt?: string
   limits: { maxSteps: number; maxActiveMilliseconds: number; batchSteps: number; noProgressLimit: number }
   writer?: { owner: string; processId: number; epoch: number; expiresAt: string }
   writerEpoch: number
@@ -123,6 +125,7 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
   if (session.independentVerification) validateIndependentVerification(session.independentVerification, previous?.independentVerification)
   else if (previous?.independentVerification) throw new Error('Independent verification history cannot be removed')
   if (session.binding?.independentVerificationRequired !== undefined && typeof session.binding.independentVerificationRequired !== 'boolean') throw new Error('Invalid independent verification requirement')
+  if (session.operatorDeadlineAt !== undefined && !timestamp(session.operatorDeadlineAt)) throw new Error('Invalid operator wall deadline')
   if (session.binding?.independentVerificationVersion !== undefined && ![2, 3, 4].includes(session.binding.independentVerificationVersion)) throw new Error('Invalid independent verification version')
   if (session.binding?.dependencyCacheVersion !== undefined && session.binding.dependencyCacheVersion !== 1) throw new Error('Invalid dependency cache version')
   if (session.binding?.testInputPolicyVersion !== undefined && session.binding.testInputPolicyVersion !== 1) throw new Error('Invalid test input policy version')
@@ -160,6 +163,7 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
     parseCodingCommandRules(policy.rules)
   }
   if (previous) {
+    if ((previous.operatorDeadlineAt !== undefined || previous.binding?.executionGranted) && previous.operatorDeadlineAt !== session.operatorDeadlineAt) throw new Error('A frozen operator deadline cannot change')
     if (previous.binding?.executionGranted && !isDeepStrictEqual(previous.binding.permissionPolicy, session.binding?.permissionPolicy)) throw new Error('Granted coding permission policy is immutable')
     if (previous.binding?.independentVerificationRequired !== undefined && session.binding?.independentVerificationRequired !== previous.binding.independentVerificationRequired) throw new Error('Independent verification requirement cannot change')
     if (previous.binding?.independentVerificationVersion !== undefined && session.binding?.independentVerificationVersion !== previous.binding.independentVerificationVersion) throw new Error('Independent verification version cannot change')

@@ -114,8 +114,9 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   try {
     const started = await coding.runCodingAgent({ runId: run.id, nodeId: run.currentNodeId, projectId, requestedBy: run.creatorId, userInstruction: input.prompt }); codingRunId = started.codingRun.id
     if (native) {
-      const limits = await configureEvaluationHarnessLimits(store, codingRunId, input)
-      await recordAction({ type: 'frozen_harness_limits', limits, wallDeadline: new Date(start + input.maxActiveMilliseconds).toISOString() })
+      const wallDeadline = new Date(start + input.maxActiveMilliseconds).toISOString()
+      const limits = await configureEvaluationHarnessLimits(store, codingRunId, input, wallDeadline)
+      await recordAction({ type: 'frozen_harness_limits', limits, wallDeadline })
       const get = (target = codingRunId!) => coding.codingHarnessCommand({ protocolVersion: 2, type: 'get', codingRunId: target })
       const command = async (body: Record<string, unknown>, target = codingRunId!) => { const snapshot = await get(target); const value = { protocolVersion: 2, codingRunId: target, commandId: `operator-${actions.length}`, expectedVersion: snapshot.version, ...body } as CodingHarnessCommand; await recordAction({ command: value }); return coding.codingHarnessCommand(value) }
       await command({ type: 'authorize', ...(input.execution ? { profile: input.execution.profile, network: input.execution.network, permissionMode: input.execution.permissionMode } : { profile: 'trusted_local' }) })

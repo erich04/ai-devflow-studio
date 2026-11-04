@@ -238,7 +238,11 @@ export class NativeCodingLoop {
         const retryOf = pendingModelRetry(session)
         const elapsed = this.host.rootActiveMilliseconds ? await this.host.rootActiveMilliseconds() : session.activeMilliseconds + Date.now() - started
         const usedSteps = (this.host.rootStepsUsed ? await this.host.rootStepsUsed() : session.steps) - (retryOf ? 1 : 0)
-        if (usedSteps >= session.limits.maxSteps || elapsed >= session.limits.maxActiveMilliseconds) return await this.change(id, draft => { draft.status = 'paused'; draft.pauseReason = 'task_limit' })
+        const wallClock = session.operatorDeadlineAt ? {
+          deadlineAt: session.operatorDeadlineAt,
+          remainingMilliseconds: Math.max(0, Date.parse(session.operatorDeadlineAt) - Date.now()),
+        } : undefined
+        if (usedSteps >= session.limits.maxSteps || elapsed >= session.limits.maxActiveMilliseconds || wallClock?.remainingMilliseconds === 0) return await this.change(id, draft => { draft.status = 'paused'; draft.pauseReason = 'task_limit' })
         if (retryOf && waitedFor !== retryOf.id) {
           // notBefore is durable, so a restarted writer waits only for the remainder.
           const wait = Math.min(retryOf.retry.delayMs, Date.parse(retryOf.retry.notBefore) - Date.now())
@@ -251,15 +255,37 @@ export class NativeCodingLoop {
         }
         const operationKey = `${session.id}:objective-${session.objectiveVersion}:step-${retryOf?.step ?? session.steps + 1}`
         const attemptId = `model-call-${randomUUID()}`
+        const currentRevisions = new Set(session.revisions.filter(revision => revision.objectiveVersion === session.objectiveVersion).map(revision => revision.digest))
+        const evidence = session.deliveryEvidence.filter(item => currentRevisions.has(item.revisionDigest))
+        const previousCheck = evidence.filter(item => item.verificationBefore && item.verificationAfter && item.result && item.result.status !== 'cancelled').at(-1)
+        const lastVerificationMs = previousCheck ? Date.parse(previousCheck.completedAt) - Date.parse(previousCheck.startedAt) : undefined
+        const failedRevisions = evidence.filter(item => item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length
+        const acceptanceSchedule = !session.parent && session.binding?.independentVerificationRequired ? codingRepairBudget(session.limits, usedSteps, elapsed, failedRevisions, {
+          ...(wallClock ? { wallRemaining: wallClock.remainingMilliseconds } : {}), ...(lastVerificationMs ? { lastVerificationMs } : {}),
+        }) : undefined
         const runtimeState = { steps: { usedBeforeThisCall: usedSteps, remainingIncludingThisCall: Math.max(0, session.limits.maxSteps - usedSteps), maximum: session.limits.maxSteps },
           activeMilliseconds: { usedBeforeThisCall: elapsed, remaining: Math.max(0, session.limits.maxActiveMilliseconds - elapsed) },
-          ...(!session.parent && session.binding?.independentVerificationRequired ? { acceptanceSchedule: codingRepairBudget(session.limits, usedSteps, elapsed,
-            session.deliveryEvidence.filter(item => session.revisions.some(revision => revision.objectiveVersion === session.objectiveVersion && revision.digest === item.revisionDigest) && item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length) } : {}),
+          ...(wallClock ? { wallClock } : {}), ...(acceptanceSchedule ? { acceptanceSchedule } : {}),
           objectiveVersion: session.objectiveVersion, role: session.parent?.mode ?? 'root',
           candidateEditingGranted: Boolean(session.binding?.executionGranted && session.parent?.mode !== 'read_only'),
           ...(session.binding?.testInputPolicyVersion === 1 ? { testInputAuthority: 'Existing baseline tests, fixtures and runner configuration are acceptance inputs. Keep them unchanged and add new tests in new files. A changed existing input needs separate exact-content human authorization before submission; editing code and passing modified tests do not provide that authorization.' } : {}),
           finalVerification: 'Host independently verifies the approved frozen revision; neither a model statement nor human approval alone proves completion.' }
         const planning = needsIndependentChecks(session) ? await independentCheckRequest(session, this.host.verificationWorkspace ?? (() => { throw new Error('Independent verification workspace is required') })()) : undefined
+        if (planning && wallClock) {
+          // This private request is constructed from B alone. Only the trusted
+          // job clock crosses into it; no candidate transcript or test result.
+          const brief = planning.request.messages[0]
+          if (brief?.role === 'user' && typeof brief.content === 'string') {
+            const planningTime = {
+              deadlineAt: wallClock.deadlineAt,
+              remainingMilliseconds: Math.min(runtimeState.activeMilliseconds.remaining, wallClock.remainingMilliseconds),
+              remainingSteps: runtimeState.steps.remainingIncludingThisCall,
+              ...(acceptanceSchedule ? { millisecondsBeforeSubmissionTarget: acceptanceSchedule.millisecondsUntilSubmissionTarget } : {}),
+              instruction: 'This time is shared with implementation, final verification and repair. Choose the smallest decisive public routes that cover the approved behavior.',
+            }
+            brief.content = JSON.stringify({ ...JSON.parse(brief.content), planningTime })
+          }
+        }
         const requestOptions = { operationKey, budgetAttemptId: attemptId,
           ...(session.taskBudget ? { taskBudget: session.taskBudget } : {}),
           onUsage: async (usage: AgentProviderUsage) => { await this.change(id, draft => { const attempt = draft.attempts.find(item => item.id === attemptId); if (attempt) attempt.usage = usage }) },

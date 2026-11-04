@@ -45,9 +45,21 @@ it('uses the frozen trial limits in the real harness before the first request, i
     expect(report.claimedCompleted).toBe(false)
     const actions = JSON.parse(await readFile(path.join(output, 'operator-actions.json'), 'utf8'))
     expect(actions[0]).toMatchObject({ type: 'frozen_harness_limits', limits: { maxSteps: 2, maxActiveMilliseconds: 15000 } })
+    expect(session.operatorDeadlineAt).toBe(actions[0].wallDeadline)
+    expect(state.wallClock.deadlineAt).toBe(actions[0].wallDeadline)
+    expect(state.wallClock.remainingMilliseconds).toBeGreaterThan(0)
+    expect(state.wallClock.remainingMilliseconds).toBeLessThanOrEqual(15000)
+    const privateAuthor = requests.find(request=>!request.tools.some(tool=>tool.function.name==='list_directory'))!
+    const privateInput = JSON.parse(privateAuthor.messages.at(-1)!.content!)
+    expect(privateInput.planningTime.deadlineAt).toBe(actions[0].wallDeadline)
+    expect(privateInput.planningTime.remainingMilliseconds).toBeLessThanOrEqual(15000)
+    expect(privateInput.planningTime).not.toHaveProperty('transcript')
     expect(actions[1].command.type).toBe('authorize')
     const reopened = await createLocalStore({ dbPath: path.join(output, 'devflow.sqlite') })
     try {
+      const { mutateNativeCodingSession } = await import('../apps/desktop/electron/native-coding-session')
+      await expect(mutateNativeCodingSession(reopened,session.id,draft => { draft.operatorDeadlineAt=new Date(Date.parse(actions[0].wallDeadline)+1000).toISOString() })).rejects.toThrow('frozen operator deadline')
+      expect((await reopened.getNativeCodingSession(session.id))?.operatorDeadlineAt).toBe(actions[0].wallDeadline)
       await expect(configureEvaluationHarnessLimits(reopened, session.codingRunId, { maxSteps: 3, maxActiveMilliseconds: 16000 })).rejects.toThrow('before execution authorization')
       expect((await reopened.getNativeCodingSession(session.id))!.limits).toMatchObject({ maxSteps: 2, maxActiveMilliseconds: 15000 })
     } finally { await reopened.close() }

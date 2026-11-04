@@ -225,6 +225,7 @@ function createHarnessService(host: HarnessHost): Harness {
         }
         if (childWorkspace.identity.base.digest !== base.digest) throw new Error('Child workspace differs from its frozen delegation input')
         child = createNativeCodingSession({ id: sessionId(childId), codingRunId: childId, workflowRunId: parent.workflowRunId, nodeId: parent.nodeId, localProjectId: parent.localProjectId, providerId: parent.providerId, model: parent.model, objective: String(input.prompt), now: new Date().toISOString() })
+        if (parent.operatorDeadlineAt) child.operatorDeadlineAt = parent.operatorDeadlineAt
         child.binding = { ...structuredClone(parent.binding!), workspaceRoot: root, context: { ...structuredClone(parent.binding!.context), id: childId, userInstruction: String(input.prompt) } }
         child.parent = { sessionId: parent.id, codingRunId: parent.codingRunId, objectiveVersion: parent.objectiveVersion, baseDigest: childWorkspace.identity.base.digest, mode: input.mode as 'read_only' | 'isolated_coding', paths: input.paths as string[] }
         child.taskBudget = { ...parent.taskBudget, taskId: `coding-task-${codingDigest(child.id)}`, parentTaskId: parent.taskBudget.rootId, maxTokens: Number(input.maxTokens), maxCostUsd: Number(input.maxCostUsd) }
