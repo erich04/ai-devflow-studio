@@ -36,18 +36,24 @@ export type AcceptancePlanning = {
   ownedContracts?: OwnedFixtureContract[]
 }
 const string = { type: 'string' }
-const units = { type: 'array', minItems: 1, maxItems: 250, items: string }
-const contextOnly = {
-  type: 'array',
-  maxItems: 250,
-  items: {
-    type: 'object',
-    additionalProperties: false,
-    required: ['unit', 'reason'],
-    properties: { unit: string, reason: { type: 'string', maxLength: 1500 } },
-  },
-}
-function selectTool(keys: string[]): ReadOnlyFunctionDefinition {
+function selectTool(keys: string[], sourceIds: string[]): ReadOnlyFunctionDefinition {
+  const unit = {
+    type: 'string',
+    enum: sourceIds,
+    description: 'Approved source span, for example r1.1. Fixture keys belong only in anchor.',
+  }
+  const units = { type: 'array', minItems: 1, maxItems: sourceIds.length, items: unit }
+  const contextOnly = {
+    type: 'array',
+    maxItems: sourceIds.length,
+    description: 'Only approved source spans that supply context rather than a scenario. Omit unused public fixtures.',
+    items: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['unit', 'reason'],
+      properties: { unit, reason: { type: 'string', maxLength: 1500 } },
+    },
+  }
   return {
     type: 'function',
     function: {
@@ -326,7 +332,12 @@ export async function fixturePlanning(
             }),
           },
         ],
-        tools: [selectTool(indexed.flatMap((f) => f.anchors.map((a) => a.key)))],
+        tools: [
+          selectTool(
+            indexed.flatMap((f) => f.anchors.map((a) => a.key)),
+            approvedUnits.map((u) => u.id),
+          ),
+        ],
       },
     }
   const selectionDigest = codingDigest(JSON.stringify(selection))

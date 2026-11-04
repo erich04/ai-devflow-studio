@@ -577,6 +577,16 @@ export function bindFixtureCases(sources: AcceptanceCriterion[], fixtures: Fixtu
   })
   const exercised = new Set([...covered].map((id) => byId.get(id)!.criterionId))
   const contextOnly = draft.contextOnly.map((note: unknown) => {
+    if (record(note) && typeof note.unit === 'string') {
+      if (/^f[1-9]\d{0,2}:t[1-9]\d{0,3}$/u.test(note.unit))
+        throw new InvalidFixtureDraft(
+          `contextOnly.unit takes an approved source ID such as r1.1. ${note.unit} is a public fixture key; omit unused fixture keys and keep only uncovered source spans.`,
+        )
+      if (byId.has(note.unit) && covered.has(note.unit))
+        throw new InvalidFixtureDraft(
+          `Source ${note.unit} is already covered. Do not repeat a behavioral or previously noted span in contextOnly.`,
+        )
+    }
     if (
       !record(note) ||
       typeof note.unit !== 'string' ||

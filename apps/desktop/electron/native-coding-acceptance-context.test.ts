@@ -115,6 +115,15 @@ it('keeps all named suites as context when only some of them offer eligible publ
       ['platform.test.ts', 'behavior.test.ts'],
     )
     expect(plan?.phase).toBe('select')
+    const choices = plan!.request.tools[0]!.function.parameters as {
+      properties: {
+        contextOnly: { items: { properties: { unit: { enum?: string[] } } } }
+        scenarios: { items: { properties: { units: { items: { enum?: string[] } } } } }
+      }
+    }
+    expect(choices.properties.contextOnly.items.properties.unit.enum).toEqual(['r1.1'])
+    expect(choices.properties.scenarios.items.properties.units.items.enum).toEqual(['r1.1'])
+
     const payload = JSON.parse(plan!.request.messages[0]!.content as string)
     expect(payload.fixtures.map((f: { path: string; anchors: unknown[] }) => [f.path, f.anchors.length])).toEqual([
       ['platform.test.ts', 0],
