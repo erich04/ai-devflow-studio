@@ -649,33 +649,41 @@ export function readFixtureSelection(
   return { scenarios, contextOnly: checked.coverage.contextOnly }
 }
 
+/** A source that independently asks for an operation and its presentation must
+ * bind its named operation to a real caller all the way through authoring. */
+export function separateOperationUnits(sources: AcceptanceCriterion[], fixtures: FixtureTemplate[]) {
+  if (!fixtures.some((f) => f.anchors.some((a) => a.selectable && !a.mockedPresentation))) return new Set<string>()
+  const spans = sourceUnits(sources)
+  const describesPresentation = (text: string) =>
+    /(?:界面|页面|屏幕|按钮|显示|展示|渲染)|\b(?:UI|screen|button|display(?:ed)?|render(?:ed)?|visible|presentation|view)\b/iu.test(text)
+  const presentation = new Set(spans.filter((span) => describesPresentation(span.text)).map((span) => span.criterionId))
+  return new Set(spans.filter((span) => presentation.has(span.criterionId) && !describesPresentation(span.text)).map((span) => span.id))
+}
+
+export function canBindFixtureSubject(
+  unit: string,
+  scenario: FixtureSelection['scenarios'][number] | undefined,
+  operations: Set<string>,
+  fixtures: FixtureTemplate[],
+) {
+  if (!scenario?.units.includes(unit)) return false
+  if (!operations.has(unit)) return true
+  const anchor = fixtures[Number(scenario.fixture.slice(1)) - 1]?.anchors.find((a) => a.id === scenario.anchor)
+  return !!anchor && !anchor.mockedPresentation
+}
+
 export function requireOperationalSelection(
   sources: AcceptanceCriterion[],
   fixtures: FixtureTemplate[],
   subjects: NamedFixtureSubject[],
   selection: FixtureSelection,
 ) {
-  if (!subjects.length || !fixtures.some((f) => f.anchors.some((a) => a.selectable && !a.mockedPresentation))) return
-  const spans = sourceUnits(sources)
-  const presentation = (text: string) =>
-    /(?:界面|页面|屏幕|按钮|显示|展示|渲染)|\b(?:UI|screen|button|display(?:ed)?|render(?:ed)?|visible|presentation|view)\b/iu.test(
-      text,
-    )
+  if (!subjects.length) return
+  const operations = separateOperationUnits(sources, fixtures)
   for (const subject of subjects) {
-    const span = spans.find((s) => s.id === subject.unit)
-    if (
-      !span ||
-      presentation(span.text) ||
-      !spans.some((s) => s.criterionId === span.criterionId && s.id !== span.id && presentation(s.text))
-    )
-      continue
+    if (!operations.has(subject.unit)) continue
     const cases = selection.scenarios.filter((s) => s.units.includes(subject.unit))
-    if (
-      cases.some(
-        (s) => !fixtures[Number(s.fixture.slice(1)) - 1]?.anchors.find((a) => a.id === s.anchor)?.mockedPresentation,
-      )
-    )
-      continue
+    if (cases.some((s) => canBindFixtureSubject(subject.unit, s, operations, fixtures))) continue
     const keys = cases.map((s) => s.fixture + ':' + s.anchor).join(', ')
     const examples = fixtures
       .flatMap((f, i) =>

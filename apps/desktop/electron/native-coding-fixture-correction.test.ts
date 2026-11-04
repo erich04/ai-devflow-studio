@@ -230,6 +230,27 @@ it('opens the action',()=>{
   )
   const both = fixtureSelectionFromResponse(input, select([scenario('r1.1', 'f2:t1'), scenario('r1.2', 'f1:t1')]))
   expect(both.scenarios.map((s) => s.fixture)).toEqual(['f2', 'f1'])
+  const mixed = fixtureSelectionFromResponse(input, select([
+    scenario('r1.1', 'f2:t1'),
+    { ...scenario('r1.1', 'f1:t1'), units: ['r1.1', 'r1.2'] },
+  ]))
+  const author = {
+    ...input, phase: 'cases' as const, selection: mixed, namedInputs: ['archive'],
+    source: { ...source, adapter: {kind:'vitest' as const, directory:'.'} },
+  }
+  const authored = (bindInService: boolean) => {
+    const contrast = { control: 'active', requested: 'archive', field: 'mode' }
+    return codingToolReply('cases', 'submit_fixture_cases', {cases: [
+      {scenario:'s1', baseline: 'fail', edits:[{line:1,deleteCount:0,insert:bindInService
+        ? "await __devflowInvoke(save,[{mode:__devflowInput}],subject=>subject)"
+        : "expect(typeof save).toBe('function')"}], ...(bindInService ? {contrast}: {})},
+      {scenario:'s2', baseline:'pass', edits:[{line:3,deleteCount:0,insert:bindInService
+        ? "expect(api.save).toBeDefined()"
+        : "await __devflowInvoke(api.save,[{mode:__devflowInput}],subject=>subject)"}], ...(bindInService ? {}: {contrast})},
+    ]})
+  }
+  expect(() => fixtureChecksFromResponse(author,authored(false),'2026-11-04T21:00:00Z')).toThrow(/bound operation|real operation/i)
+  expect(fixtureChecksFromResponse(author,authored(true),'2026-11-04T21:00:00Z').checks[0]?.fixture?.contrast?.requested).toBe('archive')
   const independentUi = {
     ...input,
     source: {

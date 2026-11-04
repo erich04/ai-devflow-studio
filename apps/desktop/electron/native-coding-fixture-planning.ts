@@ -14,6 +14,8 @@ import {
   protectedAssertionLines,
   namedFixtureSubjects,
   sourceUnits,
+  separateOperationUnits,
+  canBindFixtureSubject,
   validFixturePath,
   type FixtureSelection,
   type PartialFixtureCases,
@@ -377,12 +379,13 @@ export async function fixturePlanning(
     )
   }
   const retained = new Set(partial?.cases.map((c) => c.scenario) ?? [])
+  const operationalUnits = separateOperationUnits(source.criteria, fixtures)
   const pendingSubjects = requiredSubjects.filter(
     (subject) =>
       !partial?.cases.some(
         (c) =>
           c.contrast?.requested === subject.value &&
-          selection.scenarios[Number(c.scenario.slice(1)) - 1]?.units.includes(subject.unit),
+          canBindFixtureSubject(subject.unit, selection.scenarios[Number(c.scenario.slice(1)) - 1], operationalUnits, fixtures),
       ),
   )
   const pendingScenarios = selection.scenarios.map((s, i) => ({ ...s, id: `s${i + 1}` })).filter((s) => !retained.has(s.id))
@@ -420,7 +423,7 @@ export async function fixturePlanning(
     }
   })
   const scenarios = pendingScenarios.map((s) => {
-    const subjects = pendingSubjects.filter((subject) => s.units.includes(subject.unit))
+    const subjects = pendingSubjects.filter((subject) => canBindFixtureSubject(subject.unit, s, operationalUnits, fixtures))
     return subjects.length
       ? {
           id: s.id,

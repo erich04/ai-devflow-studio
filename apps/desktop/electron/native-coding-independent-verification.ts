@@ -11,7 +11,7 @@ import type { CodingCommandRunner, CodingExecutionProfile } from './coding-comma
 import type { NativeCodingSession } from './native-coding-session'
 import { checkOwnedFixtureInputs } from './native-coding-owned-fixtures'
 import { fixturePlanning, type AcceptancePlanning } from './native-coding-fixture-planning'
-import { sourceUnits, NoFixtureChangeWitness, fixtureWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, requireOperationalSelection, requireStoredSelection, requireReplySelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
+import { sourceUnits, NoFixtureChangeWitness, fixtureWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, requireOperationalSelection, separateOperationUnits, canBindFixtureSubject, requireStoredSelection, requireReplySelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
 
 export type IndependentCheckSource = {
   objectiveVersion: number; baselineDigest: string; sourceDigest: string
@@ -267,13 +267,15 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
     return [{ ...selected, ...value, ...(witnessed ? { witnessed: true } : {}),
       ...(value.body.includes(lostReplyHelper) ? { lostReply: true } : {}) }]
   })
-  if (!issues.length) {
-    for (const subject of planning.requiredSubjects ?? []) {
+  if (!issues.length && planning.requiredSubjects?.length) {
+    const operations = separateOperationUnits(planning.source.criteria, planning.fixtures!)
+    for (const subject of planning.requiredSubjects) {
+      const eligible = cases.filter((c) => canBindFixtureSubject(subject.unit, c, operations, planning.fixtures!))
       try {
-        requireNamedFixtureSubjects([subject], cases)
+        requireNamedFixtureSubjects([subject], eligible)
       } catch (error) {
         if (!(error instanceof InvalidFixtureDraft)) throw error
-        const missing = cases.filter((c) => c.units.includes(subject.unit)).map((c) => c.scenario)
+        const missing = eligible.map((c) => c.scenario)
         for (const id of missing) byScenario.delete(id)
         issues.push(`${missing.join(', ') || subject.unit}: ${error.message}`)
       }
