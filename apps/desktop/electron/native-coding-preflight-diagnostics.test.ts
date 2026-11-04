@@ -52,3 +52,58 @@ it('uses a unique verified baseline guard when transformed stack lines are offse
     await rm(root, { recursive: true, force: true })
   }
 })
+
+it('locates a localized baseline parser guard and describes its declared result without exposing runtime values', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const path = await import('node:path'),
+    { tmpdir } = await import('node:os')
+  const { CodingCandidateWorkspace, codingDigest } = await import('./coding-candidate-workspace')
+  const { privatePreflightDiagnostics } = await import('./native-coding-preflight-diagnostics')
+  const root = await mkdtemp(path.join(tmpdir(), 'localized-private-guard-')),
+    project = path.join(root, 'project')
+  try {
+    await mkdir(project)
+    await writeFile(
+      path.join(project, 'archive.ts'),
+      [
+        "export type ArchiveSetting = { mode: 'defer' | 'run'; detail?: 'low' | 'high'; credential?: 'private_literal' }",
+        'export function parseArchive(value:unknown):ArchiveSetting {',
+        "if (typeof value !== 'object' || value === null) throw new Error('配置无效。')",
+        'return value as ArchiveSetting',
+        '}',
+      ].join('\n'),
+    )
+    const ws = await CodingCandidateWorkspace.create({
+      root: path.join(root, 'work'),
+      delivery: project,
+      baseCommitSha: 'a'.repeat(40),
+      excludedPaths: [],
+    })
+    const entry = {
+      id: 'job',
+      kind: 'TestSetupError',
+      frames: [{ file: 'archive.ts', line: 3 }],
+      messageDigest: codingDigest('配置无效。'),
+    }
+    const notes = await privatePreflightDiagnostics([entry], ['job'], ws)
+    expect(JSON.parse(notes)[0].baselineGuard).toMatchObject({
+      location: 'archive.ts:3',
+      reason: '配置无效。',
+      condition: "typeof value !== 'object' || value === null",
+      declaredResult: {
+        function: 'parseArchive',
+        type: 'ArchiveSetting',
+        fields: [
+          { name: 'mode', optional: false, values: ['defer', 'run'] },
+          { name: 'detail', optional: true, values: ['low', 'high'] },
+        ],
+      },
+    })
+    expect(notes).not.toMatch(/credential|private_literal/)
+    expect(
+      await privatePreflightDiagnostics([{ ...entry, messageDigest: codingDigest('user-supplied error') }], ['job'], ws),
+    ).not.toContain('ArchiveSetting')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

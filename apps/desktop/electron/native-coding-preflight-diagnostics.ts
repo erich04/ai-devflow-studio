@@ -1,3 +1,4 @@
+import ts from 'typescript'
 import { redactSensitiveText } from '@ai-devflow/shared'
 import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { privateAcceptancePath } from './native-coding-acceptance-context'
@@ -14,16 +15,74 @@ const kinds = new Set([
   'MismatchedInput',
 ])
 
+/** Only report small public enum shapes declared alongside a parser taking
+ * unknown input. A dynamic exception or candidate-supplied type cannot enter
+ * this path: the caller has already matched the exact B guard and its hash. */
+function parserResultShape(file: string, lines: string[], line: number) {
+  if (lines.length > 8000) return undefined
+  const source = ts.createSourceFile(file, lines.join('\n'), ts.ScriptTarget.Latest, true)
+  const position = source.getLineStarts()[line - 1]
+  if (position === undefined) return undefined
+  const owner = source.statements.find(
+    (node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) &&
+      !!node.body &&
+      node.getStart(source) <= position &&
+      position < node.end &&
+      node.parameters.some((parameter) => parameter.type?.kind === ts.SyntaxKind.UnknownKeyword),
+  )
+  if (!owner?.name || !owner.type || !ts.isTypeReferenceNode(owner.type) || !ts.isIdentifier(owner.type.typeName))
+    return undefined
+  const type = owner.type.typeName.text
+  const declaration = source.statements.find(
+    (node): node is ts.TypeAliasDeclaration | ts.InterfaceDeclaration =>
+      (ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node)) && node.name.text === type,
+  )
+  const members =
+    declaration &&
+    (ts.isInterfaceDeclaration(declaration)
+      ? declaration.members
+      : ts.isTypeLiteralNode(declaration.type)
+        ? declaration.type.members
+        : undefined)
+  const fields = []
+  for (const member of members ?? []) {
+    if (!ts.isPropertySignature(member) || !ts.isIdentifier(member.name) || !member.type || !ts.isUnionTypeNode(member.type))
+      continue
+    const name = member.name.text
+    if (/secret|credential|auth|password|token|apiKey/iu.test(name) || member.type.types.length > 8) continue
+    const values = member.type.types.flatMap((t) =>
+      ts.isLiteralTypeNode(t) && ts.isStringLiteral(t.literal) ? [t.literal.text] : [],
+    )
+    if (
+      values.length !== member.type.types.length ||
+      !values.every((v) => /^[a-z][a-z_]{0,31}$/u.test(v) && redactSensitiveText(v).value === v)
+    )
+      continue
+    fields.push({ name, optional: !!member.questionToken, values })
+    if (fields.length === 8) break
+  }
+  return fields.length ? { function: owner.name.text, type, fields } : undefined
+}
+
 /** Pre-implementation only. A stack can suggest a location, but only a literal
  * error in immutable B with the same digest can be shown to the private author. */
 export async function privatePreflightDiagnostics(items: unknown, ids: string[], baseline?: CodingCandidateWorkspace) {
   const notes = []
   const files = new Map<string, string[]>()
+  const shapes = new Map<string, ReturnType<typeof parserResultShape>>()
   let bytesLeft = 4 * 1024 * 1024
   const candidates = baseline?.identity.base.files ?? []
   for (const item of (Array.isArray(items) ? items : []).slice(0, 24) as Diagnostic[]) {
     if (!item || !ids.includes(item.id) || !kinds.has(item.kind)) continue
-    let guard: { location: string; reason: string; condition?: string } | undefined
+    let guard:
+      | {
+          location: string
+          reason: string
+          condition?: string
+          declaredResult?: NonNullable<ReturnType<typeof parserResultShape>>
+        }
+      | undefined
     if (item.kind === 'TestSetupError' && baseline && Array.isArray(item.frames) && typeof item.messageDigest === 'string') {
       for (const frame of item.frames.slice(0, 6)) {
         if (
@@ -53,7 +112,8 @@ export async function privatePreflightDiagnostics(items: unknown, ids: string[],
         const literalOn = (index: number) => {
           const line = lines[index]?.trim()
           if (!line || line.length > 600 || !line.includes('throw new')) return undefined
-          const literal = /\bthrow new (?:Error|RangeError|TypeError)\((['"])([\p{L}\p{N} .,:_-]{2,120})\1\)/u.exec(line)
+          const literal =
+            /\bthrow new (?:Error|RangeError|TypeError)\((['"])([\p{L}\p{N} .,:_，。：！？、-]{2,120})\1\)/u.exec(line)
           if (
             !literal ||
             codingDigest(literal[2]!) !== item.messageDigest ||
@@ -61,10 +121,14 @@ export async function privatePreflightDiagnostics(items: unknown, ids: string[],
           )
             return undefined
           const condition = /^if\s*\((.{1,320})\)\s*\{?\s*throw new /u.exec(line)?.[1]
+          const safeCondition = condition?.replace(
+            /(['"])(?:object|string|number|boolean|undefined|function|bigint|symbol)\1/gu,
+            'type',
+          )
           return {
             location: `${source.path}:${index + 1}`,
             reason: literal[2]!,
-            ...(condition && /^[\w\s.!<>=&|?:+()\[\]-]+$/u.test(condition) ? { condition } : {}),
+            ...(condition && safeCondition && /^[\w\s.!<>=&|?:+()\[\]-]+$/u.test(safeCondition) ? { condition } : {}),
           }
         }
         guard = literalOn(frame.line - 1)
@@ -77,6 +141,14 @@ export async function privatePreflightDiagnostics(items: unknown, ids: string[],
           if (nearby.length === 1) guard = nearby[0]
         }
         if (!guard) continue
+        const key = source.hash + ':' + guard.location
+        if (!shapes.has(key))
+          shapes.set(
+            key,
+            parserResultShape(source.path, lines, Number(guard.location.slice(guard.location.lastIndexOf(':') + 1))),
+          )
+        const declaredResult = shapes.get(key)
+        if (declaredResult) guard.declaredResult = declaredResult
         break
       }
     }
