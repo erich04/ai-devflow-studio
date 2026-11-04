@@ -41,7 +41,14 @@ export function validPartialFixtureCases(partial: PartialFixtureCases) {
     )
   )
 }
-export type FixtureBinding = { path: string; hash: string; anchor: string; units: string[]; contrast?: FixtureContrast }
+export type FixtureBinding = {
+  path: string
+  hash: string
+  anchor: string
+  units: string[]
+  contrast?: FixtureContrast
+  witnessed?: true
+}
 export type CoverageRecord = { sources: AcceptanceCriterion[]; contextOnly: Array<{ unit: string; reason: string }> }
 type Region = { start: number; end: number }
 type Anchor = Region & {
@@ -228,6 +235,77 @@ function hasProtectedAssertion(node: ts.Node, tree: ts.SourceFile): boolean {
     protectedPublicAssertion(node, tree) ||
     ts.forEachChild(node, (child) => hasProtectedAssertion(child, tree) || undefined) === true
   )
+}
+
+const witnessMark = '// @devflow-witness'
+
+function publicStatements(fileName: string, body: string) {
+  const tree = ts.createSourceFile(
+    fileName,
+    body,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  )
+  const statements: ts.ExpressionStatement[] = []
+  function visit(node: ts.Node) {
+    if (protectedPublicAssertion(node, tree)) statements.push(node)
+    else ts.forEachChild(node, visit)
+  }
+  visit(tree)
+  return { tree, statements }
+}
+
+/** A compound test can fail during setup on both the baseline and a correct
+ * implementation. Bind the claimed change to one real assertion before using
+ * its baseline failure as evidence. Older frozen plans carry no witness flag. */
+export function fixtureWitness(
+  fileName: string,
+  body: string,
+  control?: string,
+): { start: number; end: number } | undefined {
+  const marks = body.split('\n').filter((line) => line.trim() === witnessMark)
+  const { tree, statements } = publicStatements(fileName, body)
+  if (!marks.length) {
+    if (control !== undefined && statements.length > publicStatements(fileName, control).statements.length + 1)
+      throw new InvalidFixtureDraft(
+        'Mark the assertion of the requested effect with a separate // @devflow-witness line immediately before it. A different failure during setup cannot prove this change.',
+      )
+    return undefined
+  }
+  const matches = statements.filter((node) =>
+    ts
+      .getLeadingCommentRanges(body, node.getFullStart())
+      ?.some(
+        (range) =>
+          range.kind === ts.SyntaxKind.SingleLineCommentTrivia &&
+          body.slice(range.pos, range.end).trim() === witnessMark &&
+          !body.slice(range.end, node.getStart(tree)).trim(),
+      ),
+  )
+  if (marks.length !== 1 || matches.length !== 1)
+    throw new InvalidFixtureDraft(
+      'Place exactly one // @devflow-witness comment directly above a behavioral expect statement.',
+    )
+  const node = matches[0]!
+  return { start: node.getStart(tree), end: node.end }
+}
+
+export function witnessedBaselineBody(fileName: string, body: string) {
+  const witness = fixtureWitness(fileName, body)
+  if (!witness) throw new Error('Missing frozen baseline assertion witness')
+  const name = '__devflowBoundary' + codingDigest(body).slice(0, 16)
+  const statement = body.slice(witness.start, witness.end)
+  return `let ${name}Reached = false, ${name}Failure;
+try {
+  await (async () => {
+${body.slice(0, witness.start)}{ ${name}Reached=true; try { ${statement} } catch (error) { ${name}Failure=error; throw error; } }${body.slice(witness.end)}
+  })();
+} catch (error) {
+  if (error !== ${name}Failure && error?.name === 'AssertionError') throw new Error('DevFlowFixtureWitnessNotReached');
+  throw error;
+}
+if (!${name}Reached) throw new Error('DevFlowFixtureWitnessNotReached');`
 }
 
 function fixtureBehavior(block: ts.Block, tree: ts.SourceFile) {
@@ -422,6 +500,7 @@ export function bindFixtureCases(sources: AcceptanceCriterion[], fixtures: Fixtu
         anchor: item.anchor,
         units: [...item.units] as string[],
         ...(contrast ? { contrast } : {}),
+        ...(item.witnessed === true ? { witnessed: true as const } : {}),
       },
     }
   })
@@ -497,7 +576,7 @@ export function validSelectionRecord(selection: FixtureSelection) {
 
 export function validateCoverageBinding(
   criteria: AcceptanceCriterion[],
-  checks: Array<{ criterionId: string; fixture?: FixtureBinding }>,
+  checks: Array<{ criterionId: string; body?: string; fixture?: FixtureBinding }>,
   coverage: CoverageRecord,
 ) {
   if (
@@ -527,6 +606,11 @@ export function validateCoverageBinding(
       new Set(f.units).size !== f.units.length
     )
       throw new Error('Invalid baseline fixture binding')
+    if (
+      f.witnessed !== undefined &&
+      (f.witnessed !== true || f.contrast || typeof check.body !== 'string' || !fixtureWitness(f.path, check.body))
+    )
+      throw new Error('Invalid baseline assertion witness')
     const claims = f.units.map((id) => byId.get(id))
     if (
       !claims[0] ||

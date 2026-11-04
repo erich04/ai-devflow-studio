@@ -4,7 +4,7 @@ import path from 'node:path'
 import { codingDigest, codingFilePath, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { privateAcceptancePath } from './native-coding-acceptance-context'
 import { preflightFrameReader, privatePreflightDiagnostics } from './native-coding-preflight-diagnostics'
-import { fixtureTemplate, type FixtureTemplate } from './native-coding-fixture-cases'
+import { fixtureTemplate, witnessedBaselineBody, type FixtureTemplate } from './native-coding-fixture-cases'
 import type { CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import type { FrozenIndependentChecks, IndependentCheckResult } from './native-coding-independent-verification'
 
@@ -59,7 +59,7 @@ export function vitestIndependentResult(plan: FrozenIndependentChecks, nonce: st
 
 /** The model supplies ordinary test modules; the host owns filenames, invocation,
  * assertion-presence guards and result transport. There are no path placeholders. */
-export async function runVitestIndependentChecks(input: { plan: FrozenIndependentChecks; baseline?: CodingCandidateWorkspace; runner: CodingCommandRunner; directory: string; profile: CodingExecutionProfile; operationId: string; signal?: AbortSignal; onDiagnostics?(value: string): void }): Promise<IndependentCheckResult> {
+export async function runVitestIndependentChecks(input: { plan: FrozenIndependentChecks; baseline?: CodingCandidateWorkspace; runner: CodingCommandRunner; directory: string; profile: CodingExecutionProfile; operationId: string; signal?: AbortSignal; baselinePreflight?: true; onDiagnostics?(value: string): void }): Promise<IndependentCheckResult> {
   const { plan, directory, runner } = input
   if (!plan.adapter) throw new Error('Missing independent test adapter')
   const nonce = randomUUID(), stem = `devflow-acceptance-${nonce}`
@@ -89,6 +89,7 @@ export async function runVitestIndependentChecks(input: { plan: FrozenIndependen
         }
         body = withInput(binding.contrast.requested)
       }
+      if (binding.witnessed && input.baselinePreflight) body = witnessedBaselineBody(binding.path, body)
       body = template.render(binding.anchor, title, body, true)
     }
     tests.push({id:check.criterionId, file:path.posix.join(targetDirectory, `${stem}-${index}.test.${extension}`), body, title, matched})
@@ -119,7 +120,7 @@ export default class AcceptanceReporter {
       visit(found[0]);
       const errors = tests.flatMap(task => task.result?.errors ?? []);
       for (const error of [...suiteErrors, ...errors].slice(0, 4)) {
-        const kind = error.message === 'DevFlowFixtureInputMismatch' ? 'MismatchedInput' : ['AssertionError','SyntaxError','TypeError','ReferenceError'].includes(error.name) ? error.name : 'TestSetupError';
+        const kind = error.message === 'DevFlowFixtureWitnessNotReached' ? 'WitnessNotReached' : error.message === 'DevFlowFixtureInputMismatch' ? 'MismatchedInput' : ['AssertionError','SyntaxError','TypeError','ReferenceError'].includes(error.name) ? error.name : 'TestSetupError';
         diagnostics.push({id, kind, ...(kind === 'TestSetupError' ? {messageDigest:createHash('sha256').update(String(error.message || '')).digest('hex'), frames:getFrames(error)}:{})});
       }
       const broken = (title !== undefined && (tests.length !== 2 || !tests.some(t => t.name === title) || !tests.some(t => t.name === 'devflow:original-control' && t.result?.state === 'pass'))) || unhandled.length || suiteErrors.length || !tests.length || tests.some(task => !['pass','fail'].includes(task.result?.state) || ['skip','todo'].includes(task.mode)) || errors.some(error => error.name !== 'AssertionError' || /any number of assertion|number of assertions to be called/i.test(error.message ?? ''));

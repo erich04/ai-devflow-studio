@@ -65,7 +65,7 @@ export type NativeCodingSession = {
     permissionPolicy?: import('@ai-devflow/shared').CodingPermissionPolicy
     /** Required for newly authorized automatic V3 tasks; old records retain their historical semantics. */
     independentVerificationRequired?: boolean
-    independentVerificationVersion?: 2 | 3
+    independentVerificationVersion?: 2 | 3 | 4
     dependencyCacheVersion?: 1
     testInputPolicyVersion?: 1
   }
@@ -123,7 +123,7 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
   if (session.independentVerification) validateIndependentVerification(session.independentVerification, previous?.independentVerification)
   else if (previous?.independentVerification) throw new Error('Independent verification history cannot be removed')
   if (session.binding?.independentVerificationRequired !== undefined && typeof session.binding.independentVerificationRequired !== 'boolean') throw new Error('Invalid independent verification requirement')
-  if (session.binding?.independentVerificationVersion !== undefined && ![2, 3].includes(session.binding.independentVerificationVersion)) throw new Error('Invalid independent verification version')
+  if (session.binding?.independentVerificationVersion !== undefined && ![2, 3, 4].includes(session.binding.independentVerificationVersion)) throw new Error('Invalid independent verification version')
   if (session.binding?.dependencyCacheVersion !== undefined && session.binding.dependencyCacheVersion !== 1) throw new Error('Invalid dependency cache version')
   if (session.binding?.testInputPolicyVersion !== undefined && session.binding.testInputPolicyVersion !== 1) throw new Error('Invalid test input policy version')
   if (session.binding?.manualValidationPlan !== undefined && (typeof session.binding.manualValidationPlan !== 'string' || !session.binding.manualValidationPlan.trim() || session.binding.manualValidationPlan.length > 8000)) throw new Error('Invalid manual validation plan')

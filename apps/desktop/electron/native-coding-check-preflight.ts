@@ -39,7 +39,7 @@ export function classifyIndependentPreflight(
     return {
       status: 'invalid',
       ...fixCases,
-      feedback: `The checks could not evaluate these criteria: ${(result.invalidCriteria ?? []).join(', ')}. Categories: ${diagnostics}.${differences ? ' Other baseline disagreements: ' + differences + '.' : ''} Fix syntax, imports, fixture setup and assertion presence. For MatchedControlFailed, first make the same arrangement and observations work in the original supported state. For MismatchedInput, update the actual invocation arguments and current fixture state to address the selected subject. A positive async domain refusal must be observed at the operation. Use normal Vitest modules, not a runner or report parser.`,
+      feedback: `The checks could not evaluate these criteria: ${(result.invalidCriteria ?? []).join(', ')}. Categories: ${diagnostics}.${differences ? ' Other baseline disagreements: ' + differences + '.' : ''} Fix syntax, imports, fixture setup and assertion presence. For WitnessNotReached, restore the prerequisites on B or remove the unrelated failure while keeping the requested effect at the marked assertion. For MatchedControlFailed, first make the same arrangement and observations work in the original supported state. For MismatchedInput, update the actual invocation arguments and current fixture state to address the selected subject. A positive async domain refusal must be observed at the operation. Use normal Vitest modules, not a runner or report parser.`,
     }
   if (evaluated.length !== plan.checks.length)
     return { status: 'invalid', feedback: 'Missing baseline observations; the complete independent plan did not execute.' }
@@ -75,7 +75,7 @@ export async function preflightIndependentChecks(input: { plan: FrozenIndependen
     // Publish only the successful B bootstrap, before loading any private test.
     if (prepared.logId) await captureCodingDependencySeed({ workspace, directory, plan: dependencies, preparationLogId: prepared.logId, signal })
     let diagnostics = ''
-    const result = await runIndependentChecks({ plan, baseline: workspace, runner, directory, profile, operationId: `${input.operationId}:checks`, signal, onDiagnostics: value => { diagnostics = value } })
+    const result = await runIndependentChecks({ plan, baseline: workspace, runner, directory, profile, baselinePreflight: true, operationId: `${input.operationId}:checks`, signal, onDiagnostics: value => { diagnostics = value } })
     if ((await snapshotCodingTree(directory, base.excludedPaths)).digest !== base.digest) return { status: 'invalid', feedback: 'The generated checks modified existing baseline files. Only host-owned scratch test files are allowed.' }
     return classifyIndependentPreflight(plan, result, diagnostics)
   } catch (error) {

@@ -10,6 +10,7 @@ const kinds = new Set([
   'ReferenceError',
   'TestSetupError',
   'MatchedControlFailed',
+  'WitnessNotReached',
   'MismatchedInput',
 ])
 

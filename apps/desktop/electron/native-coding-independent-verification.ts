@@ -8,7 +8,7 @@ import type { CodingCommandRunner, CodingExecutionProfile } from './coding-comma
 import type { NativeCodingSession } from './native-coding-session'
 import { checkOwnedFixtureInputs } from './native-coding-owned-fixtures'
 import { fixturePlanning, type AcceptancePlanning } from './native-coding-fixture-planning'
-import { sourceUnits, NoFixtureChangeWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
+import { sourceUnits, NoFixtureChangeWitness, fixtureWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
 
 export type IndependentCheckSource = {
   objectiveVersion: number; baselineDigest: string; sourceDigest: string
@@ -126,8 +126,8 @@ export async function independentCheckRequest(session: NativeCodingSession, work
     if (target && (manifest.dependencies?.vitest || manifest.devDependencies?.vitest)) source.adapter = { kind: 'vitest', directory: path.posix.dirname(target), extension: mentioned.some(file => file.endsWith('.test.tsx') || file.endsWith('.spec.tsx')) ? 'tsx' : 'ts' }
   }
   checkedSource(source)
-  if (binding.independentVerificationVersion === 3 && source.adapter) {
-    const planning = await fixturePlanning(source, workspace, mentioned, session.independentVerification)
+  if ((binding.independentVerificationVersion === 3 || binding.independentVerificationVersion === 4) && source.adapter) {
+    const planning = await fixturePlanning(source, workspace, mentioned, session.independentVerification, binding.independentVerificationVersion === 4)
     if (planning) return planning
   }
   const focused = [...new Set([...mentioned.flatMap(file => [file.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1'), file]), ...workspace.identity.base.files.filter(file => session.objective.includes(file.path)).map(file => file.path)])].filter(file => available.has(file))
@@ -205,7 +205,7 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       .join('\n')
   // In-progress drafts can survive an upgrade. Recheck retained private bodies
   // against B before treating them as part of a newly frozen plan.
-  if (ownership.length)
+  if (ownership.length || planning.requireWitness)
     for (const item of retained) {
       const scenario = selection.scenarios[Number(item.scenario.slice(1)) - 1]
       const fixture = scenario && planning.fixtures?.[Number(scenario.fixture.slice(1)) - 1]
@@ -213,6 +213,7 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       try {
         if (!scenario || !fixture || !control) throw new InvalidFixtureDraft('Retained public fixture is unavailable')
         checkOwnedFixtureInputs(fixture.path, control, item.body, ownership, approvedFor(scenario.units))
+        if (planning.requireWitness && item.baseline === 'fail' && !item.contrast) fixtureWitness(fixture.path,item.body,control)
       } catch (error) {
         if (!(error instanceof InvalidFixtureDraft)) throw error
         byScenario.delete(item.scenario)
@@ -231,6 +232,7 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       const body = varyPublicFixture(control, reply.edits, fixture!.path)
       checkOwnedFixtureInputs(fixture!.path, control, body, ownership, approvedFor(selected.units))
       const contrast = bindFixtureContrast(reply.contrast, body, planning.namedInputs ?? [], planning.inputExamples)
+      if (planning.requireWitness && reply.baseline === 'fail' && !contrast) fixtureWitness(fixture!.path,body,control)
       byScenario.set(id, { scenario: id, baseline: reply.baseline, body, ...(contrast ? { contrast } : {}) })
     } catch (error) {
       if (!(error instanceof InvalidFixtureDraft)) throw error
@@ -239,7 +241,9 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
   }
   const cases = selection.scenarios.flatMap((selected, i) => {
     const value = byScenario.get(`s${i + 1}`)
-    return value ? [{ ...selected, ...value }] : []
+    if (!value) return []
+    const witnessed = planning.requireWitness && value.baseline === 'fail' && !value.contrast && /^\s*\/\/ @devflow-witness[ \t]*$/mu.test(value.body)
+    return [{...selected,...value,...(witnessed ? {witnessed:true} : {})}]
   })
   if (!issues.length) {
     for (const subject of planning.requiredSubjects ?? []) {
@@ -291,7 +295,7 @@ export function independentCheckResult(plan: FrozenIndependentChecks, nonce: str
       checkedCriteria: rows.filter(row => row.assertions > 0 && !row.invalid).map(row => row.id), failedCriteria: failed, invalidCriteria: invalid }
   } catch { return fallback }
 }
-export async function runIndependentChecks(input: { plan: FrozenIndependentChecks; baseline?: CodingCandidateWorkspace; runner: CodingCommandRunner; directory: string; profile: CodingExecutionProfile; operationId: string; signal?: AbortSignal; onDiagnostics?(value: string): void }): Promise<IndependentCheckResult> {
+export async function runIndependentChecks(input: { plan: FrozenIndependentChecks; baseline?: CodingCandidateWorkspace; runner: CodingCommandRunner; directory: string; profile: CodingExecutionProfile; operationId: string; signal?: AbortSignal; baselinePreflight?: true; onDiagnostics?(value: string): void }): Promise<IndependentCheckResult> {
   const plan = validateFrozenIndependentChecks(input.plan), nonce = randomUUID()
   if (plan.adapter) return (await import('./native-coding-vitest-checks')).runVitestIndependentChecks({ ...input, plan })
   const fileName = `.devflow-independent-${codingDigest(input.operationId)}.mjs`, file = path.join(input.directory, fileName)

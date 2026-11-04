@@ -31,6 +31,7 @@ export type AcceptancePlanning = {
   inputExamples?: Array<{ field: string; value: string; observedValues: string[] }>
   requiredSubjects?: NamedFixtureSubject[]
   partial?: PartialFixtureCases
+  requireWitness?: boolean
   ownedContracts?: OwnedFixtureContract[]
 }
 const string = { type: 'string' }
@@ -140,6 +141,7 @@ export async function fixturePlanning(
   workspace: CodingCandidateWorkspace,
   targets: string[],
   history?: IndependentVerificationState,
+  requireWitness = false,
 ): Promise<AcceptancePlanning | undefined> {
   const paths = [...new Set(targets.filter((name) => validFixturePath(name) && !privateAcceptancePath.test(name)))]
   if (!paths.length || paths.length > 24 || sourceUnits(source.criteria).length > 250) return undefined
@@ -352,6 +354,7 @@ export async function fixturePlanning(
     source,
     fixtures,
     phase: 'cases',
+    requireWitness,
     selection,
     ownedContracts,
     ...(partial ? { partial } : {}),
@@ -361,6 +364,9 @@ export async function fixturePlanning(
     request: {
       systemPrompt:
         casePrompt +
+        (requireWitness
+          ? ' In a fail-on-baseline variation with multiple added assertions and no named-input contrast, put a standalone // @devflow-witness comment directly above the one expect statement that observes the requested change. Preserve the original assertions. All setup before that observation must work on B. Any other failing assertion disqualifies the baseline signal.'
+          : '') +
         (namedInputs.length ? ' ' + contrastPrompt : '') +
         (ownedContracts.some((c) => selectedFixtures.some((f) => c.file === f.path)) ? ownedPrompt : ''),
       messages: [
