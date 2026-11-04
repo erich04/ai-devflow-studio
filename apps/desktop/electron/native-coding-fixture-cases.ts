@@ -1,3 +1,4 @@
+import { staticFixtureRows, type FixtureRow } from './native-coding-fixture-rows'
 import { vitestAssertion } from './native-coding-vitest-assertions'
 import { hasPublicReplySeam, hasCommitThenLostReply, requestsLostAcknowledgement } from './native-coding-lost-reply'
 import {
@@ -49,6 +50,8 @@ export function validPartialFixtureCases(partial: PartialFixtureCases) {
     )
   )
 }
+const fixtureAnchorId = /^t[1-9]\d*(?:r[1-9]\d*)?$/u
+
 export type FixtureBinding = {
   path: string
   hash: string
@@ -67,6 +70,7 @@ type Anchor = Region & {
   control?: string
   selectable?: boolean
   mockedPresentation?: true
+  row?: FixtureRow
   replySeam?: true
   storeRoundTrip?: PublicStoreRoundTrip
   behavior?: { actions: string[]; faults: string[]; resolves?: string[] }
@@ -440,7 +444,11 @@ export function fixtureTemplate(file: string, source: string) {
   const testNames = new Set(['it', 'test']),
     suiteNames = new Set(['describe', 'suite'])
   for (const node of tree.statements) {
-    if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier) || node.moduleSpecifier.text !== 'vitest')
+    if (
+      !ts.isImportDeclaration(node) ||
+      !ts.isStringLiteral(node.moduleSpecifier) ||
+      node.moduleSpecifier.text !== 'vitest'
+    )
       continue
     const imports = node.importClause?.namedBindings
     if (!imports || !ts.isNamedImports(imports)) continue
@@ -452,6 +460,7 @@ export function fixtureTemplate(file: string, source: string) {
   }
   const anchors: Anchor[] = [],
     suites: Region[] = []
+  const extraRows = new Map<string, FixtureRow[]>()
   function visit(node: ts.Node, scope?: string) {
     if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)) {
       const call = node.expression,
@@ -466,13 +475,12 @@ export function fixtureTemplate(file: string, source: string) {
         if (testNames.has(root.text)) {
           const name = call.arguments[0],
             callback = call.arguments[1]
+          const fn =
+            callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) ? callback : undefined
+          const rows = fn && ts.isBlock(fn.body) ? staticFixtureRows(call, fn, tree) : []
           const control =
-            ts.isIdentifier(call.expression) &&
-            callback &&
-            (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
-            !callback.parameters.length &&
-            ts.isBlock(callback.body)
-              ? callback.body.getText(tree).slice(1, -1)
+            fn && ts.isBlock(fn.body) && ((ts.isIdentifier(call.expression) && !fn.parameters.length) || rows.length)
+              ? fn.body.getText(tree).slice(1, -1)
               : undefined
           const storeRoundTrip =
             fileStore &&
@@ -482,6 +490,9 @@ export function fixtureTemplate(file: string, source: string) {
             ts.isBlock(callback.body)
               ? publicStoreRoundTrip(callback.body, tree)
               : undefined
+          const id = `t${anchors.length + 1}`
+          const title = name && ts.isStringLiteralLike(name) ? name.text : '(dynamic title)'
+          if (rows.length) extraRows.set(id, rows)
           anchors.push({
             ...region,
             ...(scope ? { suite: scope } : {}),
@@ -498,8 +509,8 @@ export function fixtureTemplate(file: string, source: string) {
                   ...(observesMockedPresentation(callback.body, tree) ? { mockedPresentation: true as const } : {}),
                 }
               : {}),
-            id: `t${anchors.length + 1}`,
-            title: name && ts.isStringLiteralLike(name) ? name.text : '(dynamic title)',
+            id,
+            title,
           })
           return
         }
@@ -508,6 +519,19 @@ export function fixtureTemplate(file: string, source: string) {
     ts.forEachChild(node, (child) => visit(child, scope))
   }
   visit(tree)
+  // Preserve original tN registrations. Each further row is addressed by its
+  // registration and row number even if another table gains support later.
+  const menu = anchors.flatMap((anchor) => {
+    const rows = extraRows.get(anchor.id)
+    return rows
+      ? rows.map((row, i) => ({
+          ...anchor,
+          id: i === 0 ? anchor.id : `${anchor.id}r${i + 1}`,
+          title: anchor.title + ' [' + row.label + ']',
+          row,
+        }))
+      : [anchor]
+  })
   function replace(chosen?: Anchor, replacement = ';') {
     const unusedSuites = chosen ? suites.filter((suite) => suite.start > chosen.start || suite.end < chosen.end) : []
     const regions = [...anchors, ...unusedSuites].sort((a, b) => a.start - b.start || b.end - a.end)
@@ -515,16 +539,21 @@ export function fixtureTemplate(file: string, source: string) {
     let offset = 0
     for (const region of regions) {
       if (region.start < offset) continue
-      pieces.push(source.slice(offset, region.start), region === chosen ? replacement : ';')
+      pieces.push(
+        source.slice(offset, region.start),
+        chosen && region.start === chosen.start && region.end === chosen.end ? replacement : ';',
+      )
       offset = region.end
     }
     return pieces.join('') + source.slice(offset)
   }
   function render(anchorId: string, title: string, body: string, paired = false) {
-    const anchor = anchors.find((item) => item.id === anchorId)
+    const anchor = menu.find((item) => item.id === anchorId)
     if (!anchor) throw new Error('Missing immutable fixture anchor')
+    const parameters = anchor.row?.parameters.join(', ') ?? ''
+    const args = anchor.row?.arguments.join(', ') ?? ''
     function test(name: string, code: string) {
-      return `__devflowFixtureCase.sequential(${JSON.stringify(name)}, async () => {\nconst __before = __devflowAssert.getState().assertionCalls;\nawait (async () => {\n${code}\n})();\nif (__devflowAssert.getState().assertionCalls <= __before) throw new Error('Private case made no assertion');\n});`
+      return `__devflowFixtureCase.sequential(${JSON.stringify(name)}, async () => {\nconst __before = __devflowAssert.getState().assertionCalls;\nawait (async (${parameters}) => {\n${code}\n})(${args});\nif (__devflowAssert.getState().assertionCalls <= __before) throw new Error('Private case made no assertion');\n});`
     }
     if (paired && anchor.control === undefined) throw new Error('Fixture has no independent control')
     const original = paired ? test('devflow:original-control', anchor.control!) : ''
@@ -533,7 +562,7 @@ export function fixtureTemplate(file: string, source: string) {
       replace(anchor, original + '\n' + test(title, body))
     )
   }
-  return { path: file, hash: codingDigest(source), source, tree, anchors, scaffold: replace(), render }
+  return { path: file, hash: codingDigest(source), source, tree, anchors: menu, scaffold: replace(), render }
 }
 export type FixtureTemplate = ReturnType<typeof fixtureTemplate>
 
@@ -594,7 +623,7 @@ export function bindFixtureCases(sources: AcceptanceCriterion[], fixtures: Fixtu
   const exercised = new Set([...covered].map((id) => byId.get(id)!.criterionId))
   const contextOnly = draft.contextOnly.map((note: unknown) => {
     if (record(note) && typeof note.unit === 'string') {
-      if (/^f[1-9]\d{0,2}:t[1-9]\d{0,3}$/u.test(note.unit))
+      if (/^f[1-9]\d{0,2}:t[1-9]\d{0,3}(?:r[1-9]\d?)?$/u.test(note.unit))
         throw new InvalidFixtureDraft(
           `contextOnly.unit takes an approved source ID such as r1.1. ${note.unit} is a public fixture key; omit unused fixture keys and keep only uncovered source spans.`,
         )
@@ -757,7 +786,7 @@ export function validSelectionRecord(selection: FixtureSelection) {
       (s) =>
         s &&
         /^f[1-9]\d*$/u.test(s.fixture) &&
-        /^t[1-9]\d*$/u.test(s.anchor) &&
+        fixtureAnchorId.test(s.anchor) &&
         bounded(s.precondition, 1800) &&
         Array.isArray(s.units) &&
         s.units.length &&
@@ -795,7 +824,7 @@ export function validateCoverageBinding(
       !criterion ||
       !validFixturePath(f.path) ||
       !/^[a-f0-9]{64}$/u.test(f.hash) ||
-      !/^t[1-9]\d*$/u.test(f.anchor) ||
+      !fixtureAnchorId.test(f.anchor) ||
       !Array.isArray(f.units) ||
       !f.units.length ||
       new Set(f.units).size !== f.units.length

@@ -148,3 +148,26 @@ it('offers only immutable callbacks with assertions the authoring host can prote
   expect(() => choose('f1:t1')).not.toThrow()
   expect(() => choose('f1:t2')).toThrow(/unsupported/)
 })
+
+it('makes immutable literal rows selectable while keeping the identity of neighboring cases', () => {
+  const text = `import {test as check,expect} from 'vitest'
+check.each([{mode:'disabled' as const},{mode:'enabled' as const}])('uses the saved $mode', async (policy) => {
+  const sent = await invoke(policy)
+  expect(sent.mode).toBe(policy.mode)
+})
+check('adjacent',()=>{expect(true).toBe(true)})
+check.each(buildTable())('dynamic rows',(input)=>{expect(run(input)).toBe(1)})
+check.skip.each([1])('skip this row',(input)=>{expect(input).toBe(1)})`
+  const fixture = fixtureTemplate('setting.test.ts', text)
+  expect(fixture.anchors.find((a) => a.id === 't2')?.title).toBe('adjacent')
+  const rows = fixture.anchors.filter((a) => a.selectable && a.title.includes('uses the saved'))
+  expect(rows.map((row) => row.id)).toEqual(['t1', 't1r2'])
+  expect(rows.map((a) => a.title).join(' ')).toMatch(/disabled.*enabled/)
+  expect(fixture.anchors.filter((a) => a.selectable)).toHaveLength(3)
+  for (const row of rows) {
+    const program = fixture.render(row.id, 'covers an actual mode', row.control!, true)
+    expect(program.match(/__devflowFixtureCase\.sequential\(/g)).toHaveLength(2)
+    expect(program).not.toContain('buildTable()')
+    expect(program).not.toContain(row.title.includes('enabled') ? "'disabled'" : "'enabled'")
+  }
+})

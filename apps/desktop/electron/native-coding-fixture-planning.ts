@@ -320,6 +320,9 @@ export async function fixturePlanning(
       request: {
         systemPrompt:
           selectPrompt +
+          (fixtures.some((f) => f.anchors.some((a) => a.selectable && a.row))
+            ? ' Some existing public tests exercise concrete parameter rows. When the approved behavior depends on an existing setting, prefer its working row and the operation that actually receives it. Changing a similarly named field on a different adapter does not establish that precondition.'
+            : '') +
           (requiredSubjects.length && fixtures.some((f) => f.anchors.some((a) => a.mockedPresentation))
             ? ' A fixture marked as observing only rendered UI and mocked calls can cover presentation. When the source separately asks that a named product operation actually runs, select a public working operation at its owning service as well.'
             : '') +
@@ -413,6 +416,14 @@ export async function fixturePlanning(
         .filter((a) => anchors.has(a.id))
         .map((a) => ({
           id: a.id,
+          ...(a.row
+            ? {
+                immutableParameters: a.row.parameters.map((name, i) => ({
+                  name,
+                  literal: redactSensitiveText(a.row!.arguments[i]!).value,
+                })),
+              }
+            : {}),
           protectedAssertionLines: protectedAssertionLines(f.path, a.control!),
           body: redactSensitiveText(a.control!)
             .value.split('\n')
@@ -465,6 +476,9 @@ export async function fixturePlanning(
     request: {
       systemPrompt:
         casePrompt +
+        (selectedFixtures.some((f) => f.examples.some((example) => 'immutableParameters' in example))
+          ? ' The host binds the displayed immutableParameters from the selected public table row in both the control and the variation. Use those parameters directly without declaring replacements. Trace the entry that actually receives their values.'
+          : '') +
         (requireWitness
           ? ' In a fail-on-baseline variation with multiple added assertions and no named-input contrast, put a standalone // @devflow-witness comment directly above the one expect statement that observes the requested change. Preserve the original assertions. All setup before that observation must work on B. Any other failing assertion disqualifies the baseline signal.'
           : '') +
