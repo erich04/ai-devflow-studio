@@ -110,6 +110,8 @@ describe('frozen independent acceptance', () => {
     for (const [index, [body, status, extension]] of [
       ["import { test, expect } from 'vitest'; import { value } from '../value'; test('behavior', () => expect(value).toBe(2));", 'passed'],
       ["import { test, expect } from 'vitest'; import { value } from '../value'; test('behavior', () => expect(value).toBe(3));", 'failed'],
+      ["import { test, expect } from 'vitest'; expect.extend({toMeetContract(){return {pass:false, message:()=> 'PRIVATE-FIXTURE-DETAIL'}}}); test('custom matcher',()=>expect(2).toMeetContract());", 'failed'],
+      ["import { test, expect } from 'vitest'; expect.extend({toMeetContract(){throw Object.assign(new Error('PRIVATE-FIXTURE-DETAIL'),{actual:2,expected:3})}}); test('broken matcher',()=>expect(2).toMeetContract());", 'invalid'],
       ['const report = ""/private/report.json"";', 'invalid'],
       ["import { test } from 'vitest'; test('empty', () => {});", 'invalid'],
       ["import { test, expect } from 'vitest'; test.skip('skipped', () => expect(true).toBe(true));", 'invalid'],

@@ -12,6 +12,7 @@ const kinds = new Set([
   'TestSetupError',
   'MatchedControlFailed',
   'WitnessNotReached',
+  'CommittedEffectNotReached',
   'MismatchedInput',
 ])
 

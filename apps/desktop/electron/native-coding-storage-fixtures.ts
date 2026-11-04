@@ -1,3 +1,4 @@
+import { requestsLostAcknowledgement } from './native-coding-lost-reply'
 import ts from 'typescript'
 
 export type PublicStoreRoundTrip = { write: string; read: string }
@@ -58,6 +59,9 @@ export function variantHasStoreRoundTrip(file: string, body: string, pair: Publi
 
 /** Reading an already persisted attachment alone does not require a new write. */
 export function requestsDurableRoundTrip(text: string) {
+  // In this contract the write has already succeeded. It is the waiting
+  // caller's recovery from the missing acknowledgement that must be observed.
+  if (requestsLostAcknowledgement(text) && !/重启|重开|重新打开|重载|\b(?:restart|reopen|reload)/iu.test(text)) return false
   return (
     /持久|落盘|已存储|重启|\b(?:persist(?:ed|ent|ence)?|durable|restart(?:ed)?|stored)\b/iu.test(text) &&
     /状态保存|保存(?:原始|当前|合法|状态|数据|记录)|重新读取|读回|重读|\b(?:save|saving|reload|reopen|re-read|read\s+back)\b/iu.test(

@@ -1,3 +1,5 @@
+import { vitestAssertion } from './native-coding-vitest-assertions'
+import { replyDeliveryBody } from './native-coding-lost-reply'
 import { randomUUID } from 'node:crypto'
 import { lstat, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -90,6 +92,13 @@ export async function runVitestIndependentChecks(input: { plan: FrozenIndependen
         body = withInput(binding.contrast.requested)
       }
       if (binding.witnessed && input.baselinePreflight) body = witnessedBaselineBody(binding.path, body)
+      if (binding.lostReply) {
+        matched = {
+          file: path.posix.join(targetDirectory, `${stem}-acknowledged-${index}.test.${extension}`),
+          body: template.render(binding.anchor, 'devflow:matched-control', replyDeliveryBody(check.body, false), true),
+        }
+        body = replyDeliveryBody(body, true)
+      }
       body = template.render(binding.anchor, title, body, true)
     }
     tests.push({id:check.criterionId, file:path.posix.join(targetDirectory, `${stem}-${index}.test.${extension}`), body, title, matched})
@@ -101,6 +110,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 export default class AcceptanceReporter {
   onFinished(files = [], unhandled = []) {
+    const isAssertion = ${vitestAssertion};
     const diagnostics = [];
     const getFrames = ${framePaths.length ? preflightFrameReader(framePaths) : '() => []'};
     const rows = ${JSON.stringify(tests.map(({ id, file, title, matched }) => ({ id, file, title, controlFile: matched?.file })))}.map(({id, file, title, controlFile}) => {
@@ -120,10 +130,10 @@ export default class AcceptanceReporter {
       visit(found[0]);
       const errors = tests.flatMap(task => task.result?.errors ?? []);
       for (const error of [...suiteErrors, ...errors].slice(0, 4)) {
-        const kind = error.message === 'DevFlowFixtureWitnessNotReached' ? 'WitnessNotReached' : error.message === 'DevFlowFixtureInputMismatch' ? 'MismatchedInput' : ['AssertionError','SyntaxError','TypeError','ReferenceError'].includes(error.name) ? error.name : 'TestSetupError';
+        const kind = error.message === 'DevFlowCommittedEffectNotReached' ? 'CommittedEffectNotReached' : error.message === 'DevFlowFixtureWitnessNotReached' ? 'WitnessNotReached' : error.message === 'DevFlowFixtureInputMismatch' ? 'MismatchedInput' : isAssertion(error) ? 'AssertionError' : ['SyntaxError','TypeError','ReferenceError'].includes(error.name) ? error.name : 'TestSetupError';
         diagnostics.push({id, kind, ...(kind === 'TestSetupError' ? {messageDigest:createHash('sha256').update(String(error.message || '')).digest('hex'), frames:getFrames(error)}:{})});
       }
-      const broken = (title !== undefined && (tests.length !== 2 || !tests.some(t => t.name === title) || !tests.some(t => t.name === 'devflow:original-control' && t.result?.state === 'pass'))) || unhandled.length || suiteErrors.length || !tests.length || tests.some(task => !['pass','fail'].includes(task.result?.state) || ['skip','todo'].includes(task.mode)) || errors.some(error => error.name !== 'AssertionError' || /any number of assertion|number of assertions to be called/i.test(error.message ?? ''));
+      const broken = (title !== undefined && (tests.length !== 2 || !tests.some(t => t.name === title) || !tests.some(t => t.name === 'devflow:original-control' && t.result?.state === 'pass'))) || unhandled.length || suiteErrors.length || !tests.length || tests.some(task => !['pass','fail'].includes(task.result?.state) || ['skip','todo'].includes(task.mode)) || errors.some(error => !isAssertion(error) || /any number of assertion|number of assertions to be called/i.test(error.message ?? ''));
       return { id, status: broken ? 'invalid' : tests.some(task => task.result?.state === 'fail') ? 'failed' : 'passed', tests: tests.length, failedTitles: tests.filter(task => task.result?.state === 'fail').slice(0, 20).map(task => task.name) };
     });
     writeFileSync(${JSON.stringify(reportName)}, JSON.stringify({nonce: ${JSON.stringify(nonce)}, rows, diagnostics}), {flag: 'wx', mode: 0o600});

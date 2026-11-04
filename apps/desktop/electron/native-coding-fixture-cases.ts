@@ -1,3 +1,5 @@
+import { vitestAssertion } from './native-coding-vitest-assertions'
+import { hasPublicReplySeam, hasCommitThenLostReply, requestsLostAcknowledgement } from './native-coding-lost-reply'
 import {
   hasFileStoreFixture,
   publicStoreRoundTrip,
@@ -54,6 +56,7 @@ export type FixtureBinding = {
   units: string[]
   contrast?: FixtureContrast
   witnessed?: true
+  lostReply?: true
 }
 export type CoverageRecord = { sources: AcceptanceCriterion[]; contextOnly: Array<{ unit: string; reason: string }> }
 type Region = { start: number; end: number }
@@ -64,6 +67,7 @@ type Anchor = Region & {
   control?: string
   selectable?: boolean
   mockedPresentation?: true
+  replySeam?: true
   storeRoundTrip?: PublicStoreRoundTrip
   behavior?: { actions: string[]; faults: string[]; resolves?: string[] }
 }
@@ -320,7 +324,7 @@ try {
 ${body.slice(0, witness.start)}{ ${name}Reached=true; try { ${statement} } catch (error) { ${name}Failure=error; throw error; } }${body.slice(witness.end)}
   })();
 } catch (error) {
-  if (error !== ${name}Failure && error?.name === 'AssertionError') throw new Error('DevFlowFixtureWitnessNotReached');
+  if (error !== ${name}Failure && (${vitestAssertion})(error)) throw new Error('DevFlowFixtureWitnessNotReached');
   throw error;
 }
 if (!${name}Reached) throw new Error('DevFlowFixtureWitnessNotReached');`
@@ -490,6 +494,7 @@ export function fixtureTemplate(file: string, source: string) {
                   control,
                   selectable: control.length <= 12000 && hasProtectedAssertion(callback.body, tree),
                   behavior: fixtureBehavior(callback.body, tree),
+                  ...(hasPublicReplySeam(control) ? { replySeam: true as const } : {}),
                   ...(observesMockedPresentation(callback.body, tree) ? { mockedPresentation: true as const } : {}),
                 }
               : {}),
@@ -582,6 +587,7 @@ export function bindFixtureCases(sources: AcceptanceCriterion[], fixtures: Fixtu
         units: [...item.units] as string[],
         ...(contrast ? { contrast } : {}),
         ...(item.witnessed === true ? { witnessed: true as const } : {}),
+        ...(item.lostReply === true ? { lostReply: true as const } : {}),
       },
     }
   })
@@ -714,6 +720,25 @@ export function requireStoredSelection(
   }
 }
 
+export function requireReplySelection(
+  sources: AcceptanceCriterion[],
+  fixtures: FixtureTemplate[],
+  selection: FixtureSelection,
+) {
+  const units = sourceUnits(sources).filter((u) => requestsLostAcknowledgement(u.text))
+  if (!units.length) return
+  const options = fixtures.flatMap((f, i) =>
+    f.anchors.filter((a) => a.selectable && a.replySeam).map((a) => 'f' + (i + 1) + ':' + a.id),
+  )
+  if (!options.length) return
+  for (const unit of units) {
+    if (selection.scenarios.some((s) => s.units.includes(unit.id) && options.includes(s.fixture + ':' + s.anchor))) continue
+    throw new InvalidFixtureDraft(
+      `Source ${unit.id} asks what the waiting caller does when an already committed result loses its reply. Select a successful public caller with a controllable response, for example ${options.slice(0, 8).join(', ')}. A store-only readback never experiences the lost acknowledgement.`,
+    )
+  }
+}
+
 export function validSelectionRecord(selection: FixtureSelection) {
   return (
     !!selection &&
@@ -773,6 +798,11 @@ export function validateCoverageBinding(
       (f.witnessed !== true || f.contrast || typeof check.body !== 'string' || !fixtureWitness(f.path, check.body))
     )
       throw new Error('Invalid baseline assertion witness')
+    if (
+      f.lostReply !== undefined &&
+      (f.lostReply !== true || f.contrast || typeof check.body !== 'string' || !hasCommitThenLostReply(f.path, check.body))
+    )
+      throw new Error('Invalid frozen acknowledgement fault')
     const claims = f.units.map((id) => byId.get(id))
     if (
       !claims[0] ||

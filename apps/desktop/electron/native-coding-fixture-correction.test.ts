@@ -358,3 +358,85 @@ it('rejects an acceptance assertion that searches undocumented aliases for a sin
   }
   expect(() => fixtureChecksFromResponse(approved, reply(aliases), '2026-11-04T20:00:00Z')).not.toThrow()
 })
+
+it('requires a caller to observe a lost acknowledgement after a visible effect has completed', async () => {
+  const { fixtureSelectionFromResponse } = await import('./native-coding-independent-verification')
+  const storage = fixtureTemplate('store.test.ts', "it('reads a saved value',()=>{expect(currentValue).toBe('saved')})")
+  const client = fixtureTemplate(
+    'client.test.ts',
+    `it('updates after save succeeds',async()=>{
+ let stored='old'
+ const submit=vi.fn().mockResolvedValue('saved')
+ const read=vi.fn(async()=>stored)
+ const shown=await clientUpdate(submit,read)
+ expect(submit).toHaveBeenCalledTimes(1)
+ expect(shown).toBe('saved')
+})`,
+  )
+  const source = {
+    objectiveVersion: 1,
+    sourceDigest: 'f'.repeat(64),
+    baselineDigest: 'a'.repeat(64),
+    criteria: [
+      {
+        id: 'goal',
+        text: 'When the write is committed but the response is lost, read back the stored result.',
+        sourceRef: 'approved',
+      },
+    ],
+    adapter: { kind: 'vitest' as const, directory: '.' },
+  }
+  const sel = {
+    source,
+    phase: 'select' as const,
+    fixtures: [storage, client],
+    request: { systemPrompt: '', messages: [], tools: [] },
+  }
+  const choose = (anchor: string) =>
+    codingToolReply('selected', 'select_behavior_contract', {
+      scenarios: [{ units: ['r1.1'], anchor, precondition: 'The caller submits a single write' }],
+      contextOnly: [],
+    })
+  expect(() => fixtureSelectionFromResponse(sel, choose('f1:t1'))).toThrow(/r1\.1.*caller/i)
+  const p = { ...sel, phase: 'cases' as const, selection: fixtureSelectionFromResponse(sel, choose('f2:t1')) }
+  const submit = (line: string) =>
+    fixtureChecksFromResponse(
+      p,
+      codingToolReply('write', 'submit_fixture_cases', {
+        cases: [{ scenario: 's1', baseline: 'fail', edits: [{ line: 3, deleteCount: 1, insert: line }] }],
+      }),
+      '2026-11-04T20:00:00Z',
+    )
+  expect(() => submit(" const submit=vi.fn().mockRejectedValue(new Error('failed before a commit'))")).toThrow(
+    /after.*commit/i,
+  )
+  expect(() => submit(" const submit=vi.fn(()=>__devflowLoseReplyAfterCommit(()=> 'saved'))")).toThrow(/effect/i)
+  const plan = submit(" const submit=vi.fn(()=>__devflowLoseReplyAfterCommit(()=>{stored='saved';return stored}))")
+  expect(plan.checks[0]?.fixture?.lostReply).toBe(true)
+  expect(() => submit(" const submit=vi.fn(); await __devflowLoseReplyAfterCommit(()=>{stored='saved';return stored})")).toThrow(/effect/i)
+})
+
+it('delivers both replies only after the identical write settles, and invalidates an unreached fault', async () => {
+  const { replyDeliveryBody } = await import('./native-coding-lost-reply')
+  const { runInNewContext } = await import('node:vm')
+  const check = (body: string, lost: boolean, log: string[]) =>
+    runInNewContext(`(async()=>{
+${replyDeliveryBody(body, lost)}
+})()`, { log }) as Promise<void>
+  const write = `
+    async function submit() {
+      return __devflowLoseReplyAfterCommit(async () => {
+        await Promise.resolve()
+        log.push('committed')
+        return 'saved'
+      })
+    }
+    try { log.push(await submit()) } catch { log.push('reply unavailable') }`
+  for (const lost of [false, true]) {
+    const log: string[] = []
+    await check(write, lost, log)
+    expect(log).toEqual(['committed', lost ? 'reply unavailable' : 'saved'])
+    await expect(check('if (false) await __devflowLoseReplyAfterCommit(() => log.push("write"))', lost, [])).rejects.toThrow('DevFlowCommittedEffectNotReached')
+    await expect(check('try { await __devflowLoseReplyAfterCommit(() => { throw new Error("write failed") }) } catch {}', lost, [])).rejects.toThrow('DevFlowCommittedEffectNotReached')
+  }
+})

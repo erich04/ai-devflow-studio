@@ -1,3 +1,4 @@
+import { hasCommitThenLostReply, lostReplyHelper, requestsLostAcknowledgement } from './native-coding-lost-reply'
 import { checkObservedResultFields } from './native-coding-output-assertions'
 import { requestsDurableRoundTrip, variantHasStoreRoundTrip } from './native-coding-storage-fixtures'
 import { randomUUID } from 'node:crypto'
@@ -10,7 +11,7 @@ import type { CodingCommandRunner, CodingExecutionProfile } from './coding-comma
 import type { NativeCodingSession } from './native-coding-session'
 import { checkOwnedFixtureInputs } from './native-coding-owned-fixtures'
 import { fixturePlanning, type AcceptancePlanning } from './native-coding-fixture-planning'
-import { sourceUnits, NoFixtureChangeWitness, fixtureWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, requireOperationalSelection, requireStoredSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
+import { sourceUnits, NoFixtureChangeWitness, fixtureWitness, FixtureCaseCorrection, partialFixtureCases, validPartialFixtureCases, type PartialFixtureCases, InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, requireOperationalSelection, requireStoredSelection, requireReplySelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
 
 export type IndependentCheckSource = {
   objectiveVersion: number; baselineDigest: string; sourceDigest: string
@@ -178,6 +179,7 @@ export function fixtureSelectionFromResponse(planning: AcceptancePlanning, respo
   const selection = readFixtureSelection(planning.source.criteria, planning.fixtures!, planToolValue(response, 'select_behavior_contract'))
   requireOperationalSelection(planning.source.criteria, planning.fixtures!, planning.requiredSubjects ?? [], selection)
   requireStoredSelection(planning.source.criteria, planning.fixtures!, selection)
+  requireReplySelection(planning.source.criteria, planning.fixtures!, selection)
   return selection
 }
 export function fixtureChecksFromResponse(planning: AcceptancePlanning, response: NativeConversationResponse, now: string) {
@@ -208,14 +210,25 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       .filter((unit) => ids.includes(unit.id))
       .map((unit) => unit.text)
       .join('\n')
+  const ackUnits = units.filter((unit) => requestsLostAcknowledgement(unit.text)).map((unit) => unit.id)
+  const hasCaller = planning.fixtures!.some((f) => f.anchors.some((a) => a.selectable && a.replySeam))
+  const validateReply = (file: string, body: string, sourceIds: string[], caller: boolean, hasContrast: boolean) => {
+    if (!body.includes(lostReplyHelper)) return
+    if (hasContrast || (hasCaller && !caller) || !sourceIds.some((id) => ackUnits.includes(id)) || !hasCommitThenLostReply(file, body))
+      throw new InvalidFixtureDraft(
+        'Use the controllable successful caller for the lost-reply scope. Its injected callback must complete an observable effect before the reply is dropped. Apply visible state or await/return its write and return the normal response. Keep named-input contrasts in separate cases.',
+      )
+  }
   // In-progress drafts can survive an upgrade. Recheck retained private bodies
   // against B before treating them as part of a newly frozen plan.
   for (const item of retained) {
       const scenario = selection.scenarios[Number(item.scenario.slice(1)) - 1]
       const fixture = scenario && planning.fixtures?.[Number(scenario.fixture.slice(1)) - 1]
-      const control = fixture?.anchors.find((a) => a.id === scenario?.anchor)?.control
+      const anchor = fixture?.anchors.find((a) => a.id === scenario?.anchor)
+      const control = anchor?.control
       try {
         if (!scenario || !fixture || !control) throw new InvalidFixtureDraft('Retained public fixture is unavailable')
+        validateReply(fixture.path, item.body, scenario.units, !!anchor?.replySeam, !!item.contrast)
         checkObservedResultFields(fixture.path,control,item.body,approvedFor(scenario.units))
         checkOwnedFixtureInputs(fixture.path, control, item.body, ownership, approvedFor(scenario.units))
         if (planning.requireWitness && item.baseline === 'fail' && !item.contrast) fixtureWitness(fixture.path,item.body,control)
@@ -232,9 +245,11 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
         throw new InvalidFixtureDraft('Missing variation or baseline expectation')
       const selected = selection.scenarios[Number(id.slice(1)) - 1]!
       const fixture = planning.fixtures![Number(selected.fixture.slice(1)) - 1]
-      const control = fixture?.anchors.find((a) => a.id === selected.anchor)?.control
+      const anchor = fixture?.anchors.find((a) => a.id === selected.anchor)
+      const control = anchor?.control
       if (control === undefined) throw new InvalidFixtureDraft('Missing public control')
       const body = varyPublicFixture(control, reply.edits, fixture!.path)
+      validateReply(fixture!.path, body, selected.units, !!anchor?.replySeam, reply.contrast !== undefined)
       checkObservedResultFields(fixture!.path,control,body,approvedFor(selected.units))
       checkOwnedFixtureInputs(fixture!.path, control, body, ownership, approvedFor(selected.units))
       const contrast = bindFixtureContrast(reply.contrast, body, planning.namedInputs ?? [], planning.inputExamples)
@@ -249,7 +264,8 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
     const value = byScenario.get(`s${i + 1}`)
     if (!value) return []
     const witnessed = planning.requireWitness && value.baseline === 'fail' && !value.contrast && /^\s*\/\/ @devflow-witness[ \t]*$/mu.test(value.body)
-    return [{...selected,...value,...(witnessed ? {witnessed:true} : {})}]
+    return [{ ...selected, ...value, ...(witnessed ? { witnessed: true } : {}),
+      ...(value.body.includes(lostReplyHelper) ? { lostReply: true } : {}) }]
   })
   if (!issues.length) {
     for (const subject of planning.requiredSubjects ?? []) {
@@ -274,6 +290,15 @@ export function fixtureChecksFromResponse(planning: AcceptancePlanning, response
       if (!routes.length || routes.some(({c,path,pair}) => variantHasStoreRoundTrip(path,c.body,pair))) continue
       for (const {c} of routes) byScenario.delete(c.scenario)
       issues.push(`Keep a real store write and subsequent read of the affected record in a case covering ${unit.id}. A reconstructed in-memory value alone cannot demonstrate persistence.`)
+    }
+  }
+  if (!issues.length) {
+    for (const unit of ackUnits) {
+      const scoped = cases.filter((c) => c.units.includes(unit))
+      if (scoped.some((c) => c.lostReply)) continue
+      const callers = scoped.filter((c) => planning.fixtures![Number(c.fixture.slice(1)) - 1]?.anchors.find((a) => a.id === c.anchor)?.replySeam)
+      for (const c of callers.length ? callers : scoped) byScenario.delete(c.scenario)
+      issues.push(`For ${unit}, make the caller's reply fail after the committed effect with ${lostReplyHelper} and observe what its next read shows.`)
     }
   }
   if (issues.length) {

@@ -1,3 +1,4 @@
+import { requestsLostAcknowledgement } from './native-coding-lost-reply'
 import { requestsDurableRoundTrip } from './native-coding-storage-fixtures'
 import { redactSensitiveText, type NativeConversationRequest, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
 import {
@@ -244,6 +245,9 @@ export async function fixturePlanning(
   const selection = matching.find(
     (d) => d.selection || d.reselect || (d.preflightStatus === 'invalid' && !d.correctCases),
   )?.selection
+  const lostReplyUnits = sourceUnits(source.criteria)
+    .filter((u) => requestsLostAcknowledgement(u.text))
+    .map((u) => u.id)
   const durableUnits = sourceUnits(source.criteria)
     .filter((u) => requestsDurableRoundTrip(u.text))
     .map((u) => u.id)
@@ -258,6 +262,7 @@ export async function fixturePlanning(
       key: `f${i + 1}:${a.id}`,
       title: redactSensitiveText(a.title).value.slice(0, 400),
       behavior: a.behavior,
+      ...(lostReplyUnits.length && a.replySeam ? { controllableSuccessfulReply: true } : {}),
       ...(durableUnits.length && a.storeRoundTrip ? { storeRoundTrip: a.storeRoundTrip } : {}),
       ...(a.mockedPresentation ? { observes: 'rendered UI and mocked calls only' } : {}),
     })),
@@ -278,6 +283,15 @@ export async function fixturePlanning(
     approved: source.criteria,
     units: approvedUnits,
     requiredOperationSubjects: requiredSubjects,
+    ...(lostReplyUnits.length
+      ? {
+          lostAcknowledgement: {
+            units: lostReplyUnits,
+            instruction:
+              'Exercise the waiting consumer through an existing successful command. For one case covering this source, have its injected command return __devflowLoseReplyAfterCommit(() => { /* apply the write or update externally visible stored state; return the ordinary successful response */ }). The host runs both ordinary delivery and reply loss after that same effect resolves. Assert the subsequent observable read. When the source forbids a repeated write, also assert the number of effects. A bare rejection before the effect cannot test this contract.',
+          },
+        }
+      : {}),
     ...(durableUnits.length && fixtures.some((f) => f.anchors.some((a) => a.storeRoundTrip))
       ? {
           storageObservations: {
