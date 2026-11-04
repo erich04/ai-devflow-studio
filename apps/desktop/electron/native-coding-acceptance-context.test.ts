@@ -186,3 +186,36 @@ it('finds the normal named feature in immutable nearby public fixtures even when
     await rm(root, { recursive: true, force: true })
   }
 })
+
+it('distinguishes a project observation of the affected route from requirements and keeps grader files out of discovery', async () => {
+  const texts = new Map([
+    [
+      'docs/validation/widget-replay.md',
+      '# Local validation\n\n## Results\n\n' +
+        'Ordinary older setup details. '.repeat(230) +
+        '\n\nFrameKit billing was pending in the settlement journal. The transport trace had already finished.',
+    ],
+    ['docs/evaluation/widget-key.md', '# FrameKit billing\nPRIVATE-GRADER-ANSWER'],
+    ['docs/validation/.env/trace.md', '# FrameKit billing\nPRIVATE-FILE'],
+    ['docs/validation/other.md', '# Unrelated palettes\nThe display was magenta.'],
+  ])
+  const files = [...texts].map(([path, text]) => ({ path, hash: codingDigest(text), size: Buffer.byteLength(text) }))
+  const context = await acceptanceContext(
+    files,
+    async (hash) => Buffer.from([...texts.values()].find((t) => codingDigest(t) === hash)!),
+    'Expose the pending FrameKit billing status.',
+    [],
+    6000,
+  )
+  expect(context.observations).toEqual([
+    expect.objectContaining({
+      path: 'docs/validation/widget-replay.md',
+      content: expect.stringContaining('settlement journal'),
+    }),
+  ])
+  expect(context.contracts).toEqual([])
+  expect(JSON.stringify(context)).not.toMatch(/PRIVATE-GRADER|PRIVATE-FILE|magenta/)
+  expect(
+    [...context.observations, ...context.files, ...context.contracts].reduce((n, v) => n + v.content.length, 0),
+  ).toBeLessThanOrEqual(6000)
+})

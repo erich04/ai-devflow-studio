@@ -153,6 +153,41 @@ export function focusFixtureEvidence(file: Evidence | undefined, query: string, 
   }
 }
 
+/** Project-authored validation reports can identify the entry and observed
+ * outcome. Keep their historical observations separate from contract excerpts.
+ * Do not traverse evaluation archives or raw logs. */
+async function baselineObservations(
+  entries: Entry[],
+  blob: (hash: string) => Promise<Buffer>,
+  objective: string,
+  max: number,
+) {
+  const reports = entries.filter((entry) => /^docs\/validation\/[^/]+\.md$/iu.test(entry.path) && entry.size <= 128 * 1024)
+  const ranked = rankMemoryByRelevance(reports, objective, (report) => report.path).map((r) => r.item)
+  const passages: Evidence[] = []
+  let readRoom = 1024 * 1024
+  for (const file of [...new Set([...ranked, ...reports])].slice(0, 64)) {
+    if (file.size > readRoom) continue
+    readRoom -= file.size
+    const bytes = await blob(file.hash)
+    if (bytes.includes(0)) continue
+    for (const paragraph of redactSensitiveText(bytes.toString('utf8')).value.split(/\n\s*\n|(?=\n[-*] )/u)) {
+      const content = paragraph.trim()
+      if (content.length < 40 || (content.startsWith('#') && !content.includes('\n'))) continue
+      passages.push({ path: file.path, content: content.slice(0, 2000), truncated: content.length > 2000 })
+    }
+  }
+  const result: Evidence[] = []
+  let room = max
+  for (const { item } of rankMemoryByRelevance(passages, objective, (p) => p.content, { minMatchedTerms: 2 })) {
+    if (result.length === 3 || room < 100) break
+    const content = excerpt(item.content, Math.min(room, 1200))
+    result.push({ ...item, content, truncated: item.truncated || content.length < item.content.length })
+    room -= content.length
+  }
+  return result
+}
+
 /** Use only immutable B blobs. Repository conventions help interpret approved terms,
  * while the approved objective remains the source of acceptance requirements. */
 export async function acceptanceContext(
@@ -187,8 +222,15 @@ export async function acceptanceContext(
       sections.push({ path: file.path, content, truncated: content.length < part.trim().length })
     }
   }
+  const observations = await baselineObservations(
+    [...available.values()],
+    blob,
+    objective,
+    Math.min(2400, Math.floor(budget / 8)),
+  )
+  const observationSize = observations.reduce((n, entry) => n + entry.content.length, 0)
   const contracts: Evidence[] = []
-  let documentRoom = Math.min(14000, Math.floor(budget / 4))
+  let documentRoom = Math.min(14000, Math.floor(budget / 4)) - observationSize
   for (const { item } of rankMemoryByRelevance(sections, objective, (section) => section.content, { minMatchedTerms: 2 })) {
     if (contracts.length === 8 || documentRoom < 140) break
     if (contracts.filter((section) => section.path === item.path).length >= 2) continue
@@ -211,7 +253,7 @@ export async function acceptanceContext(
     }
   }
   const files: Evidence[] = []
-  let room = budget - contracts.reduce((size, item) => size + item.content.length, 0)
+  let room = budget - observationSize - contracts.reduce((size, item) => size + item.content.length, 0)
   // Assign every named target an equal first opportunity, redistributing space
   // left by small files before excerpting large UI suites and implementation files.
   const entries = [...new Set([...metadata, ...focused])].flatMap((name) => available.get(name) ?? [])
@@ -237,5 +279,5 @@ export async function acceptanceContext(
     const content = excerpt(value, lengths.get(name)!)
     files.push({ path: name, content, truncated: content.length < value.length })
   }
-  return { files, contracts }
+  return { files, contracts, observations }
 }
