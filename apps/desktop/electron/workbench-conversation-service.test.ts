@@ -1339,8 +1339,8 @@ describe('recalled project memory in the discussion bar (ADR 0030)', () => {
     expect(session.contextReceipt?.memory).toEqual(recordedCalls.at(-1)!.memoryReceipt)
   })
 
-  it('does not report optional memory as sent after packing drops it to keep the prompt bounded', async () => {
-    const { memoryDependency, assertCurrent } = memoryStore(async () => [memory('m-clear', '[observation] 清理已完成任务 MEMORY_MUST_DROP: 保留未完成项的原有顺序。')])
+  it('revalidates and records the memory restored beside the Direct history summary', async () => {
+    const { memoryDependency, assertCurrent } = memoryStore(async () => [memory('m-clear', '[observation] 清理已完成任务 RESTORED_MEMORY: 保留未完成项的原有顺序。')])
     const { service, calls } = harness(answer, true, { memory: memoryDependency })
     const id = await create(service)
     const original = (await store.listWorkbenchConversations(projectId))[0]!
@@ -1350,12 +1350,11 @@ describe('recalled project memory in the discussion bar (ADR 0030)', () => {
     const session = await send(service, id, '清理已完成任务有哪些经验？')
     expect(session.status, session.error).toBe('idle')
     expect(calls).toHaveLength(1)
-    expect(calls[0]).not.toContain('MEMORY_MUST_DROP')
-    expect(JSON.parse(calls[0]!)).not.toHaveProperty('backgroundMemory')
-    expect(session.contextReceipt?.memory).toMatchObject({ state: 'response_received', memories: [], omittedMemoryCount: 1 })
+    expect(calls[0]).toContain('RESTORED_MEMORY')
+    expect(JSON.parse(calls[0]!)).toHaveProperty('rollingSummary')
+    expect(session.contextReceipt?.memory).toMatchObject({ state: 'response_received', memories: [{ id: 'pm-m-clear' }], omittedMemoryCount: 0 })
     expect(session.messages.find((message) => message.provider)?.memoryReceipt).toEqual(session.contextReceipt?.memory)
-    // Nothing attached, so there is nothing to re-check before sending.
-    expect(assertCurrent).not.toHaveBeenCalled()
+    expect(assertCurrent).toHaveBeenCalledWith(expect.objectContaining({ ids: ['pm-m-clear'] }))
   })
 
   it.each(['not_sent', 'possibly_delivered', 'response_received'] as const)('records provider delivery %s without claiming adoption', async (deliveryState) => {
@@ -1803,6 +1802,28 @@ describe('display text and per-turn material versions (FR-13.2, FR-13.6)', () =>
     expect(workflow.materials).toHaveLength(10)
     expect(workflow.materials[0].runId).toBe('material-run-28')
     expect(JSON.stringify(workflow).length).toBeLessThanOrEqual(6000)
+  })
+
+  it('restores memory and preferences that fit after Direct compacts the history, recording only the final prompt', () => {
+    const messages = [{ id: 'old', role: 'user' as const, text: '旧讨论。'.repeat(6000), createdAt: created.run.createdAt },
+      { id: 'now', role: 'user' as const, text: '现在的请求', createdAt: created.run.createdAt }]
+    const session = { id: 's', version: 1, localProjectId: projectId, title: 'Direct', isOpen: true, inputDraft: '',
+      status: 'running' as const, createdAt: created.run.createdAt, updatedAt: created.run.createdAt, messages }
+    const item = { id: 'pm-retry', revision: 1, headVersion: 1, contentDigest: 'digest', statement: '重试上限 30 秒' }
+    const preference = { ...item, id: 'pm-language', statement: '使用英文' }
+    const huge = { ...item, id: 'pm-too-big', statement: '大'.repeat(5000) }
+    const packed = packConversationContext({ session, history: messages, facts: { runs: [], totalRuns: 0, observedAt: session.updatedAt },
+      observations: [], remainingSteps: 3, requirements: [], systemPrompt: 'system', backgroundMemory: [huge, item], communicationPreferences: [preference],
+      provider: { id: 'fake', model: 'fake', resolveRequestPolicy: () => ({ ...resolveRequestPolicy({ model: 'fixture' }),
+        maxInputBytes: 10_000, contextTokens: 50_000 }) } })
+    expect(packed.compaction).toBeDefined()
+    const payload = JSON.parse(packed.prompt)
+    expect(payload.backgroundMemory).toEqual([item])
+    expect(payload.communicationPreferences).toEqual([preference])
+    expect(payload.currentRequest.text).toBe('现在的请求')
+    expect(packed.memories.map(m => m.id).sort()).toEqual(['pm-language', 'pm-retry'])
+    expect(packed.omittedMemoryCount).toBe(1)
+    expect(packed.budget.overflow).toBe(false)
   })
 
   it('removes material versions after every run summary and before shortening the requirements', () => {

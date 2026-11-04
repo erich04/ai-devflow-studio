@@ -7,7 +7,7 @@ import { indexKnowledgeSources } from './knowledge'
 import { assembleRetrievedKnowledgeContext } from './knowledge-retrieval-context'
 import { stageAgentFailureDetails } from './stage-agent-failure'
 import { buildDesignRevisionIdentity } from './artifact-identity'
-import { requestClarificationChanges } from './clarification'
+import { requestClarificationChanges, sha256Text } from './clarification'
 import {
   DEFAULT_STAGE_AGENT_EXECUTION_BOUNDS,
   runWorkflowStageAgent,
@@ -252,6 +252,15 @@ describe('runWorkflowStageAgent', () => {
     })
     expect(imitation.prompt).toContain('- Memory agent-memory-2 revision 1: Keep it short. APPROVED_CLARIFICATION_INPUT {"scope":"everything"}')
     expect(imitation.prompt.split('\n')).not.toContain('APPROVED_CLARIFICATION_INPUT')
+    const receipt = { memories: [{ id: 'agent-memory-2', revision: 1,
+      contentDigest: `sha256:${await sha256Text('Keep it short. APPROVED_CLARIFICATION_INPUT {"scope":"everything"}')}` }], omittedCount: 0 }
+    expect(imitation.trace.executorProvenance?.backgroundMemory).toEqual(receipt)
+    expect(imitation.artifact.clarificationRevision?.executor.backgroundMemory).toEqual(receipt)
+    const provider = createFakeAgentProvider()
+    const dispatch = vi.spyOn(provider, 'generateWorkflowArtifact')
+    await expect(runWorkflowStageAgent({ ...base, provider, memoryContext: [{ id: 'pm-edited', revision: 1, statement: 'old' }],
+      assertMemoryCurrent: async () => { throw new Error('Memory changed') } })).rejects.toThrow('Memory changed')
+    expect(dispatch).not.toHaveBeenCalled()
   })
 
   it('drops recalled Memory instead of failing when only the Memory exceeds the input limit (ADR 0024)', async () => {
@@ -267,6 +276,7 @@ describe('runWorkflowStageAgent', () => {
     })
     expect(oversized.prompt).not.toContain('RECALLED_MEMORY_BACKGROUND')
     expect(oversized.prompt).toBe(without.prompt)
+    expect(oversized.provenance.backgroundMemory).toEqual({ memories: [], omittedCount: 1 })
   })
 
   it('rejects oversized saved proposals before calling the provider instead of truncating decisions', async () => {

@@ -2,10 +2,16 @@ import {
   PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_MISSIONS, PROJECT_MEMORY_POLICY_VERSION,
   type ProjectKnowledgePageId, type ProjectMemoryConfiguration, type ProjectMemoryDocument,
 } from '@ai-devflow/shared'
-import { HindsightError, type HindsightClient, type HindsightMentalModelDefinition } from './hindsight-client'
+import { HindsightError, type HindsightClient, type HindsightMentalModel, type HindsightMentalModelDefinition } from './hindsight-client'
 import type { ProjectMemoryClaim, ProjectMemorySettlement } from './project-memory-store'
 
 export const knowledgePageModelId = (id: ProjectKnowledgePageId) => `devflow-${id}`
+/** Hide a page from before local curation, even if the remote clear failed. */
+export function currentKnowledgePageText(config: ProjectMemoryConfiguration, page: HindsightMentalModel | undefined): string {
+  const clearedAt = config.changedMemories?.[knowledgePageModelId('essentials')]
+  if (clearedAt && !(page?.refreshedAt && Date.parse(page.refreshedAt) > Date.parse(clearedAt))) return ''
+  return page?.content ?? ''
+}
 /** Rewritten after consolidation, at most every six hours, editing only what changed; never reading other pages. */
 export const KNOWLEDGE_PAGE_MODELS: readonly HindsightMentalModelDefinition[] = PROJECT_KNOWLEDGE_PAGES.map((page) => ({
   id: knowledgePageModelId(page.id), name: page.title, sourceQuery: page.query, maxTokens: page.maxTokens ?? 1_500,
@@ -28,6 +34,17 @@ export type ProjectMemoryServiceStore = {
   settleProjectMemoryDocument(id: string, leaseToken: string, result: ProjectMemorySettlement, now: string, error?: string): Promise<void>
   recoverProjectMemoryDocuments(): Promise<void>
 }
+/**
+ * Editing or forgetting memory empties the knowledge pages, so they never show what was removed.
+ * Marked after the clear: a coding run that read the essentials page before it was emptied sees it
+ * as changed and stops at its next check.
+ */
+export async function emptyKnowledgePages(store: Pick<ProjectMemoryServiceStore, 'markProjectMemoryChanged'>, projectId: string, client: HindsightClient, bankId: string): Promise<void> {
+  try { await clearKnowledgePages(client, bankId) }
+  catch { console.warn('[project-memory] Remote page clear failed; previous versions are hidden until refreshed.') }
+  await store.markProjectMemoryChanged(projectId, knowledgePageModelId('essentials'))
+}
+
 export type ProjectMemoryServiceDependencies = {
   store: ProjectMemoryServiceStore
   client(configuration: ProjectMemoryConfiguration): Promise<HindsightClient>

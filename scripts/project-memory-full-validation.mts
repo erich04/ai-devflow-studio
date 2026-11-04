@@ -38,7 +38,7 @@ import {
 } from '../apps/desktop/electron/project-memory-capture.js'
 import { COMMIT_MEMORY_DAYS, COMMIT_MEMORY_SETTLE_MS, buildCommitMemoryDocuments, captureCommitProjectMemory, readRecentCommits } from '../apps/desktop/electron/project-memory-commits.js'
 import { createProjectMemoryRecall, type ProjectMemoryRecallItem } from '../apps/desktop/electron/project-memory-recall.js'
-import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from '../apps/desktop/electron/project-memory-service.js'
+import { currentKnowledgePageText, emptyKnowledgePages, knowledgePageModelId, ProjectMemoryService } from '../apps/desktop/electron/project-memory-service.js'
 import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.js'
 import { WorkbenchConversationService } from '../apps/desktop/electron/workbench-conversation-service.js'
 import type { WorkbenchConversation } from '../apps/desktop/electron/workbench-conversation-contract.js'
@@ -386,6 +386,8 @@ async function seedPhase() {
     longSegments.every((segment) => bytes(segment.payload) <= PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 2_048) &&
     longSegments[0]!.payload.includes(MARKERS.oldestLongChat) && longSegments.at(-1)!.payload.includes(MARKERS.newestLongChat) && kept === data.longConversation.messages.length,
   { segments: longSegments.length, payloadBytes: longSegments.map((segment) => bytes(segment.payload)), sourceBytes: bytes(JSON.stringify(data.longConversation.messages)), keptMessages: kept, totalMessages: data.longConversation.messages.length })
+  check('numbered performance samples are filtered without losing the final decision', longSegments.every((segment) => !segment.payload.includes('平均帧率')) &&
+    longSegments.some((segment) => segment.payload.includes('行高固定 44px')))
   const longRun = built.find((item) => item.label === 'cr-long-activity')!.input
   check('long coding run keeps its latest activity and marks the omission', longRun.payload.includes('[earlier activity omitted]') &&
     longRun.payload.includes(MARKERS.lateEvent) && !longRun.payload.includes(MARKERS.earlyEvent) && bytes(longRun.payload) <= PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 1_024,
@@ -814,15 +816,8 @@ async function agentsPhase() {
       { limit, turns: result.turns.map(({ answer, ...rest }) => ({ ...rest, answer: answer.slice(0, 80) })) })
       if (firstCompaction >= 0) {
         const turn = result.turns[firstCompaction]!
-        if (native) {
-          // ADR 0028: a compacted native request reloads the current request, project facts and valid memory.
-          // That memory goes first under pressure is shown by the memory-dropped scenario above.
-          check('native: after compaction, memory that fits is sent again (ADR 0028)', turn.memoriesSent > 0, { memoriesSent: turn.memoriesSent, budgetBytes: turn.budgetBytes, limit })
-        } else {
-          // ADR 0024 §6: the discussion bar leaves this step's memory out before it compacts history.
-          check('structured: memory is left out before history is compacted', turn.omittedMemory > 0 && turn.memoriesSent === 0,
-            { memoriesSent: turn.memoriesSent, omitted: turn.omittedMemory })
-        }
+        check(`${native ? 'native' : 'structured'}: memory fits beside the compacted history and was sent`, turn.memoriesSent > 0,
+          { memoriesSent: turn.memoriesSent, omitted: turn.omittedMemory, budgetBytes: turn.budgetBytes, limit })
       }
     })
   }
@@ -850,7 +845,7 @@ async function reviewPhase() {
     for (const event of created.events) await store.saveEvent(event)
     const node = created.run.nodes.find((item) => item.id === created.run.currentNodeId)!
     const stageMemory = await recallScopedMemory({ store, projectId, userId: owner(), runtimeId: `agent-runtime-stage-${suffix}`, requestId: `stage-memory-${suffix}`,
-      query: [created.run.request, node.title, node.subtitle].join('\n'), now: now(), budget: STAGE_AGENT_MEMORY_RECALL_BUDGET })
+      query: [created.run.request, node.title, node.subtitle].join('\n'), now: now(), budget: STAGE_AGENT_MEMORY_RECALL_BUDGET, includeCompactConventions: true })
     const generate = () => runWorkflowStageAgent({ run: created.run, node, artifacts: created.artifacts, provider, requestedBy: owner(), runtime: 'electron',
       ...(stageMemory.context.length ? { memoryContext: stageMemory.context } : {}) })
     // A retryable model failure is offered to the user as a retry; take up to two, as a user would.
@@ -868,6 +863,9 @@ async function reviewPhase() {
     section('review').stageAgent = { memories: stageMemory.context.map((item) => item.statement), artifactTitle: generated.artifact.title, content: content.slice(0, 3_000) }
     check('stage agent prompt carried the recalled memory', stageMemory.context.length > 0 && generated.prompt.includes('RECALLED_MEMORY_BACKGROUND') &&
       stageMemory.context.every((item) => generated.prompt.includes(item.id)), { memories: stageMemory.context.length })
+    const attachedIds = generated.provenance.backgroundMemory?.memories.map(item => item.id)
+    check('stage receipt identifies exactly the delivered memories, including the compact conventions page', stageMemory.context.length > 0 &&
+      JSON.stringify(attachedIds) === JSON.stringify(stageMemory.context.map(item => item.id)) && attachedIds!.includes('pm-devflow-essentials'))
     observe('stage agent clarification uses remembered decisions (15 s undo, batch undo, ConfirmDialog)', {
       undo15: /15\s*秒|15 seconds|15s/iu.test(content), batch: /最近一次|most recent/iu.test(content), confirm: /确认|ConfirmDialog/iu.test(content) })
     const stored = (await store.getRun(stageRunId))!
@@ -948,46 +946,49 @@ async function lifecyclePhase() {
   const t0 = new Date().toISOString()
   await delay(1_100)
   const lifecycle = section('lifecycle')
-  // Forget one memory the coding run's brief used: its receipt can no longer be resumed.
+  // Hindsight v1 curates raw facts. A brief can contain only observations plus the essentials page.
   await step('forget a memory', async () => {
     const codingRun = state!.codingRunId && state!.codingWorkflowId
       ? (await store.listCodingAgentRuns(state!.codingWorkflowId)).find((item) => item.id === state!.codingRunId) : undefined
     const used = codingRun?.contextReceipt?.memories.map((item) => item.id) ?? []
     const units = await allUnits(bankId)
-    const target = units.find((unit) => used.includes(`pm-${unit.id}`) && unit.fact_type !== 'observation') ?? units.find((unit) => used.includes(`pm-${unit.id}`))
+    const facts = units.filter(unit => unit.fact_type === 'world' || unit.fact_type === 'experience')
+    const sentPage = used.includes('pm-devflow-essentials')
+    const target = facts.find(unit => used.includes(`pm-${unit.id}`)) ??
+      (sentPage ? facts.find(unit => /注释|comments/iu.test(unit.text)) : undefined)
     if (!codingRun || !target) throw new Error('No coding receipt memory to forget')
     const before = await assertCodingContextCurrent({ store, codingRun, now: new Date().toISOString() }).then(() => true, () => false)
     await client.invalidateMemory(bankId, target.id, 'deleted by the user in DevFlow')
     await store.markProjectMemoryChanged(projectId, target.id)
-    await clearKnowledgePages(client, bankId)
+    await emptyKnowledgePages(store, projectId, client, bankId)
     const refused = await assertCodingContextCurrent({ store, codingRun, now: new Date().toISOString() }).then(() => false, (error: unknown) => describe(error).message)
     const stillListed = (await allUnits(bankId)).some((unit) => unit.id === target.id)
     const recalled = (await recallSelection(target.text.slice(0, 200), CODING_MEMORY_RECALL_BUDGET)).items.some((item) => item.id === `pm-${target.id}`)
     lifecycle.forgetMemory = { target: target.text, type: target.fact_type, before, refused, stillListed, recalled }
-    check('forget memory: the coding run that used it can no longer continue', before && typeof refused === 'string', { refused })
+    check('forget fact: a brief containing that fact or the cleared essentials page can no longer continue', before && typeof refused === 'string', { refused })
     check('forget memory: it is no longer listed or recalled', !stillListed && !recalled)
   })
   // Edit: the receipts that sent it become stale and the pages are emptied.
   await step('edit a memory', async () => {
-    const selection = await recallSelection('任务的日期怎么显示？', CODING_MEMORY_RECALL_BUDGET)
-    const target = selection.selected.find((item) => !item.statement.startsWith('[observation]') && /日期|date/iu.test(item.statement)) ??
-      selection.selected.find((item) => /日期|date/iu.test(item.statement))
-    if (!target) throw new Error('No date memory to edit')
-    const hindsightId = target.id.slice(3)
+    // Select the raw fact as the curation UI does. Recall may return only derived observations.
+    const target = (await allUnits(bankId)).find(unit => unit.fact_type === 'world' && /日期|date display/iu.test(unit.text))
+    if (!target) throw new Error('No editable date fact')
+    const hindsightId = target.id
+    const identity = `pm-${hindsightId}`
     const text = '日期显示规则（用户编辑）：7 天以内显示相对时间，超过 7 天显示 YYYY/MM/DD。'
     await client.updateMemory(bankId, hindsightId, text)
     await store.markProjectMemoryChanged(projectId, hindsightId)
-    await clearKnowledgePages(client, bankId)
-    const stale = await recall.assertCurrent({ projectId, userId: owner(), ids: [target.id], recalledAt: t0 }).then(() => false, () => true)
+    await emptyKnowledgePages(store, projectId, client, bankId)
+    const stale = await recall.assertCurrent({ projectId, userId: owner(), ids: [identity], recalledAt: t0 }).then(() => false, () => true)
     await delay(20)
-    const current = await recall.assertCurrent({ projectId, userId: owner(), ids: [target.id], recalledAt: new Date().toISOString() }).then(() => true, () => false)
+    const current = await recall.assertCurrent({ projectId, userId: owner(), ids: [identity], recalledAt: new Date().toISOString() }).then(() => true, () => false)
     const emptied = [...(await pages(bankId)).values()].every((page) => !page.content.trim())
     let edited = false
     for (let attempt = 0; attempt < 12 && !edited; attempt += 1) {
       edited = has((await recallSelection('任务的日期怎么显示？', CODING_MEMORY_RECALL_BUDGET)).selected.map((item) => item.statement), '用户编辑')
       if (!edited) await delay(5_000)
     }
-    lifecycle.edit = { target: target.statement, kind: target.statement.startsWith('[observation]') ? 'observation' : 'fact', stale, current, emptied, edited }
+    lifecycle.edit = { target: target.text, kind: target.fact_type, stale, current, emptied, edited }
     check('edit: earlier receipts become stale, later ones stay valid', stale && current)
     check('edit: knowledge pages are emptied at once', emptied)
     check('edit: recall returns the edited text', edited)
@@ -998,8 +999,16 @@ async function lifecyclePhase() {
     if (!row) throw new Error('No Bluefin document')
     const derived = (await allUnits(bankId)).filter((unit) => unit.text.includes(MARKERS.forgotten))
     await store.forgetProjectMemoryDocument(projectId, row.id)
-    await clearKnowledgePages(client, bankId)
+    await emptyKnowledgePages(store, projectId, client, bankId)
+    const firstEmpty = (await config()).changedMemories?.[knowledgePageModelId('essentials')]
     const result = await runWorker('forget source', async () => (await bankDocuments()).find((item) => item.id === row.id)?.status === 'deleted', 10 * 60_000)
+    // Refresh is asynchronous. Check the worker invalidated the page a second time and no
+    // currently readable page has the forgotten value; a newer clean rewrite is also valid.
+    const afterDelete = await config()
+    const secondEmpty = afterDelete.changedMemories?.[knowledgePageModelId('essentials')]
+    const readable = [...(await pages(bankId)).values()].map(page => currentKnowledgePageText(afterDelete, page)).join('\n')
+    const emptied = Boolean(firstEmpty && secondEmpty && Date.parse(secondEmpty) > Date.parse(firstEmpty)) &&
+      !readable.includes(MARKERS.forgotten) && !/连接池上限|pool limit/iu.test(readable)
     const document = await hindsight<unknown>('GET', `${bankPath(bankId)}/documents/${encodeURIComponent(row.documentId)}`)
     await settleBank(bankId, 10 * 60_000)
     const remaining = (await allUnits(bankId)).filter((unit) => unit.text.includes(MARKERS.forgotten) || /连接池|pool limit/iu.test(unit.text))
@@ -1007,13 +1016,12 @@ async function lifecyclePhase() {
       ...(await recallSelection('项目的内部代号是什么？', CODING_MEMORY_RECALL_BUDGET)).items,
       ...(await recallSelection('生产数据库连接池上限是多少？', CODING_MEMORY_RECALL_BUDGET)).items,
     ].filter((item) => item.statement.includes(MARKERS.forgotten) || /连接池上限|pool limit/iu.test(item.statement))
-    const emptied = [...(await pages(bankId)).values()].every((page) => !page.content.trim())
     lifecycle.forgetSource = { derivedBefore: derived.map((unit) => ({ type: unit.fact_type, text: unit.text })), deleted: result.done, hindsightStatus: document.status,
       remaining: remaining.map((unit) => ({ type: unit.fact_type, text: unit.text, sources: unit.source_memory_ids?.length ?? 0 })), recalled: recalled.map((item) => item.statement) }
     check('forget source: Hindsight deleted the document', result.done && document.status === 404, { status: document.status })
     check('forget source: no fact or observation from it remains', derived.length > 0 && remaining.length === 0, { before: derived.length, remaining: remaining.length })
     check('forget source: recall no longer returns it', recalled.length === 0, { recalled: recalled.length })
-    check('forget source: knowledge pages are emptied again', emptied)
+    check('forget source: worker invalidates the pages and no readable page contains forgotten data', emptied)
   })
   // The worker writes the emptied pages again, from the remaining memory only.
   await step('pages rewritten', async () => {
