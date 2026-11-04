@@ -4,7 +4,8 @@ import type { LocalStore } from './local-store'
 import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { updateNativeCodingSession, type NativeCodingSession, type CodingModelAttempt, type CodingModelRetry, type CodingToolReceipt } from './native-coding-session'
 import { codingContext } from './native-coding-context'
-import { independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, needsIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
+import { fixtureSelectionFromResponse, fixtureChecksFromResponse, independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, needsIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
+import { InvalidFixtureDraft } from './native-coding-fixture-cases'
 import type { IndependentPreflight } from './native-coding-check-preflight'
 import { codingRepairBudget } from './native-coding-repair-budget'
 
@@ -297,7 +298,19 @@ export class NativeCodingLoop {
             if (JSON.stringify(response.assistantMessage.tool_calls) !== JSON.stringify(response.toolCalls)) throw new Error('Mismatched provider tool envelope')
           }
           if (planning) {
-            const plan = independentChecksFromResponse(planning.source, response, this.now())
+            if (planning.phase === 'select') {
+              const selection = fixtureSelectionFromResponse(planning, response)
+              session = await this.change(id, draft => {
+                const attempt = draft.attempts.find(item => item.id === attemptId)!
+                attempt.status = 'completed'; attempt.completedAt = this.now(); if (response.usage) attempt.usage = response.usage
+                if (draft.status !== 'running' || draft.writer?.owner !== this.owner || draft.writer.epoch !== epoch || controller.signal.aborted || draft.pendingInput.length || draft.objectiveVersion !== planning.source.objectiveVersion || independentCheckSourceDigest(draft) !== planning.source.sourceDigest) { attempt.error = 'Fixture selection superseded'; return }
+                draft.independentVerification ??= { plans: [], humanInputs: [] }
+                draft.independentVerification.drafts ??= []
+                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: draft.objectiveVersion, sourceDigest: planning.source.sourceDigest, selection, feedback: 'Public fixtures selected before implementation.' })
+              })
+              continue
+            }
+            const plan = planning.phase === 'cases' ? fixtureChecksFromResponse(planning, response, this.now()) : independentChecksFromResponse(planning.source, response, this.now())
             const preflight = await this.host.preflightIndependentChecks?.(plan, `${session.id}:independent:preflight-${attemptId}`, controller.signal)
             if (plan.adapter && !preflight) throw new Error('Independent framework preflight is required')
             session = await this.change(id, draft => {
@@ -307,8 +320,8 @@ export class NativeCodingLoop {
               draft.independentVerification ??= { plans: [], humanInputs: [] }
               if (preflight && preflight.status !== 'valid') {
                 draft.independentVerification.drafts ??= []
-                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, plan })
-                const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === plan.objectiveVersion && item.sourceDigest === plan.sourceDigest).length
+                draft.independentVerification.drafts.push({ attemptId, objectiveVersion: plan.objectiveVersion, sourceDigest: plan.sourceDigest, feedback: preflight.feedback, preflightStatus: preflight.status, ...(preflight.correctCases ? {correctCases: true} : {}), plan })
+                const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === plan.objectiveVersion && item.sourceDigest === plan.sourceDigest && !item.selection).length
                 if (preflight.status === 'unavailable' || failures >= 3) { draft.status = 'paused'; draft.pauseReason = preflight.status === 'unavailable' ? 'independent_verification_preflight_unavailable' : 'independent_verification_plan_invalid' }
                 return
               }
@@ -374,8 +387,8 @@ export class NativeCodingLoop {
               draft.independentVerification ??= { plans: [], humanInputs: [] }
               draft.independentVerification.drafts ??= []
               draft.independentVerification.drafts.push({ attemptId, objectiveVersion: planning.source.objectiveVersion, sourceDigest: planning.source.sourceDigest,
-                feedback: 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.' })
-              const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === planning.source.objectiveVersion && item.sourceDigest === planning.source.sourceDigest).length
+                feedback: planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs, cover every approved source unit, and return a single well-formed JSON object. No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.' })
+              const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === planning.source.objectiveVersion && item.sourceDigest === planning.source.sourceDigest && !item.selection).length
               if (failures < 3) return
             }
             if (writing && retry) { attempt.retry = retry; return }

@@ -4,9 +4,24 @@ import { codingDigest, snapshotCodingTree, type CodingCandidateWorkspace } from 
 import { codingDependencyPlan, prepareCodingDependencies } from './coding-dependency-preparation'
 import { captureCodingDependencySeed, restoreCodingDependencySeed } from './coding-dependency-seed'
 import type { CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
-import { runIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
+import { runIndependentChecks, type FrozenIndependentChecks, type IndependentCheckResult } from './native-coding-independent-verification'
 
-export type IndependentPreflight = { status: 'valid' | 'invalid' | 'unavailable'; feedback: string }
+export type IndependentPreflight = { status: 'valid' | 'invalid' | 'unavailable'; feedback: string; correctCases?: true }
+
+export function classifyIndependentPreflight(plan: FrozenIndependentChecks, result: IndependentCheckResult, diagnostics: string): IndependentPreflight {
+  if (result.status === 'timed_out' || result.status === 'cancelled') return { status: 'unavailable', feedback: `Independent check preflight ${result.status}; no implementation has started.` }
+  if (result.status === 'invalid') return {
+    status: 'invalid',
+    ...(plan.coverage ? { correctCases: true as const } : {}),
+    feedback: `The checks could not evaluate these criteria: ${(result.invalidCriteria ?? []).join(', ')}. Categories: ${diagnostics}. Fix syntax, imports, fixture setup and assertion presence. For MatchedControlFailed, first make the same arrangement and observations work in the original supported state. For MismatchedInput, update the actual invocation arguments and current fixture state to address the selected subject. A positive async domain refusal must be observed at the operation. Use normal Vitest modules, not a runner or report parser.`,
+  }
+  const mismatched = plan.checks.filter(check => result.failedCriteria.includes(check.criterionId) !== (check.baselineExpectation === 'fail'))
+  if (mismatched.length) return { status: 'invalid', feedback: `Baseline behavior disagrees with the declared expectation for: ${mismatched.map(check => check.criterionId).join(', ')}. Check the fixture and assert the actual required behavior. Do not weaken assertions or change expectations merely to accept the baseline.` }
+  // Paired controls already prove preservation on B. Automatic acceptance of a
+  // change also needs an executable witness for behavior missing from that B.
+  if (plan.coverage && !result.failedCriteria.length) return { status: 'invalid', feedback: 'Every variant already passed on the unchanged baseline. These controls cannot demonstrate the requested change. Start with a successful call to the owning production entry point. Change its input to the specific mode and precondition named in the approved request, then assert the required successful effect. Exercising an existing mode or a refusal alone cannot establish that effect. If the work is purely behavior-preserving, these checks alone cannot establish completion.' }
+  return { status: 'valid', feedback: 'All criteria executed on immutable B with their declared outcomes.' }
+}
 
 /** Execute only against a fresh B copy, before implementation. Never inspect C,
  * reference patches or external acceptance tests when validating a draft. */
@@ -23,13 +38,9 @@ export async function preflightIndependentChecks(input: { plan: FrozenIndependen
     // Publish only the successful B bootstrap, before loading any private test.
     if (prepared.logId) await captureCodingDependencySeed({ workspace, directory, plan: dependencies, preparationLogId: prepared.logId, signal })
     let diagnostics = ''
-    const result = await runIndependentChecks({ plan, runner, directory, profile, operationId: `${input.operationId}:checks`, signal, onDiagnostics: value => { diagnostics = value } })
+    const result = await runIndependentChecks({ plan, baseline: workspace, runner, directory, profile, operationId: `${input.operationId}:checks`, signal, onDiagnostics: value => { diagnostics = value } })
     if ((await snapshotCodingTree(directory, base.excludedPaths)).digest !== base.digest) return { status: 'invalid', feedback: 'The generated checks modified existing baseline files. Only host-owned scratch test files are allowed.' }
-    if (result.status === 'timed_out' || result.status === 'cancelled') return { status: 'unavailable', feedback: `Independent check preflight ${result.status}; no implementation has started.` }
-    if (result.status === 'invalid') return { status: 'invalid', feedback: `The checks could not evaluate these criteria: ${(result.invalidCriteria ?? []).join(', ')}. Categories: ${diagnostics}. Fix syntax, imports, fixture setup and assertion presence. Use normal Vitest modules, not a runner or report parser.` }
-    const mismatched = plan.checks.filter(check => result.failedCriteria.includes(check.criterionId) !== (check.baselineExpectation === 'fail'))
-    return mismatched.length ? { status: 'invalid', feedback: `Baseline behavior disagrees with the declared expectation for: ${mismatched.map(check => check.criterionId).join(', ')}. Check the fixture and assert the actual required behavior. Do not weaken assertions or change expectations merely to accept the baseline.` }
-      : { status: 'valid', feedback: 'All criteria ran on immutable B with their declared behavior. This establishes executability and baseline discrimination, not semantic completeness.' }
+    return classifyIndependentPreflight(plan, result, diagnostics)
   } catch (error) {
     signal.throwIfAborted()
     return { status: 'unavailable', feedback: 'Independent preflight could not prepare or execute its isolated baseline. Inspect private host command receipts; do not charge this as an implementation repair.' }

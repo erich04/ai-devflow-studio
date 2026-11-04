@@ -491,7 +491,7 @@ function createHarnessService(host: HarnessHost): Harness {
             if (tested.status === 'passed' && session.binding!.independentVerificationRequired) {
               const plan = currentIndependentChecks(session)
               if (!plan || plan.baselineDigest !== revision.base.digest || session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, independentChecks: plan.digest }))) throw new Error('Frozen independent acceptance changed')
-              const independentVerification = await runIndependentChecks({ plan, runner: core.commands, directory, profile: session.binding!.profile, operationId: `${session.id}:independent:${command.commandId}`, signal: verificationController.signal })
+              const independentVerification = await runIndependentChecks({ plan, baseline: core.workspace, runner: core.commands, directory, profile: session.binding!.profile, operationId: `${session.id}:independent:${command.commandId}`, signal: verificationController.signal })
               return { exitCode: independentVerification.status === 'passed' ? 0 : 1, status: independentVerification.status === 'invalid' ? 'failed' : independentVerification.status, logId, independentVerification }
             }
             return { exitCode: tested.exitCode, status: tested.status === 'passed' ? 'passed' : tested.status === 'timed_out' ? 'timed_out' : tested.status === 'cancelled' ? 'cancelled' : 'failed', logId }
@@ -536,7 +536,7 @@ function createHarnessService(host: HarnessHost): Harness {
       session.binding.input = await inspectCodingInput(context.workspace.worktreePath, context.workspace.baseCommitSha)
       session.binding.testInputPolicyVersion = 1
       session.binding.independentVerificationRequired = true
-      session.binding.independentVerificationVersion = 2
+      session.binding.independentVerificationVersion = 3
       session.independentVerification = { plans: [], humanInputs: [] }
       session.acceptance = context.upstreamArtifacts.flatMap(artifact => artifact.clarificationRevision?.status === 'approved' ? artifact.clarificationRevision.acceptanceCriteria.map((text, index) => ({ id: `criterion-${codingDigest(`${artifact.id}:${index}:${text}`)}`, objectiveVersion: 1, sourceRef: `${artifact.id}@${artifact.clarificationRevision!.revisionDigest}`, text, confirmation: 'approved_source' as const, resolution: 'unresolved' as const })) : [])
       if (session.acceptance.length > 100) throw new Error('More than 100 confirmed acceptance criteria; split the approved workflow scope first')

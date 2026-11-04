@@ -6,6 +6,8 @@ import { redactSensitiveText, type NativeConversationRequest, type NativeConvers
 import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import type { CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import type { NativeCodingSession } from './native-coding-session'
+import { fixturePlanning, type AcceptancePlanning } from './native-coding-fixture-planning'
+import { InvalidFixtureDraft, bindFixtureCases, bindFixtureContrast, requireNamedFixtureSubjects, varyPublicFixture, readFixtureSelection, validSelectionRecord, validateCoverageBinding, type FixtureBinding, type FixtureSelection, type CoverageRecord } from './native-coding-fixture-cases'
 
 export type IndependentCheckSource = {
   objectiveVersion: number; baselineDigest: string; sourceDigest: string
@@ -13,7 +15,7 @@ export type IndependentCheckSource = {
   adapter?: { kind: 'vitest'; directory: string; extension?: 'ts' | 'tsx' }
 }
 export type FrozenIndependentChecks = IndependentCheckSource & {
-  checks: Array<{ criterionId: string; body: string; baselineExpectation?: 'pass' | 'fail' }>; createdAt: string; digest: string
+  checks: Array<{ criterionId: string; body: string; baselineExpectation?: 'pass' | 'fail'; fixture?: FixtureBinding }>; coverage?: CoverageRecord; createdAt: string; digest: string
 }
 export type IndependentCheckResult = {
   planDigest: string; status: 'passed' | 'failed' | 'invalid' | 'timed_out' | 'cancelled'
@@ -24,7 +26,7 @@ export type IndependentCheckResult = {
 export type IndependentVerificationState = {
   plans: FrozenIndependentChecks[]
   humanInputs: Array<{ id: string; text: string; objectiveVersion: number }>
-  drafts?: Array<{ attemptId: string; objectiveVersion: number; sourceDigest: string; feedback: string; preflightStatus?: 'valid' | 'invalid' | 'unavailable'; plan?: FrozenIndependentChecks }>
+  drafts?: Array<{ attemptId: string; objectiveVersion: number; sourceDigest: string; feedback: string; preflightStatus?: 'valid' | 'invalid' | 'unavailable'; correctCases?: true; plan?: FrozenIndependentChecks; selection?: FixtureSelection }>
 }
 const digestPattern = /^[a-f0-9]{64}$/u
 const identifier = /^[a-zA-Z0-9_.:-]{1,200}$/u
@@ -36,22 +38,28 @@ function checkedSource(source: IndependentCheckSource): void {
       source.criteria.some(item => !identifier.test(item.id) || typeof item.text !== 'string' || !item.text.trim() || item.text.length > 32000 || typeof item.sourceRef !== 'string' || !item.sourceRef)) throw new Error('Invalid independent acceptance criteria')
   if (source.adapter && (source.adapter.kind !== 'vitest' || !exactKeys(source.adapter, ['kind', 'directory', ...(source.adapter.extension ? ['extension'] : [])]) || source.adapter.extension !== undefined && !['ts', 'tsx'].includes(source.adapter.extension) || !/^(?:\.|[a-zA-Z0-9_@.-]+(?:\/[a-zA-Z0-9_@.-]+)*)$/u.test(source.adapter.directory) || source.adapter.directory.split('/').includes('..'))) throw new Error('Invalid independent test adapter')
 }
-export function freezeIndependentChecks(source: IndependentCheckSource, value: unknown, createdAt: string): FrozenIndependentChecks {
+export function freezeIndependentChecks(source: IndependentCheckSource, value: unknown, createdAt: string, coverage?: CoverageRecord): FrozenIndependentChecks {
   checkedSource(source)
   if (!value || typeof value !== 'object' || !exactKeys(value, ['checks']) || !Number.isFinite(Date.parse(createdAt))) throw new Error('Invalid independent check plan')
   const checks = (value as { checks?: unknown }).checks
   if (!Array.isArray(checks) || checks.length !== source.criteria.length || new Set(checks.map(item => item?.criterionId)).size !== checks.length ||
-      checks.some(item => !item || typeof item !== 'object' || !exactKeys(item, source.adapter ? ['criterionId', 'body', 'baselineExpectation'] : ['criterionId', 'body']) || !source.criteria.some(criterion => criterion.id === item.criterionId) || source.adapter && !['pass', 'fail'].includes(item.baselineExpectation))) throw new Error('Independent checks must cover exactly the approved criteria')
+      checks.some(item => !item || typeof item !== 'object' || !exactKeys(item, source.adapter ? ['criterionId', 'body', 'baselineExpectation', ...(coverage ? ['fixture'] : [])] : ['criterionId', 'body']) || !source.criteria.some(criterion => criterion.id === item.criterionId) || source.adapter && !['pass', 'fail'].includes(item.baselineExpectation))) throw new Error('Independent checks must cover exactly the approved criteria')
   if (checks.some(item => typeof item.body !== 'string' || !item.body.trim() || item.body.includes('\0') || item.body.length > 64000) || JSON.stringify(checks).length > 128000) throw new Error('Invalid independent check program')
+  if (coverage) {
+    if (!source.adapter) throw new Error('Fixture cases require a framework adapter')
+    checkedSource({ ...source, criteria: coverage.sources })
+    validateCoverageBinding(source.criteria, checks, coverage)
+    for (const check of checks) bindFixtureContrast(check.fixture?.contrast, check.body)
+  }
   const body = { objectiveVersion: source.objectiveVersion, baselineDigest: source.baselineDigest, sourceDigest: source.sourceDigest, criteria: source.criteria,
-    ...(source.adapter ? { adapter: source.adapter } : {}), checks: checks as FrozenIndependentChecks['checks'], createdAt }
+    ...(source.adapter ? { adapter: source.adapter } : {}), checks: checks as FrozenIndependentChecks['checks'], ...(coverage ? { coverage } : {}), createdAt }
   return { ...body, digest: codingDigest(JSON.stringify(body)) }
 }
 export function validateFrozenIndependentChecks(value: FrozenIndependentChecks): FrozenIndependentChecks {
-  if (!value || typeof value !== 'object' || !exactKeys(value, ['objectiveVersion', 'baselineDigest', 'sourceDigest', 'criteria', ...(value.adapter ? ['adapter'] : []), 'checks', 'createdAt', 'digest'])) throw new Error('Invalid frozen independent checks')
+  if (!value || typeof value !== 'object' || !exactKeys(value, ['objectiveVersion', 'baselineDigest', 'sourceDigest', 'criteria', ...(value.adapter ? ['adapter'] : []), 'checks', ...(value.coverage ? ['coverage'] : []), 'createdAt', 'digest'])) throw new Error('Invalid frozen independent checks')
   const { digest, ...body } = value
   if (!digestPattern.test(digest) || codingDigest(JSON.stringify(body)) !== digest) throw new Error('Independent check digest changed')
-  freezeIndependentChecks(value, { checks: value.checks }, value.createdAt)
+  freezeIndependentChecks(value, { checks: value.checks }, value.createdAt, value.coverage)
   return value
 }
 export function validateIndependentVerification(state: IndependentVerificationState, previous?: IndependentVerificationState): void {
@@ -61,6 +69,8 @@ export function validateIndependentVerification(state: IndependentVerificationSt
   if (previous && (!isDeepStrictEqual(state.plans.slice(0, previous.plans.length), previous.plans) || !isDeepStrictEqual(state.humanInputs.slice(0, previous.humanInputs.length), previous.humanInputs))) throw new Error('Frozen independent verification is append-only')
   if (state.drafts && (!Array.isArray(state.drafts) || new Set(state.drafts.map(item => item.attemptId)).size !== state.drafts.length || state.drafts.some(item => !identifier.test(item.attemptId) || !Number.isSafeInteger(item.objectiveVersion) || item.objectiveVersion < 1 || !digestPattern.test(item.sourceDigest) || typeof item.feedback !== 'string' || item.feedback.length > 8000))) throw new Error('Invalid independent check drafts')
   for (const draft of state.drafts ?? []) {
+    if (draft.correctCases !== undefined && (draft.correctCases !== true || draft.preflightStatus !== 'invalid' || !draft.plan?.coverage)) throw new Error('Invalid independent fixture correction')
+    if (draft.selection && (!validSelectionRecord(draft.selection) || draft.plan || draft.preflightStatus)) throw new Error('Invalid independent fixture selection')
     if (draft.preflightStatus !== undefined && !['valid', 'invalid', 'unavailable'].includes(draft.preflightStatus)) throw new Error('Invalid independent preflight receipt')
     if (draft.plan) {
       validateFrozenIndependentChecks(draft.plan)
@@ -92,7 +102,7 @@ function independentCriteria(session: NativeCodingSession): IndependentCheckSour
 export function independentCheckSourceDigest(session: NativeCodingSession): string {
   return codingDigest(JSON.stringify({ objective: session.objective, contextDigest: session.binding!.request.contextDigest, criteria: independentCriteria(session) }))
 }
-export async function independentCheckRequest(session: NativeCodingSession, workspace: CodingCandidateWorkspace): Promise<{ source: IndependentCheckSource; request: Pick<NativeConversationRequest, 'systemPrompt' | 'messages' | 'tools'> }> {
+export async function independentCheckRequest(session: NativeCodingSession, workspace: CodingCandidateWorkspace): Promise<AcceptancePlanning> {
   const binding = session.binding!, criteria = independentCriteria(session)
   const source: IndependentCheckSource = { objectiveVersion: session.objectiveVersion, baselineDigest: workspace.identity.base.digest,
     sourceDigest: independentCheckSourceDigest(session), criteria }
@@ -106,12 +116,16 @@ export async function independentCheckRequest(session: NativeCodingSession, work
   // budget with unrelated suites before the author ever sees the target code.
   const mentioned = [...binding.context.project.testCommand.matchAll(/[A-Za-z0-9_./-]+\.(?:[cm]?[jt]sx?)/gu)].map(match => match[0].replace(/^(?:\.\/)+/u, '')).filter(file => available.has(file))
   const packageFile = workspace.identity.base.files.find(file => file.path === 'package.json')
-  if (binding.independentVerificationVersion === 2 && packageFile && /\bvitest\b/u.test(binding.context.project.testCommand)) {
+  if (binding.independentVerificationVersion !== undefined && packageFile && /\bvitest\b/u.test(binding.context.project.testCommand)) {
     const manifest = JSON.parse((await workspace.blob(packageFile.hash)).toString('utf8')) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> }
     const target = mentioned.find(file => /\.(?:test|spec)\.tsx?$/u.test(file))
     if (target && (manifest.dependencies?.vitest || manifest.devDependencies?.vitest)) source.adapter = { kind: 'vitest', directory: path.posix.dirname(target), extension: mentioned.some(file => file.endsWith('.test.tsx') || file.endsWith('.spec.tsx')) ? 'tsx' : 'ts' }
   }
   checkedSource(source)
+  if (binding.independentVerificationVersion === 3 && source.adapter) {
+    const planning = await fixturePlanning(source, workspace, mentioned, session.independentVerification)
+    if (planning) return planning
+  }
   const focused = [...new Set([...mentioned.flatMap(file => [file.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1'), file]), ...workspace.identity.base.files.filter(file => session.objective.includes(file.path)).map(file => file.path)])].filter(file => available.has(file))
   const metadata = new Set(['package.json', 'pnpm-workspace.yaml', 'vitest.config.ts', 'tsconfig.json', 'tsconfig.base.json'])
   for (const file of focused) {
@@ -150,6 +164,31 @@ export async function independentCheckRequest(session: NativeCodingSession, work
     tools: [tool],
   } }
 }
+function planToolValue(response: NativeConversationResponse, tool: string): unknown {
+  if (response.kind !== 'tools' || response.toolCalls.length !== 1 || response.toolCalls[0]!.function.name !== tool) throw new Error('independent_verification_plan_invalid')
+  return JSON.parse(response.toolCalls[0]!.function.arguments)
+}
+export function fixtureSelectionFromResponse(planning: AcceptancePlanning, response: NativeConversationResponse) {
+  return readFixtureSelection(planning.source.criteria, planning.fixtures!, planToolValue(response, 'select_behavior_contract'))
+}
+export function fixtureChecksFromResponse(planning: AcceptancePlanning, response: NativeConversationResponse, now: string) {
+  const draft = planToolValue(response, 'submit_fixture_cases') as {cases?: Array<{scenario: string; edits: unknown; baseline: string; contrast?: unknown}>} | null
+  const selection = planning.selection!
+  if (!draft || !Array.isArray(draft.cases) || draft.cases.length !== selection.scenarios.length || new Set(draft.cases.map(c=>c?.scenario)).size !== draft.cases.length) throw new InvalidFixtureDraft('Incomplete fixture cases')
+  const cases = selection.scenarios.map((scenario, i) => {
+    const reply = draft.cases!.find(c => c.scenario === `s${i + 1}`)
+    if (!reply) throw new InvalidFixtureDraft('Missing selected scenario')
+    const fixture = planning.fixtures![Number(scenario.fixture.slice(1)) - 1]
+    const control = fixture?.anchors.find(a => a.id === scenario.anchor)?.control
+    if (control === undefined) throw new InvalidFixtureDraft('Missing public control')
+    const body = varyPublicFixture(control, reply.edits)
+    const contrast = bindFixtureContrast(reply.contrast, body, planning.namedInputs ?? [], planning.inputExamples)
+    return { ...scenario, body, baseline: reply.baseline, contrast }
+  })
+  requireNamedFixtureSubjects(planning.requiredSubjects ?? [], cases)
+  const bound = bindFixtureCases(planning.source.criteria, planning.fixtures!, {cases, contextOnly:selection.contextOnly})
+  return freezeIndependentChecks({...planning.source, criteria:bound.criteria}, {checks:bound.checks}, now, bound.coverage)
+}
 export function independentChecksFromResponse(source: IndependentCheckSource, response: NativeConversationResponse, now: string): FrozenIndependentChecks {
   try {
     if (response.kind !== 'tools' || response.toolCalls.length !== 1 || response.toolCalls[0]!.function.name !== 'submit_independent_checks') throw new Error()
@@ -173,7 +212,7 @@ export function independentCheckResult(plan: FrozenIndependentChecks, nonce: str
       checkedCriteria: rows.filter(row => row.assertions > 0 && !row.invalid).map(row => row.id), failedCriteria: failed, invalidCriteria: invalid }
   } catch { return fallback }
 }
-export async function runIndependentChecks(input: { plan: FrozenIndependentChecks; runner: CodingCommandRunner; directory: string; profile: CodingExecutionProfile; operationId: string; signal?: AbortSignal; onDiagnostics?(value: string): void }): Promise<IndependentCheckResult> {
+export async function runIndependentChecks(input: { plan: FrozenIndependentChecks; baseline?: CodingCandidateWorkspace; runner: CodingCommandRunner; directory: string; profile: CodingExecutionProfile; operationId: string; signal?: AbortSignal; onDiagnostics?(value: string): void }): Promise<IndependentCheckResult> {
   const plan = validateFrozenIndependentChecks(input.plan), nonce = randomUUID()
   if (plan.adapter) return (await import('./native-coding-vitest-checks')).runVitestIndependentChecks({ ...input, plan })
   const fileName = `.devflow-independent-${codingDigest(input.operationId)}.mjs`, file = path.join(input.directory, fileName)
