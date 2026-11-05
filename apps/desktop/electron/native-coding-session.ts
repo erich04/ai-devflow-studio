@@ -9,6 +9,7 @@ import type { CodingDependencyPlan } from './coding-dependency-preparation'
 import type { CodingOperationPermission } from './native-coding-permissions'
 import type { CodingCompaction } from './native-coding-context'
 import { validateIndependentVerification, type IndependentVerificationState } from './native-coding-independent-verification'
+import { validateApprovedCodingTests, type ApprovedCodingVerification } from './native-coding-approved-verification'
 
 export type NativeCodingStatus = 'ready' | 'running' | 'waiting_input' | 'waiting_task' | 'waiting_permission' | 'review' | 'paused' | 'reconciling' | 'applying' | 'verifying' | 'completed' | 'cancelled' | 'failed' | 'delivery_conflict'
 export type NativeCodingQuestion = { id: string; toolCallId: string; text: string; options: string[]; objectiveVersion: number }
@@ -71,6 +72,7 @@ export type NativeCodingSession = {
     independentVerificationVersion?: 2 | 3 | 4
     dependencyCacheVersion?: 1
     testInputPolicyVersion?: 1
+    approvedVerification?: ApprovedCodingVerification
   }
   deliveryEvidence: CodingDeliveryEvidence[]
   revisions: CodingRevision[]
@@ -137,6 +139,14 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
   if (session.rootStepAttempts && (new Set(session.rootStepAttempts).size !== session.rootStepAttempts.length || !session.rootStepAttempts.every(identifier))) throw new Error('Invalid root step reservations')
   const digest = (item: unknown) => typeof item === 'string' && /^[a-f0-9]{64}$/u.test(item)
   const natural = (item: unknown) => Number.isSafeInteger(item) && Number(item) >= 0
+  if (session.binding?.approvedVerification) {
+    const approved = session.binding.approvedVerification
+    validateApprovedCodingTests(approved.tests)
+    if (Object.keys(approved).length !== 4 || !natural(approved.objectiveVersion) || approved.objectiveVersion < 1 ||
+        approved.objectiveVersion > session.objectiveVersion || !digest(approved.sourceDigest) ||
+        !digest(approved.baselineDigest) || approved.baselineDigest !== session.binding.input?.digest || session.binding.manualValidationPlan)
+      throw new Error('Invalid approved verification binding')
+  }
   if (session.acceptanceWorkers !== undefined && (!Array.isArray(session.acceptanceWorkers) || session.acceptanceWorkers.length > 10000 ||
       new Set(session.acceptanceWorkers.map(worker => worker?.sessionId)).size !== session.acceptanceWorkers.length ||
       session.acceptanceWorkers.some(worker => !worker || !identifier(worker.sessionId) || worker.sessionId === session.id ||
@@ -177,6 +187,7 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
     parseCodingCommandRules(policy.rules)
   }
   if (previous) {
+    if (!isDeepStrictEqual(previous.binding?.approvedVerification, session.binding?.approvedVerification)) throw new Error('Approved verification is immutable')
     if (!isDeepStrictEqual(previous.privateAcceptanceFor, session.privateAcceptanceFor)) throw new Error('Private acceptance ownership is immutable')
     if (previous.acceptanceWorkers && !isDeepStrictEqual(session.acceptanceWorkers?.slice(0, previous.acceptanceWorkers.length), previous.acceptanceWorkers))
       throw new Error('Private acceptance worker history is append-only')

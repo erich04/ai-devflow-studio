@@ -6,6 +6,7 @@ import { createLocalStore } from '../apps/desktop/electron/local-store.ts'
 import { createCodingRuntime } from '../apps/desktop/electron/coding-runtime.ts'
 import { createNativeCodingExecutorV2, createAgentProviderNativeCodingV2DecisionProvider } from '../apps/desktop/electron/native-coding-executor-v2.ts'
 import { createNativeCodingExecutorV3 } from '../apps/desktop/electron/native-coding-harness.ts'
+import type { ApprovedCodingTests } from '../apps/desktop/electron/native-coding-approved-verification.ts'
 import { createOpencodeHttpCodingEngineAdapter } from '../apps/desktop/electron/opencode-http-engine.ts'
 import { createOpencodeProcessManager } from '../apps/desktop/electron/opencode-process.ts'
 import { buildOpencodeRuntimeEnv } from '../apps/desktop/electron/coding-engine.ts'
@@ -18,7 +19,7 @@ import { historicalPrefixSystem, legacyPrefixRequest } from './native-coding-cac
 import { handleEvaluationChildControls, evaluationPermissionDecision, type EvaluationTestInputPolicy } from './native-coding-live-operator.ts'
 import { parseCodingCommandRules, type CodingCommandRule, type CodingPermissionMode } from '../packages/shared/src/index.ts'
 
-export type TrialInput = { requestLayout?: 'legacy' | 'fixed'; id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; testInputPolicy?: EvaluationTestInputPolicy; roundRoot?: string; scopeId?: string; execution?: { profile: 'os_sandbox'; network: 'none' | 'enabled'; permissionMode: CodingPermissionMode; commandRules: CodingCommandRule[] } }
+export type TrialInput = { requestLayout?: 'legacy' | 'fixed'; id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; testInputPolicy?: EvaluationTestInputPolicy; approvedTests?: ApprovedCodingTests; roundRoot?: string; scopeId?: string; execution?: { profile: 'os_sandbox'; network: 'none' | 'enabled'; permissionMode: CodingPermissionMode; commandRules: CodingCommandRule[] } }
 export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const start = Date.now(), now = () => new Date().toISOString(), projectId = 'evaluation-project', providerId = 'deepseek-evaluation'
   const ledger = await createEvaluationLedger({ file: path.join(input.output, 'ledger.json'), projectId, maxCalls: input.maxCalls, maxCostUsd: input.maxCostUsd,
@@ -67,7 +68,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const manager = createOpencodeProcessManager()
   let engine: ReturnType<typeof createOpencodeHttpCodingEngineAdapter> | undefined
   let executor: ReturnType<typeof createNativeCodingExecutorV2> | ReturnType<typeof createNativeCodingExecutorV3> | undefined
-  if (input.engine === 'native-v3') executor = native = createNativeCodingExecutorV3({ store, provider, root: path.join(input.output, 'harness'), configVersion: 1, ...(input.execution ? { commandRules: parseCodingCommandRules(input.execution.commandRules) } : {}) })
+  if (input.engine === 'native-v3') executor = native = createNativeCodingExecutorV3({ store, provider, root: path.join(input.output, 'harness'), configVersion: 1, ...(input.approvedTests ? { approvedTests: input.approvedTests } : {}), ...(input.execution ? { commandRules: parseCodingCommandRules(input.execution.commandRules) } : {}) })
   else if (input.engine === 'native-v2') executor = createNativeCodingExecutorV2({ store, decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(provider), configVersion: 1, runSavedTest: runBoundedTest, testTimeoutMs: 300000 })
   else {
     relay = await createGovernedOpencodeProxy({ binding: { providerId, modelId: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey, fingerprint: digest('frozen-deepseek-flash-high') }, projectId, governance: ledger, maxOutputTokens: input.maxOutputTokens,

@@ -5,7 +5,7 @@ import type { LocalStore } from './local-store'
 import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { updateNativeCodingSession, type NativeCodingSession, type CodingModelAttempt, type CodingModelRetry, type CodingToolReceipt } from './native-coding-session'
 import { codingContext } from './native-coding-context'
-import { fixtureSelectionFromResponse, fixtureChecksFromResponse, independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, currentIndependentChecks, needsIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
+import { fixtureSelectionFromResponse, fixtureChecksFromResponse, independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, currentIndependentChecks, currentApprovedVerification, needsIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
 import { NoFixtureChangeWitness, FixtureCaseCorrection, InvalidFixtureDraft } from './native-coding-fixture-cases'
 import type { IndependentPreflight } from './native-coding-check-preflight'
 import { codingRepairBudget } from './native-coding-repair-budget'
@@ -245,6 +245,8 @@ export class NativeCodingLoop {
             draft.transcript.push({ role: 'user', content: noProgressNotice(draft.limits.noProgressLimit) }); draft.progressNudge.delivered = true
           }
         })
+        if (session.binding?.approvedVerification && !currentApprovedVerification(session))
+          return await this.change(id, draft => { draft.status = 'paused'; draft.pauseReason = 'approved_acceptance_source_changed' })
         if (this.host.stopAfterIndependentChecks && !needsIndependentChecks(session)) {
           if (!currentIndependentChecks(session)) throw new Error('Private acceptance worker has no frozen plan')
           return await this.change(id, draft => { draft.status = 'completed' })
@@ -283,9 +285,12 @@ export class NativeCodingLoop {
         const acceptanceSchedule = !session.parent && session.binding?.independentVerificationRequired ? codingRepairBudget(session.limits, usedSteps, elapsed, failedRevisions, {
           ...(wallClock ? { wallRemaining: wallClock.remainingMilliseconds } : {}), ...(lastVerificationMs ? { lastVerificationMs } : {}),
         }) : undefined
+        const approved = currentApprovedVerification(session)
         const runtimeState = { steps: { usedBeforeThisCall: usedSteps, remainingIncludingThisCall: Math.max(0, session.limits.maxSteps - usedSteps), maximum: session.limits.maxSteps },
           activeMilliseconds: { usedBeforeThisCall: elapsed, remaining: Math.max(0, session.limits.maxActiveMilliseconds - elapsed) },
-          ...(wallClock ? { wallClock } : {}), ...(acceptanceSchedule ? { acceptanceSchedule } : {}),
+          ...(wallClock ? { wallClock } : {}), ...(acceptanceSchedule ? { acceptanceSchedule: { ...acceptanceSchedule, ...(approved ? { repairRoundsRemaining: null } : {}) } } : {}),
+          ...(approved ? { approvedAcceptance: { sourceRef: approved.tests.sourceRef, testFiles: approved.tests.files.map(file => file.path), expectedTests: approved.tests.expectedTests,
+            instruction: 'The user supplied fixed acceptance tests. Propose an exact revision to receive concrete verification failures, then repair and resubmit within the remaining shared step, time and cost limits. These approved tests determine the requested changed behavior. Preserve existing compatibility and report the observed results.' } } : {}),
           objectiveVersion: session.objectiveVersion, role: session.parent?.mode ?? 'root',
           candidateEditingGranted: Boolean(session.binding?.executionGranted && session.parent?.mode !== 'read_only'),
           ...(session.binding?.testInputPolicyVersion === 1 ? { testInputAuthority: 'Existing baseline tests, fixtures and runner configuration are acceptance inputs. Keep them unchanged and add new tests in new files. A changed existing input needs separate exact-content human authorization before submission; editing code and passing modified tests do not provide that authorization.' } : {}),

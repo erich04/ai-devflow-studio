@@ -4,9 +4,14 @@ import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 // @ts-expect-error Standalone evaluation CLI uses native modules, not a declaration package.
-import { selectR8Tasks, phase2Score, sandboxOracleCommand, validIndependentObservation, phase2TestInputPolicy } from './native-coding-phase2-live.mjs'
+import { selectR8Tasks, phase2Score, sandboxOracleCommand, validIndependentObservation, phase2TestInputPolicy, phase2FeedbackMode } from './native-coding-phase2-live.mjs'
 
 const tasks = Array.from({ length: 10 }, (_, i) => ({ id: `devflow-history-${String(i + 2).padStart(2, '0')}`, testCommand: 'saved baseline suite', acceptanceTests: ['unchanged-private.test.ts'] }))
+it('preserves blind evaluation unless fixed failure feedback is explicitly selected', () => {
+  expect(phase2FeedbackMode(undefined)).toBeUndefined()
+  expect(phase2FeedbackMode('fixed_feedback')).toBe('fixed_feedback')
+  expect(() => phase2FeedbackMode('auto')).toThrow(/explicit fixed-feedback/)
+})
 it('keeps old rounds on rejection and requires the explicit exact-content authorization option', () => {
   expect(phase2TestInputPolicy(undefined)).toBeUndefined()
   expect(phase2TestInputPolicy('approve_exact_content')).toBe('approve_exact_content')

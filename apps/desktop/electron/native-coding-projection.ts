@@ -7,7 +7,7 @@ import { pendingCodingPermission } from './native-coding-permissions'
 import type { CodingExecutionProfile } from './coding-command-runner'
 import { codingRetentionPolicy } from './native-coding-retention'
 import { codingSandboxAvailability } from './coding-os-sandbox'
-import { currentIndependentChecks } from './native-coding-independent-verification'
+import { currentApprovedVerification, currentIndependentChecks } from './native-coding-independent-verification'
 import { codingAcceptanceWorkers } from './native-coding-acceptance-worker'
 
 export function markCodingDeliveryConflict(view: CodingHarnessSnapshot): void {
@@ -27,6 +27,7 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
 }, page?: CodingHarnessPage): Promise<CodingHarnessSnapshot> {
     const binding = session.binding!
     const independentPlan = currentIndependentChecks(session)
+    const approved = currentApprovedVerification(session)
     const objectiveRevisions = new Set(session.revisions.filter(item => item.objectiveVersion === session.objectiveVersion).map(item => item.digest))
     const objectiveEvidence = session.deliveryEvidence.filter(item => objectiveRevisions.has(item.revisionDigest))
     const childSessions = await Promise.all(session.children.map(async child => { const found = await host.store.getNativeCodingSession(child.sessionId); if (!found) throw new Error('Missing delegated session'); return found }))
@@ -47,7 +48,7 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
       ...(binding.manualValidationPlan ? { manualValidationPlan: binding.manualValidationPlan } : {}),
       ...(binding.permissionPolicy ? { permissionPolicy: { mode: binding.permissionPolicy.mode, rules: binding.permissionPolicy.rules, humanPrompts: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source !== 'rule').length, 0), automaticDecisions: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source === 'rule').length, 0) } } : {}),
       ...(binding.independentVerificationRequired && !binding.manualValidationPlan && !session.parent ? { independentVerification: {
-        status: independentPlan ? 'frozen' as const : 'preparing' as const, criteriaCount: independentPlan?.criteria.length ?? session.acceptance.length,
+        status: independentPlan || approved ? 'frozen' as const : 'preparing' as const, criteriaCount: approved?.tests.expectedTests ?? independentPlan?.criteria.length ?? session.acceptance.length,
         repairRounds: Math.min(2, objectiveEvidence.filter(item => item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length),
         ...(objectiveEvidence.at(-1)?.result?.independentVerification ? { lastResult: objectiveEvidence.at(-1)!.result!.independentVerification!.status } : {}),
       } } : {}),

@@ -10,7 +10,7 @@ type Store = Pick<LocalStore, 'getNativeCodingSession' | 'saveNativeCodingSessio
  * without that deadline retain their serial preparation protocol. */
 export function concurrentCodingAcceptance(session: NativeCodingSession): boolean {
   return Boolean(session.operatorDeadlineAt && session.binding?.independentVerificationRequired &&
-    !session.binding.manualValidationPlan && !session.parent && !session.privateAcceptanceFor)
+    !session.binding.approvedVerification && !session.binding.manualValidationPlan && !session.parent && !session.privateAcceptanceFor)
 }
 
 export function codingRootRunId(session: NativeCodingSession): string {

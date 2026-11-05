@@ -29,6 +29,7 @@ export type IndependentCheckResult = {
   checkedCriteria: string[]; failedCriteria: string[]
   invalidCriteria?: string[]
   failedRequirements?: Array<{ id: string; text: string; sourceRef: string }>
+  approvedTests?: { bundleDigest: string; sourceRef: string; revisionDigest: string; expectedTests: number; passedTests: number; totalTests: number; reportDigest: string | null; before: string; after: string; status: 'passed' | 'failed' | 'timed_out' | 'cancelled'; failures: Array<{ file: string; test: string; message: string }> }
 }
 export type IndependentVerificationState = {
   plans: FrozenIndependentChecks[]
@@ -94,8 +95,14 @@ export function validateIndependentVerification(state: IndependentVerificationSt
 export function currentIndependentChecks(session: NativeCodingSession): FrozenIndependentChecks | undefined {
   return session.independentVerification?.plans.find(plan => plan.objectiveVersion === session.objectiveVersion && plan.sourceDigest === independentCheckSourceDigest(session))
 }
+export function currentApprovedVerification(session: NativeCodingSession) {
+  const approved = session.binding?.approvedVerification
+  return approved && approved.objectiveVersion === session.objectiveVersion &&
+    approved.sourceDigest === independentCheckSourceDigest(session) && approved.baselineDigest === session.binding?.input?.digest
+    ? approved : undefined
+}
 export function needsIndependentChecks(session: NativeCodingSession): boolean {
-  return Boolean(session.binding?.independentVerificationRequired && !session.binding.manualValidationPlan && !session.parent && !currentIndependentChecks(session))
+  return Boolean(session.binding?.independentVerificationRequired && !session.binding.approvedVerification && !session.binding.manualValidationPlan && !session.parent && !currentIndependentChecks(session))
 }
 const submitChecks: ReadOnlyFunctionDefinition = { type: 'function', function: {
   name: 'submit_independent_checks', description: 'Freeze executable acceptance checks for every approved criterion, before implementation begins.',

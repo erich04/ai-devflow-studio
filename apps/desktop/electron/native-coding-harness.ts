@@ -23,7 +23,8 @@ import type { NativeCodingProfile } from './native-coding-profile'
 import type { CodingTaskAuthority } from './native-coding-tools'
 import { inspectCodingInput } from './coding-input'
 import { codingSandboxAvailability } from './coding-os-sandbox'
-import { currentIndependentChecks, independentCheckSourceDigest, runIndependentChecks } from './native-coding-independent-verification'
+import { currentApprovedVerification, currentIndependentChecks, independentCheckSourceDigest, runIndependentChecks } from './native-coding-independent-verification'
+import { approvedCodingTestCommand, runApprovedCodingVerification, validateApprovedCodingTests, type ApprovedCodingTests } from './native-coding-approved-verification'
 import { codingAcceptanceWorkers, codingRootRunId, concurrentCodingAcceptance, mergeCodingAcceptancePlan, prepareCodingAcceptanceWorker } from './native-coding-acceptance-worker'
 import { preflightIndependentChecks, prepareIndependentDependencies } from './native-coding-check-preflight'
 import { codingDependencySeedPublished, restoreCodingDependencySeed } from './coding-dependency-seed'
@@ -35,7 +36,7 @@ function shellPlan(command: string, profile: CodingExecutionProfile): CodingComm
   return codingShellPlan(command, profile)
 }
 
-type HarnessHost = { store: LocalStore; provider: AgentProvider; root: string; configVersion: number; containerProfile?: Extract<CodingExecutionProfile, { kind: 'container' }>; network?: NativeCodingProfile['network']; commandRules?: NativeCodingProfile['commandRules']; changed?: (codingRunId: string) => void; costRecords?(projectId: string): Promise<ModelCostRecord[]> }
+type HarnessHost = { store: LocalStore; provider: AgentProvider; root: string; configVersion: number; approvedTests?: ApprovedCodingTests; containerProfile?: Extract<CodingExecutionProfile, { kind: 'container' }>; network?: NativeCodingProfile['network']; commandRules?: NativeCodingProfile['commandRules']; changed?: (codingRunId: string) => void; costRecords?(projectId: string): Promise<ModelCostRecord[]> }
 type Harness = CodingExecutor & { settled(codingRunId: string): Promise<void>; shutdown(): Promise<void> }
 const services = new WeakMap<LocalStore, Map<string, Harness>>()
 export async function shutdownNativeCodingHarnesses(store: LocalStore): Promise<void> {
@@ -44,12 +45,13 @@ export async function shutdownNativeCodingHarnesses(store: LocalStore): Promise<
 }
 /** IPC creates runtime facades repeatedly. Workers and command ownership must outlive those facades. */
 export function createNativeCodingExecutorV3(host: HarnessHost): Harness {
+  const approvedTests = host.approvedTests ? structuredClone(validateApprovedCodingTests(host.approvedTests)) : undefined
   let cache = services.get(host.store)
   if (!cache) { cache = new Map(); services.set(host.store, cache) }
-  const key = JSON.stringify([host.root, host.configVersion, host.provider.id, host.provider.model, host.containerProfile, host.network, host.commandRules])
+  const key = JSON.stringify([host.root, host.configVersion, host.provider.id, host.provider.model, host.containerProfile, host.network, host.commandRules, approvedTests?.digest])
   const existing = cache.get(key)
   if (existing) return existing
-  const service = createHarnessService(host); cache.set(key, service); return service
+  const service = createHarnessService({ ...host, ...(approvedTests ? { approvedTests } : {}) }); cache.set(key, service); return service
 }
 function createHarnessService(host: HarnessHost): Harness {
   const cores = new Map<string, Core>(), jobs = new Map<string, Promise<void>>()
@@ -353,6 +355,7 @@ function createHarnessService(host: HarnessHost): Harness {
         child = createNativeCodingSession({ id: sessionId(childId), codingRunId: childId, workflowRunId: parent.workflowRunId, nodeId: parent.nodeId, localProjectId: parent.localProjectId, providerId: parent.providerId, model: parent.model, objective: String(input.prompt), now: new Date().toISOString() })
         if (parent.operatorDeadlineAt) child.operatorDeadlineAt = parent.operatorDeadlineAt
         child.binding = { ...structuredClone(parent.binding!), workspaceRoot: root, context: { ...structuredClone(parent.binding!.context), id: childId, userInstruction: String(input.prompt) } }
+        delete child.binding.approvedVerification
         child.parent = { sessionId: parent.id, codingRunId: parent.codingRunId, objectiveVersion: parent.objectiveVersion, baseDigest: childWorkspace.identity.base.digest, mode: input.mode as 'read_only' | 'isolated_coding', paths: input.paths as string[] }
         child.taskBudget = { ...parent.taskBudget, taskId: `coding-task-${codingDigest(child.id)}`, parentTaskId: parent.taskBudget.rootId, maxTokens: Number(input.maxTokens), maxCostUsd: Number(input.maxCostUsd) }
         child.transcript[0] = { role: 'user', content: JSON.stringify({ task: child.objective, rootObjective: parent.objective, sourceDigest: child.parent.baseDigest, writablePaths: child.parent.paths, mode: child.parent.mode, context: parent.binding!.context.brief.prompt }) }
@@ -529,6 +532,8 @@ function createHarnessService(host: HarnessHost): Harness {
     }
     if (command.type === 'authorize') {
       if (session.binding!.executionGranted || session.status !== 'waiting_permission') throw new Error('Execution authorization is stale')
+      if (session.binding!.approvedVerification && (session.pendingInput.length || !currentApprovedVerification(session))) throw new Error('Approved acceptance source changed')
+      if (session.binding!.approvedVerification && command.manualValidationPlan) throw new Error('This task uses its approved automated acceptance contract')
       if (!command.manualValidationPlan && !session.binding!.context.project.testCommand.trim()) throw new Error('请在开工前选择明确的人工验收计划，或保存适用的自动测试命令。')
       const profile: CodingExecutionProfile | undefined = command.profile === 'container' ? host.containerProfile : command.profile === 'os_sandbox' ? { kind: 'os_sandbox', network: command.network ?? 'none' } : { kind: 'trusted_local' }
       if (!profile) throw new Error('Container profile is not configured; no local fallback')
@@ -537,13 +542,46 @@ function createHarnessService(host: HarnessHost): Harness {
       if (input.digest !== session.binding!.input?.digest) throw new Error('Input files changed after the authorization was presented; start a fresh run with the new baseline')
       const dependencyPlan = await codingDependencyPlan(session.binding!.context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], { isolatedStore: session.binding!.dependencyCacheVersion === 1 })
       if (dependencyPlan.inputDigest !== session.binding!.dependencyPlan?.inputDigest || dependencyPlan.command !== session.binding!.dependencyPlan?.command) throw new Error('Dependency plan changed since execution was presented')
-      for (const plan of [shellPlan(session.binding!.context.project.testCommand, profile), dependencyPlan.plan].filter(Boolean)) {
+      const fixedTests = session.binding!.approvedVerification?.tests
+      const approvedPlan = fixedTests ? approvedCodingTestCommand(fixedTests, profile, '.devflow-approved-result.json') : undefined
+      for (const plan of [shellPlan(session.binding!.context.project.testCommand, profile), dependencyPlan.plan, approvedPlan].filter(Boolean)) {
         if (decideCodingCommand({ rules: session.binding!.permissionPolicy?.rules ?? [], mode: 'ask', sandboxed: profile.kind !== 'trusted_local', executable: plan!.executable, args: plan!.args }) === 'deny') throw new Error('Initial test or dependency plan conflicts with a deny rule')
       }
       await mkdir(host.root, { recursive: true, mode: 0o700 })
       const created = await CodingCandidateWorkspace.create({ root: session.binding!.workspaceRoot, delivery: session.binding!.context.workspace.worktreePath, baseCommitSha: session.binding!.context.workspace.baseCommitSha!, excludedPaths: ['node_modules', '.cache', 'coverage'] })
       if (created.identity.base.digest !== input.digest) throw new Error('Input changed while creating the immutable candidate')
-      session = await mutate(id, draft => { draft.binding!.permissionPolicy = { version: 1, mode: command.permissionMode ?? 'ask', rules: draft.binding!.permissionPolicy?.rules ?? parseCodingCommandRules(host.commandRules ?? []) }; draft.binding!.executionGranted = true; draft.binding!.profile = profile; draft.binding!.dependencyPlan = dependencyPlan; draft.binding!.authorizationExpiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString(); draft.binding!.testPlan = shellPlan(draft.binding!.context.project.testCommand, profile); draft.binding!.testPlanDigest = codingDigest(JSON.stringify(command.manualValidationPlan ? { manualValidationPlan: command.manualValidationPlan } : draft.binding!.testPlan)); if (command.manualValidationPlan) { draft.binding!.manualValidationPlan = command.manualValidationPlan; draft.transcript.push({ role: 'user', content: `本任务事先选择人工验收，自动测试不会被记为通过。人工计划：${command.manualValidationPlan}` }) }; draft.status = 'ready'; draft.commands.push({ id: command.commandId, digest: fingerprint }) })
+      session = await mutate(id, draft => {
+        const binding = draft.binding!
+        binding.permissionPolicy = { version: 1, mode: command.permissionMode ?? 'ask', rules: binding.permissionPolicy?.rules ?? parseCodingCommandRules(host.commandRules ?? []) }
+        binding.executionGranted = true
+        binding.profile = profile
+        binding.dependencyPlan = dependencyPlan
+        binding.authorizationExpiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString()
+        binding.testPlan = shellPlan(binding.context.project.testCommand, profile)
+        let verification: unknown = binding.testPlan
+        if (binding.approvedVerification) verification = { testPlan: binding.testPlan, approvedTests: binding.approvedVerification.tests.digest }
+        if (command.manualValidationPlan) {
+          binding.manualValidationPlan = command.manualValidationPlan
+          verification = { manualValidationPlan: command.manualValidationPlan }
+          draft.transcript.push({ role: 'user', content: `本任务事先选择人工验收，自动测试不会被记为通过。人工计划：${command.manualValidationPlan}` })
+        }
+        binding.testPlanDigest = codingDigest(JSON.stringify(verification))
+        draft.status = 'ready'
+        draft.commands.push({ id: command.commandId, digest: fingerprint })
+      })
+      if (session.binding!.approvedVerification && dependencyPlan.storeDirectory) {
+        const core = await loadCore(session, assertAuthority), controller = new AbortController()
+        verifications.set(id, controller)
+        try {
+          await prepareIndependentDependencies({ workspace: core.workspace, runner: core.commands, profile,
+            operationId: `${session.id}:approved-baseline:${command.commandId}`, approvedPlanDigest: dependencyPlan.digest, signal: controller.signal })
+          controller.signal.throwIfAborted()
+          await assertAuthority()
+        } catch (error) {
+          await mutate(id, draft => { if (!terminal(draft)) { draft.status = 'paused'; draft.pauseReason = 'approved_baseline_preparation_failed' } })
+          throw error
+        } finally { verifications.delete(id) }
+      }
       schedule(id, assertAuthority)
     } else {
       const core = await loadCore(session, assertAuthority)
@@ -636,7 +674,8 @@ function createHarnessService(host: HarnessHost): Harness {
         if (session.status !== 'review' || session.pendingInput.length || !revision || revision.digest !== command.revisionDigest || session.objectiveVersion !== command.objectiveVersion) throw new Error('Stale coding approval')
         if (core.commands.hasActiveCommands) throw new Error('Candidate writers are still active')
         if (session.binding!.manualValidationPlan ? !command.manualValidationEvidence : command.manualValidationEvidence !== undefined) throw new Error('人工验收必须事先选择计划，并在批准确切修订时填写人工检查依据。')
-        if (session.binding!.independentVerificationRequired && !session.binding!.manualValidationPlan && !currentIndependentChecks(session)) throw new Error('Independent acceptance must be frozen before revision approval')
+        if (session.binding!.approvedVerification && !currentApprovedVerification(session)) throw new Error('Approved acceptance source changed')
+        if (session.binding!.independentVerificationRequired && !session.binding!.manualValidationPlan && !currentApprovedVerification(session) && !currentIndependentChecks(session)) throw new Error('Independent acceptance must be frozen before revision approval')
         assertCodingTestInputAuthority(session, revision)
         await mutate(id, draft => {
           if (draft.status !== 'review' || draft.pendingInput.length || draft.objectiveVersion !== command.objectiveVersion || revisionFor(draft)?.digest !== command.revisionDigest) throw new Error('Stale coding approval')
@@ -665,6 +704,12 @@ function createHarnessService(host: HarnessHost): Harness {
             await core.commands.start(logId, session.binding!.testPlan, directory, verificationController.signal)
             const tested = await core.commands.wait(logId)
             if (tested.status === 'passed' && session.binding!.independentVerificationRequired) {
+              const approved = currentApprovedVerification(session)
+              if (approved) {
+                if (session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, approvedTests: approved.tests.digest }))) throw new Error('Frozen approved acceptance changed')
+                return runApprovedCodingVerification({ approved, workspace: core.workspace, revision, runner: core.commands,
+                  profile: session.binding!.profile, operationId: `${session.id}:verify:${command.commandId}`, signal: verificationController.signal })
+              }
               const plan = currentIndependentChecks(session)
               if (!plan || plan.baselineDigest !== revision.base.digest || session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, independentChecks: plan.digest }))) throw new Error('Frozen independent acceptance changed')
               const independentVerification = await runIndependentChecks({ plan, baseline: core.workspace, runner: core.commands, directory, profile: session.binding!.profile, operationId: `${session.id}:independent:${command.commandId}`, signal: verificationController.signal })
@@ -680,7 +725,7 @@ function createHarnessService(host: HarnessHost): Harness {
           if (draft.status === 'paused' || draft.status === 'ready') { draft.pauseReason = verifierInvalid ? 'independent_verification_invalid' : evidence.status === 'evidence_invalid' ? 'invalid_test_plan' : 'final_test_failed'; draft.transcript.push({ role: 'user', content: JSON.stringify({ finalVerification: evidence, deliveryRestored: true,
             failedRequirements: evidence.result?.independentVerification?.failedRequirements?.length ? evidence.result.independentVerification.failedRequirements : currentIndependentChecks(draft)?.criteria.filter(item => evidence.result?.independentVerification?.failedCriteria.includes(item.id)),
             instruction: verifierInvalid ? 'The independent checker could not evaluate the requirement. Candidate correctness is unknown. This is not an implementation repair attempt; the frozen check requires investigation.' : 'Repair the candidate against the listed approved requirements, then submit a NEW revision for human approval. The independent plan digest and the public test plan digest identify different objects and are not expected to match.' }) }) }
-          if (draft.status === 'ready' && draft.binding!.independentVerificationRequired) {
+          if (draft.status === 'ready' && draft.binding!.independentVerificationRequired && !draft.binding!.approvedVerification) {
             const revisions = new Set(draft.revisions.filter(item => item.objectiveVersion === draft.objectiveVersion).map(item => item.digest))
             const failures = draft.deliveryEvidence.filter(item => revisions.has(item.revisionDigest) && item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length
             if (failures >= 3) { draft.status = 'paused'; draft.pauseReason = 'independent_verification_repair_limit' }
@@ -720,6 +765,10 @@ function createHarnessService(host: HarnessHost): Harness {
       session.taskBudget = { rootId: taskId, taskId, maxTokens: input.request.budget.maxTokens, rootMaxTokens: input.request.budget.maxTokens, maxCostUsd: input.request.budget.maxCostUsd, rootMaxCostUsd: input.request.budget.maxCostUsd }
       session.status = 'waiting_permission'
       session.transcript[0] = { role: 'user', content: `${context.userInstruction}\n\n任务简报（宿主提供的已批准来源）：\n${context.brief.prompt}` }
+      if (host.approvedTests) session.binding.approvedVerification = {
+        objectiveVersion: session.objectiveVersion, sourceDigest: independentCheckSourceDigest(session), baselineDigest: session.binding.input.digest,
+        tests: structuredClone(host.approvedTests),
+      }
       if (!await host.store.saveNativeCodingSession(session, 0)) throw new Error('Native coding run already exists')
       return result(input.request.id)
     },
