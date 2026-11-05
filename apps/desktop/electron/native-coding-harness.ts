@@ -10,6 +10,7 @@ import { NativeCodingLoop } from './native-coding-loop'
 import { createNativeCodingTools } from './native-coding-tools'
 import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, snapshotCodingTree, type CodingRevision, type CodingManifest } from './coding-candidate-workspace'
 import { CodingCommandRunner, type CodingCommandPlan, type CodingExecutionProfile } from './coding-command-runner'
+import { codingCommandFeedback } from './coding-command-feedback'
 import { applyAndVerifyCodingRevision, recoverCodingDelivery, type CodingVerificationResult } from './coding-evidence-v3'
 import { codingCommandWithDependencyCache, codingDependencyCacheOptions, codingDependencyPlan, codingShellPlan, prepareCodingDependencies } from './coding-dependency-preparation'
 import { pendingCodingPermission } from './native-coding-permissions'
@@ -704,7 +705,8 @@ function createHarnessService(host: HarnessHost): Harness {
               const logId = `${session.id}:verify:${command.commandId}`
               await core.commands.start(logId, session.binding!.testPlan, directory, verificationController.signal)
               const tested = await core.commands.wait(logId)
-              return { exitCode: tested.exitCode, status: tested.status === 'passed' ? 'passed' : tested.status === 'timed_out' ? 'timed_out' : tested.status === 'cancelled' ? 'cancelled' : 'failed', logId }
+              const publicVerification = await codingCommandFeedback(core.commands, tested)
+              return { exitCode: tested.exitCode, status: publicVerification.status, logId, publicVerification }
             }
             const approved = currentApprovedVerification(session)
             if (approved && session.binding!.independentVerificationRequired) {
@@ -718,7 +720,7 @@ function createHarnessService(host: HarnessHost): Harness {
               ])
               if (publicResult.status === 'rejected') throw publicResult.reason
               if (fixedResult.status === 'rejected') throw fixedResult.reason
-              if (publicResult.value.status === 'passed') return fixedResult.value
+              if (publicResult.value.status === 'passed') return { ...fixedResult.value, ...(publicResult.value.publicVerification ? { publicVerification: publicResult.value.publicVerification } : {}) }
               const independentVerification = fixedResult.value.independentVerification
               return { ...publicResult.value, ...(independentVerification ? { independentVerification } : {}) }
             }
@@ -738,7 +740,7 @@ function createHarnessService(host: HarnessHost): Harness {
           if (verifierInvalid && draft.status === 'ready') draft.status = 'paused'
           if (draft.status === 'paused' || draft.status === 'ready') { draft.pauseReason = verifierInvalid ? 'independent_verification_invalid' : evidence.status === 'evidence_invalid' ? 'invalid_test_plan' : 'final_test_failed'; draft.transcript.push({ role: 'user', content: JSON.stringify({ finalVerification: evidence, deliveryRestored: true,
             failedRequirements: evidence.result?.independentVerification?.failedRequirements?.length ? evidence.result.independentVerification.failedRequirements : currentIndependentChecks(draft)?.criteria.filter(item => evidence.result?.independentVerification?.failedCriteria.includes(item.id)),
-            instruction: verifierInvalid ? 'The independent checker could not evaluate the requirement. Candidate correctness is unknown. This is not an implementation repair attempt; the frozen check requires investigation.' : 'Repair the candidate against the listed approved requirements, then submit a NEW revision for human approval. The independent plan digest and the public test plan digest identify different objects and are not expected to match.' }) }) }
+            instruction: verifierInvalid ? 'The independent checker could not evaluate the requirement. Candidate correctness is unknown. This is not an implementation repair attempt; the frozen check requires investigation.' : 'Check publicVerification and independentVerification separately; both must pass. Read the supplied public command diagnostics first; read_command can page the retained log by logId without rerunning it. Repair the candidate against the approved objective, then submit a NEW revision for human approval. If the approved objective changes an old public expectation, stage the smallest corresponding test-input update and call propose_changeset to request separate exact-content authorization. Preserve unrelated assertions and never change the host fixed acceptance. The independent plan digest and the public test plan digest identify different objects and are not expected to match.' }) }) }
           if (draft.status === 'ready' && draft.binding!.independentVerificationRequired && !draft.binding!.approvedVerification) {
             const revisions = new Set(draft.revisions.filter(item => item.objectiveVersion === draft.objectiveVersion).map(item => item.digest))
             const failures = draft.deliveryEvidence.filter(item => revisions.has(item.revisionDigest) && item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length

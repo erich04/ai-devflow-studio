@@ -115,6 +115,51 @@ it('recognizes the exact test file when its report uses a filesystem alias', asy
   expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(fixed)
 })
 
+it('returns the public failure separately from passing fixed checks and gates the exact test update before delivery', async () => {
+  provisionFramework()
+  const staleTest = `const assert = require('node:assert/strict'); const fs = require('node:fs');
+console.log('Authorization: Bearer public-feedback-secret-example-1234567890');
+console.log('setup output '.repeat(5000));
+assert.equal(fs.readFileSync('value.ts', 'utf8'), 'export const value = 1\\n', 'PUBLIC_EXPECTATION_STALE');\n`
+  const updatedTest = staleTest.replace('value = 1', 'value = 2')
+  let turn = 0, feedback: unknown
+  const fixture = await codingHarnessFixture(async request => {
+    turn++
+    if (turn === 1) return codingToolReply('implement', 'write_file', { path: 'value.ts', content: fixed, expectedHash: codingDigest(original) })
+    if (turn === 3) {
+      feedback = request.messages.filter(message => message.role === 'user' && String(message.content).includes('finalVerification')).at(-1)?.content
+      return codingToolReply('update-obsolete-public-test', 'write_file', { path: 'public-check.test.cjs', content: updatedTest, expectedHash: codingDigest(staleTest) })
+    }
+    return codingToolReply(`submit-${turn}`, 'propose_changeset', { summary: 'Review the requested behavior and exact public test update' })
+  }, 'node public-check.test.cjs', {}, undefined, {
+    baselineFiles: { ...baselineFiles, 'public-check.test.cjs': staleTest },
+    userInstruction: 'Change the exported value from 1 to 2; retain the original fixed acceptance.', approvedTests: approvedTests(),
+  })
+  fixtures.push(fixture)
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  await approve(fixture, 'stale-public-expectation')
+  const message = JSON.parse(String(feedback))
+  expect(message.finalVerification.result.independentVerification.approvedTests).toMatchObject({ passedTests: 1, totalTests: 1 })
+  expect(message.finalVerification.result.publicVerification).toMatchObject({ status: 'failed', exitCode: 1, logId: 'native-coding:verify:stale-public-expectation' })
+  expect(JSON.stringify(message.finalVerification.result.publicVerification)).toContain('PUBLIC_EXPECTATION_STALE')
+  expect(JSON.stringify(message.finalVerification.result.publicVerification)).not.toContain('public-feedback-secret-example-1234567890')
+  expect(JSON.stringify(message.finalVerification.result.publicVerification).length).toBeLessThan(20000)
+  const waiting = (await fixture.get()).snapshot
+  expect(waiting.status).toBe('waiting_permission')
+  expect((await fixture.store.getNativeCodingSession('native-coding'))!.permissions.at(-1)).toMatchObject({ kind: 'test_inputs', decision: 'pending' })
+  expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(original)
+  expect(await readFile(path.join(fixture.delivery, 'public-check.test.cjs'), 'utf8')).toBe(staleTest)
+  await fixture.executor.harness!.command({ protocolVersion: 2, type: 'permission', codingRunId: 'coding', commandId: 'authorize-exact-test',
+    expectedVersion: waiting.version, permissionId: waiting.permission!.id, decision: 'approved' }, async () => {})
+  await fixture.executor.settled('coding')
+  await approve(fixture, 'updated-public-expectation')
+  expect((await fixture.get()).snapshot.status).toBe('completed')
+  expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(fixed)
+  expect(await readFile(path.join(fixture.delivery, 'public-check.test.cjs'), 'utf8')).toBe(updatedTest)
+  const completed = (await fixture.store.getNativeCodingSession('native-coding'))!
+  expect(completed.deliveryEvidence.at(-1)?.result?.independentVerification?.approvedTests).toMatchObject({ passedTests: 1, totalTests: 1 })
+}, 30000)
+
 it('includes the failing counter setup and assertion from the approved source in repair feedback', async () => {
   provisionFramework()
   const source = [

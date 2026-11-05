@@ -2,9 +2,10 @@ import { chmod, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, codingFilePath, removeCodingFile, snapshotCodingTree, type CodingFileEntry, type CodingRevision } from './coding-candidate-workspace'
 import type { IndependentCheckResult } from './native-coding-independent-verification'
+import type { CodingCommandFeedback } from './coding-command-feedback'
 
 export type CodingApproval = { id: string; revisionDigest: string; objectiveVersion: number; policyVersion: number; expiresAt: string }
-export type CodingVerificationResult = { exitCode: number | null; status: 'passed' | 'failed' | 'timed_out' | 'cancelled'; logId: string; independentVerification?: IndependentCheckResult }
+export type CodingVerificationResult = { exitCode: number | null; status: 'passed' | 'failed' | 'timed_out' | 'cancelled'; logId: string; independentVerification?: IndependentCheckResult; publicVerification?: CodingCommandFeedback }
 export type CodingDeliveryEvidence = {
   schemaVersion: 1; id: string; revisionDigest: string; testPlanDigest: string; approvalId: string
   status: 'technical_completed' | 'verified_no_change' | 'manual_accepted' | 'test_failed' | 'evidence_invalid' | 'delivery_conflict'
