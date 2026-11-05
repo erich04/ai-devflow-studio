@@ -16,6 +16,9 @@ import {
   namedFixtureSubjects,
   sourceUnits,
   separateOperationUnits,
+  successfulFixtureControls,
+  requireOperationalSelection,
+  InvalidFixtureDraft,
   canBindFixtureSubject,
   validFixturePath,
   type FixtureSelection,
@@ -255,7 +258,7 @@ export async function fixturePlanning(
   const matching = (history?.drafts ?? [])
     .filter((d) => d.sourceDigest === source.sourceDigest && d.objectiveVersion === source.objectiveVersion)
     .reverse()
-  const selection = matching.find(
+  let selection = matching.find(
     (d) => d.selection || d.reselect || (d.preflightStatus === 'invalid' && !d.correctCases),
   )?.selection
   const lostReplyUnits = sourceUnits(source.criteria)
@@ -277,7 +280,7 @@ export async function fixturePlanning(
       behavior: a.behavior,
       ...(lostReplyUnits.length && a.replySeam ? { controllableSuccessfulReply: true } : {}),
       ...(durableUnits.length && a.storeRoundTrip ? { storeRoundTrip: a.storeRoundTrip } : {}),
-      ...(a.mockedPresentation ? { observes: 'rendered UI and mocked calls only' } : {}),
+      ...(a.presentationOnly ? { observes: 'presentation only: rendered UI, mocked calls, or a view model' } : {}),
     })),
     production: [...productEvidence, ...evidence.files].find(
       (item) => item.path === f.path.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1'),
@@ -294,10 +297,21 @@ export async function fixturePlanning(
   const namedInputs = [...new Set(examples.map((e) => e.value))]
   const approvedUnits = sourceUnits(source.criteria)
   const requiredSubjects = namedFixtureSubjects(approvedUnits, examples)
+  let invalidSavedSelection: { reason: string; selection: FixtureSelection } | undefined
+  if (selection) {
+    try { requireOperationalSelection(source.criteria, fixtures, requiredSubjects, selection) }
+    catch (error) {
+      if (!(error instanceof InvalidFixtureDraft)) throw error
+      invalidSavedSelection = { reason: error.message, selection }
+      selection = undefined
+    }
+  }
   const input = {
     approved: source.criteria,
     units: approvedUnits,
     requiredOperationSubjects: requiredSubjects,
+    ...(invalidSavedSelection ? { invalidSavedSelection } : {}),
+    ...(requiredSubjects.length ? { publicResolvedCallControls: successfulFixtureControls(fixtures) } : {}),
     ...(approvedUnits.some((u) => requestsTimeBoundary(u.text))
       ? { clockBoundaries: {
           units: approvedUnits.filter((u) => requestsTimeBoundary(u.text)).map((u) => u.id),
@@ -344,8 +358,8 @@ export async function fixturePlanning(
           (fixtures.some((f) => f.anchors.some((a) => a.selectable && a.row))
             ? ' Some existing public tests exercise concrete parameter rows. When the approved behavior depends on an existing setting, prefer its working row and the operation that actually receives it. Changing a similarly named field on a different adapter does not establish that precondition.'
             : '') +
-          (requiredSubjects.length && fixtures.some((f) => f.anchors.some((a) => a.mockedPresentation))
-            ? ' A fixture marked as observing only rendered UI and mocked calls can cover presentation. When the source separately asks that a named product operation actually runs, select a public working operation at its owning service as well.'
+          (requiredSubjects.length && fixtures.some((f) => f.anchors.some((a) => a.presentationOnly))
+            ? ' A fixture marked as presentation only can cover rendered UI, mocked calls or view models. When the source separately asks that a named product operation actually runs, select a public working operation at its owning service as well.'
             : '') +
           (rejected
             ? ' Review the previously tried public anchors, their stated preconditions and the added lines from the rejected program. A baseline case ID refers only to that earlier program. If you select the same anchor again, identify a materially different trigger or observation that addresses the recorded outcome.'
@@ -414,7 +428,7 @@ export async function fixturePlanning(
       ),
   )
   const allPending = selection.scenarios.map((s, i) => ({ ...s, id: `s${i + 1}` })).filter((s) => !retained.has(s.id))
-  const pendingScenarios = allPending.slice(0, 4)
+  const pendingScenarios = allPending.slice(0, 2)
   const selectedFixtures = [...new Set(pendingScenarios.map((s) => s.fixture))].map((key) => {
     const index = Number(key.slice(1)) - 1,
       f = fixtures[index]!
@@ -471,7 +485,8 @@ export async function fixturePlanning(
       : s
   })
   const tool = structuredClone(casesTool)
-  const schema = tool.function.parameters as { properties: { cases: { items: { properties: Record<string, unknown> } } } }
+  const schema = tool.function.parameters as { properties: { cases: { maxItems: number; items: { properties: Record<string, unknown> } } } }
+  schema.properties.cases.maxItems = pendingScenarios.length
   schema.properties.cases.items.properties.scenario = { type: 'string', enum: pendingScenarios.map((s) => s.id) }
   if (namedInputs.length) {
     schema.properties.cases.items.properties.contrast = {

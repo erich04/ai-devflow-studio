@@ -8,6 +8,7 @@ import {
   type PublicStoreRoundTrip,
 } from './native-coding-storage-fixtures'
 import ts from 'typescript'
+import { observesPresentationProjection } from './native-coding-presentation-fixtures'
 import { codingSourceDiagnostics } from './coding-source-diagnostics'
 import { codingDigest } from './coding-candidate-workspace'
 
@@ -71,7 +72,7 @@ type Anchor = Region & {
   suite?: string
   control?: string
   selectable?: boolean
-  mockedPresentation?: true
+  presentationOnly?: true
   row?: FixtureRow
   replySeam?: true
   storeRoundTrip?: PublicStoreRoundTrip
@@ -528,7 +529,7 @@ export function fixtureTemplate(file: string, source: string) {
                   selectable: control.length <= 12000 && hasProtectedAssertion(callback.body, tree),
                   behavior: fixtureBehavior(callback.body, tree),
                   ...(hasPublicReplySeam(control) ? { replySeam: true as const } : {}),
-                  ...(observesMockedPresentation(callback.body, tree) ? { mockedPresentation: true as const } : {}),
+                  ...(observesMockedPresentation(callback.body, tree) || observesPresentationProjection(callback.body, tree) ? { presentationOnly: true as const } : {}),
                 }
               : {}),
             id,
@@ -705,7 +706,7 @@ export function readFixtureSelection(
 /** A source that independently asks for an operation and its presentation must
  * bind its named operation to a real caller all the way through authoring. */
 export function separateOperationUnits(sources: AcceptanceCriterion[], fixtures: FixtureTemplate[]) {
-  if (!fixtures.some((f) => f.anchors.some((a) => a.selectable && !a.mockedPresentation))) return new Set<string>()
+  if (!fixtures.some((f) => f.anchors.some((a) => a.selectable && !a.presentationOnly))) return new Set<string>()
   const spans = sourceUnits(sources)
   const describesPresentation = (text: string) =>
     /(?:界面|页面|屏幕|按钮|显示|展示|渲染)|\b(?:UI|screen|button|display(?:ed)?|render(?:ed)?|visible|presentation|view)\b/iu.test(text)
@@ -722,7 +723,13 @@ export function canBindFixtureSubject(
   if (!scenario?.units.includes(unit)) return false
   if (!operations.has(unit)) return true
   const anchor = fixtures[Number(scenario.fixture.slice(1)) - 1]?.anchors.find((a) => a.id === scenario.anchor)
-  return !!anchor && !anchor.mockedPresentation
+  return !!anchor && !anchor.presentationOnly
+}
+
+export function successfulFixtureControls(fixtures: FixtureTemplate[]): string[] {
+  return fixtures.flatMap((fixture, index) => fixture.anchors
+    .filter((anchor) => anchor.selectable && !anchor.presentationOnly && anchor.behavior?.resolves?.length)
+    .map((anchor) => `f${index + 1}:${anchor.id} (${anchor.behavior!.resolves!.join(', ')})`)).slice(0, 8)
 }
 
 export function requireOperationalSelection(
@@ -738,19 +745,13 @@ export function requireOperationalSelection(
     const cases = selection.scenarios.filter((s) => s.units.includes(subject.unit))
     if (cases.some((s) => canBindFixtureSubject(subject.unit, s, operations, fixtures))) continue
     const keys = cases.map((s) => s.fixture + ':' + s.anchor).join(', ')
-    const examples = fixtures
-      .flatMap((f, i) =>
-        f.anchors
-          .filter((a) => a.selectable && !a.mockedPresentation && a.behavior?.resolves?.length)
-          .map((a) => 'f' + (i + 1) + ':' + a.id + ' (' + a.behavior!.resolves!.join(', ') + ')'),
-      )
-      .slice(0, 8)
+    const examples = successfulFixtureControls(fixtures)
     const hint = examples.length
       ? ' Public controls with resolved calls include ' + examples.join(', ') + '. Match the action to the approved source.'
       : ''
 
     throw new InvalidFixtureDraft(
-      `Operational source ${subject.unit} has only rendered UI / mocked-call evidence (${keys || 'no selected operation'}). Add a real product operation that takes the named subject and succeeds for a comparable original control. Keep separate UI checks for presentation. A spy call or DOM status alone cannot establish the operation's result or side effects.` +
+      `Operational source ${subject.unit} has only presentation evidence from UI, mocked calls or view models (${keys || 'no selected operation'}). Add a real product operation that takes the named subject and succeeds for a comparable original control. Keep separate UI checks for presentation. A spy call, layout or DOM status alone cannot establish the operation's result or side effects.` +
         hint,
     )
   }
@@ -765,7 +766,7 @@ export function requireStoredSelection(
   if (!units.length) return
   const options = fixtures.flatMap((f, i) =>
     f.anchors
-      .filter((a) => a.selectable && a.storeRoundTrip && !a.mockedPresentation)
+      .filter((a) => a.selectable && a.storeRoundTrip && !a.presentationOnly)
       .map((a) => ({ key: 'f' + (i + 1) + ':' + a.id, pair: a.storeRoundTrip! })),
   )
   if (!options.length) return

@@ -228,6 +228,20 @@ it('opens the action',()=>{
     'service.test.ts',
     "import {save} from './service';it('saves an eligible job',async()=>{await expect(save(job)).resolves.toMatchObject({status:'saved'})})",
   )
+  const projection = fixtureTemplate('inspector.test.ts', `
+import {buildInspectorViewModel as project} from './inspector-view-model'
+function modelFor(input) { return project(input) }
+it('shows the available action',()=>{
+  const model=modelFor(job)
+  expect(model.action.id).toBe('save')
+  expect(modelFor(job).sections.map(section=>section.id)).toEqual(['work'])
+})
+it('also runs the actual operation',async()=>{
+  await expect(save(job)).resolves.toMatchObject({status:'saved'})
+  expect(modelFor(job).action.id).toBe('save')
+})`)
+  expect(projection.anchors[0]?.presentationOnly).toBe(true)
+  expect(projection.anchors[1]?.presentationOnly).toBeUndefined()
   const source = {
     objectiveVersion: 1,
     sourceDigest: 'a'.repeat(64),
@@ -238,7 +252,7 @@ it('opens the action',()=>{
   const input = {
     source,
     phase: 'select' as const,
-    fixtures: [page, service],
+    fixtures: [page, service, projection],
     requiredSubjects: [{ unit: 'r1.1', value: 'archive' }],
     request: { systemPrompt: '', messages: [], tools: [] },
   }
@@ -248,6 +262,7 @@ it('opens the action',()=>{
   expect(() => fixtureSelectionFromResponse(input, select([scenario('r1.1', 'f1:t1'), scenario('r1.2', 'f1:t1')]))).toThrow(
     /r1\.1.*f1:t1.*real/i,
   )
+  expect(() => fixtureSelectionFromResponse(input, select([scenario('r1.1', 'f3:t1'), scenario('r1.2', 'f1:t1')]))).toThrow(/view models/)
   const both = fixtureSelectionFromResponse(input, select([scenario('r1.1', 'f2:t1'), scenario('r1.2', 'f1:t1')]))
   expect(both.scenarios.map((s) => s.fixture)).toEqual(['f2', 'f1'])
   const mixed = fixtureSelectionFromResponse(input, select([
@@ -590,10 +605,10 @@ it('retains successful bounded batches without counting them as failed author at
       state = session.independentVerification!
     expect(state.plans).toHaveLength(1)
     expect(state.plans[0]?.checks).toHaveLength(14)
-    expect(requests.map((r) => r.length)).toEqual([4, 4, 4, 2])
-    expect(snapshots).toEqual([0, 4, 8, 12].map((retained) => ({ frozen: 0, retained })))
+    expect(requests.map((r) => r.length)).toEqual([2, 2, 2, 2, 2, 2, 2])
+    expect(snapshots).toEqual([0, 2, 4, 6, 8, 10, 12].map((retained) => ({ frozen: 0, retained })))
     expect(new Set(requests.flat()).size).toBe(14)
-    expect(state.drafts?.filter((d) => d.partial).map((d) => d.partial!.cases.length)).toEqual([4, 8, 12])
+    expect(state.drafts?.filter((d) => d.partial).map((d) => d.partial!.cases.length)).toEqual([2, 4, 6, 8, 10, 12])
     expect(state.drafts?.filter((d) => d.preflightStatus).map((d) => d.preflightStatus)).toEqual(['valid'])
     validateIndependentVerification(JSON.parse(JSON.stringify(state)))
     const malformed = structuredClone(state)

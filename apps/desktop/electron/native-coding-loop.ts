@@ -57,7 +57,7 @@ class InvalidToolBatch extends Error {
 // waits happen inside the active interval, so they count toward the task's time limit.
 const retryLimits: Record<CodingModelRetryReason, number> = { rate_limited: 5, overloaded: 5, connection_not_sent: 5, server_error: 2 }
 const maxParallelReads = 4
-// Fixture selection and four-case author batches share the task's wall deadline
+// Fixture selection and small author batches share the task's wall deadline
 // with implementation. Keep their output below the full coding-turn ceiling.
 const fixtureAuthorOutputLimit = 16384
 const retryBaseDelayMs = 1_000, retryMaxDelayMs = 30_000, retryMaxTotalWaitMs = 120_000
@@ -434,6 +434,7 @@ export class NativeCodingLoop {
         } catch (error) {
           let failure = planning && received ? { kind: 'pause' as const, reason: 'independent_verification_plan_invalid' } : classifyModelFailure(error, received)
           const invalidEnvelope = failure.kind === 'invalid_batch' ? failure.problem : undefined
+          const outputTruncated = error instanceof AgentProviderRequestError && error.sanitizedCause === 'output_length'
           if (planning && failure.kind === 'invalid_batch') failure = { kind: 'pause', reason: 'independent_verification_plan_invalid' }
           if (failure.kind === 'invalid_batch' && context.compact) failure = { kind: 'pause', reason: 'invalid_model_response' }
           const responseReceived = received || error instanceof AgentProviderRequestError && error.deliveryState === 'response_received'
@@ -455,7 +456,7 @@ export class NativeCodingLoop {
               draft.independentVerification.drafts.push({ attemptId, ...(receivedTurn ? {authorTurn:receivedTurn} : {}), objectiveVersion: planning.source.objectiveVersion, sourceDigest: planning.source.sourceDigest,
                 ...(error instanceof FixtureCaseCorrection ? {partial:error.partial} : {}),
                 ...(error instanceof NoFixtureChangeWitness ? {reselect:true} : {}),
-                feedback: `${invalidEnvelope ? `Invalid tool call envelope: ${invalidEnvelope}. ` : ''}` + (planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs and return a single well-formed JSON object. ${planning.phase === 'cases' ? 'Return only the displayed pending batch. Other valid cases stay retained, and the host checks full coverage before freezing.' : 'Cover every approved source unit in the selection.'} No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.') })
+                feedback: `${invalidEnvelope ? `Invalid tool call envelope: ${invalidEnvelope}. ` : ''}${outputTruncated ? `The prior reply reached its ${request.maxOutputTokens} token output limit before completing a tool call. Keep the analysis concise and emit the requested structured result within that limit. ` : ''}` + (planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs and return a single well-formed JSON object. ${planning.phase === 'cases' ? 'Return only the displayed pending batch. Other valid cases stay retained, and the host checks full coverage before freezing.' : 'Cover every approved source unit in the selection.'} No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.') })
               const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === planning.source.objectiveVersion && item.sourceDigest === planning.source.sourceDigest && !item.selection && !item.progress).length
               if (failures < 3) return
             }
