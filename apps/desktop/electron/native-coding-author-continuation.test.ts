@@ -44,6 +44,14 @@ it('keeps one exact private turn, including empty reasoning, within the same app
   expect(continuePrivateAuthor({ ...source, baselineDigest: 'c'.repeat(64) }, current, state)).toBe(current)
   expect(continuePrivateAuthor({ ...source, sourceDigest: 'c'.repeat(64) }, current, state)).toBe(current)
   expect(continuePrivateAuthor(source, current, { plans: [], humanInputs: [] })).toBe(current)
+  expect(continuePrivateAuthor(source, current, state, 'submit_fixture_cases')).toEqual(request)
+  expect(continuePrivateAuthor(source, current, state, 'select_behavior_contract')).toBe(current)
+  const advanced = structuredClone(state)
+  advanced.drafts![0]!.progress = true
+  expect(continuePrivateAuthor(source, current, advanced, 'submit_fixture_cases')).toBe(current)
+  delete advanced.drafts![0]!.progress
+  advanced.drafts![0]!.selection = { scenarios: [], contextOnly: [] }
+  expect(continuePrivateAuthor(source, current, advanced, 'submit_fixture_cases')).toBe(current)
   old[0] = { role: 'user', content: 'mutated caller object' }
   expect(turn.messages[0]?.content).toBe('original immutable baseline')
   expect(capturePrivateAuthorTurn(source.baselineDigest, request, assistant)).toBeUndefined()

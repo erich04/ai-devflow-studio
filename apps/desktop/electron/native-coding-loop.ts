@@ -57,6 +57,9 @@ class InvalidToolBatch extends Error {
 // waits happen inside the active interval, so they count toward the task's time limit.
 const retryLimits: Record<CodingModelRetryReason, number> = { rate_limited: 5, overloaded: 5, connection_not_sent: 5, server_error: 2 }
 const maxParallelReads = 4
+// Fixture selection and four-case author batches share the task's wall deadline
+// with implementation. Keep their output below the full coding-turn ceiling.
+const fixtureAuthorOutputLimit = 16384
 const retryBaseDelayMs = 1_000, retryMaxDelayMs = 30_000, retryMaxTotalWaitMs = 120_000
 type ModelFailure = { kind: 'retry'; reason: CodingModelRetryReason; retryAfterMs?: number } | { kind: 'pause'; reason: string } | { kind: 'reconcile' } | { kind: 'invalid_batch'; problem: string }
 /** DeepSeek error codes: 401 authentication, 402 insufficient balance, 429 rate limit, 500 server error, 503 overloaded. */
@@ -291,10 +294,11 @@ export class NativeCodingLoop {
           ...(session.taskBudget ? { taskBudget: session.taskBudget } : {}),
           onUsage: async (usage: AgentProviderUsage) => { await this.change(id, draft => { const attempt = draft.attempts.find(item => item.id === attemptId); if (attempt) attempt.usage = usage }) },
           maxOutputTokens: provider.resolveRequestPolicy?.({}).maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192, signal: controller.signal }
-        const context = planning ? { request: { ...planning.request, messages: continuePrivateAuthor(planning.source, planning.request.messages, session.independentVerification), ...requestOptions }, compact: undefined }
+        const context = planning ? { request: { ...planning.request, messages: continuePrivateAuthor(planning.source, planning.request.messages, session.independentVerification, planning.request.tools[0]?.function.name), ...requestOptions }, compact: undefined }
           : codingContext(session, provider, { systemPrompt: session.parent?.mode === 'read_only' ? readOnlySystemPrompt : systemPrompt, messages: session.transcript, tools: [...this.host.tools.definitions, ...controlTools], ...requestOptions }, JSON.stringify(runtimeState))
         const request: NativeConversationRequest = context.request
         request.maxOutputTokens = provider.resolveRequestPolicy?.(request).maxOutputTokens ?? request.maxOutputTokens ?? 8192
+        if (planning?.phase) request.maxOutputTokens = Math.min(request.maxOutputTokens, fixtureAuthorOutputLimit)
         validateNativeHistory(request.messages)
         provider.validateNativeRequest?.(request)
         const requestDigest = codingDigest(provider.serializeNativeRequest(request))
@@ -429,6 +433,7 @@ export class NativeCodingLoop {
           })
         } catch (error) {
           let failure = planning && received ? { kind: 'pause' as const, reason: 'independent_verification_plan_invalid' } : classifyModelFailure(error, received)
+          const invalidEnvelope = failure.kind === 'invalid_batch' ? failure.problem : undefined
           if (planning && failure.kind === 'invalid_batch') failure = { kind: 'pause', reason: 'independent_verification_plan_invalid' }
           if (failure.kind === 'invalid_batch' && context.compact) failure = { kind: 'pause', reason: 'invalid_model_response' }
           const responseReceived = received || error instanceof AgentProviderRequestError && error.deliveryState === 'response_received'
@@ -450,7 +455,7 @@ export class NativeCodingLoop {
               draft.independentVerification.drafts.push({ attemptId, ...(receivedTurn ? {authorTurn:receivedTurn} : {}), objectiveVersion: planning.source.objectiveVersion, sourceDigest: planning.source.sourceDigest,
                 ...(error instanceof FixtureCaseCorrection ? {partial:error.partial} : {}),
                 ...(error instanceof NoFixtureChangeWitness ? {reselect:true} : {}),
-                feedback: planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs and return a single well-formed JSON object. ${planning.phase === 'cases' ? 'Return only the displayed pending batch. Other valid cases stay retained, and the host checks full coverage before freezing.' : 'Cover every approved source unit in the selection.'} No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.' })
+                feedback: `${invalidEnvelope ? `Invalid tool call envelope: ${invalidEnvelope}. ` : ''}` + (planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs and return a single well-formed JSON object. ${planning.phase === 'cases' ? 'Return only the displayed pending batch. Other valid cases stay retained, and the host checks full coverage before freezing.' : 'Cover every approved source unit in the selection.'} No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.') })
               const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === planning.source.objectiveVersion && item.sourceDigest === planning.source.sourceDigest && !item.selection && !item.progress).length
               if (failures < 3) return
             }

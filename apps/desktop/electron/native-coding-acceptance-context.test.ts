@@ -374,6 +374,7 @@ it('shows the owning implementation of an additional public fixture, including r
     const actual = data.fixtures.find((f: { path: string }) => f.path === 'framekit-adapter.test.ts')
     expect(actual?.production?.path).toBe('framekit-adapter.ts')
     expect(actual?.production?.content).toContain('maxOutputTokens:2048')
+    expect(actual?.production?.content.length).toBeLessThanOrEqual(6000)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

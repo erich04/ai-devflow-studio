@@ -340,7 +340,7 @@ export async function fixturePlanning(
       request: {
         systemPrompt:
           selectPrompt +
-          ' Choose the smallest scenario set that demonstrates all requested behavioral differences. Every selected case already runs its unchanged original control. Avoid extra cases that only repeat the same observation.' +
+          ' This phase selects public controls only. The next phase supplies their full setup and implementation excerpts. Choose the smallest scenario set that demonstrates all requested behavioral differences. Every selected case already runs its unchanged original control. Avoid extra cases that only repeat the same observation.' +
           (fixtures.some((f) => f.anchors.some((a) => a.selectable && a.row))
             ? ' Some existing public tests exercise concrete parameter rows. When the approved behavior depends on an existing setting, prefer its working row and the operation that actually receives it. Changing a similarly named field on a different adapter does not establish that precondition.'
             : '') +
@@ -366,7 +366,7 @@ export async function fixturePlanning(
                 production: focusFixtureEvidence(
                   f.production,
                   [objective, ...f.anchors.flatMap((a) => a.behavior?.actions ?? [])].join('\n'),
-                  Math.min(12000, Math.floor(84000 / indexed.length)),
+                  Math.min(6000, Math.floor(42000 / indexed.length)),
                 ),
               })),
               ...(previous ? { correction: previous.feedback } : {}),

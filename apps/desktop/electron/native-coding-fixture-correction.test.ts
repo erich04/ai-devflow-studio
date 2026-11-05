@@ -10,6 +10,7 @@ import {
 import { classifyIndependentPreflight } from './native-coding-check-preflight'
 import type { AcceptancePlanning } from './native-coding-fixture-planning'
 import { codingHarnessFixture, codingToolReply } from './native-coding-test-fixture'
+import { resolveRequestPolicy } from '@ai-devflow/shared'
 
 it('freezes a scoped public observation through the normal author response and binds its boundary', () => {
   const fixture = fixtureTemplate('example.test.ts', "import {it,expect} from 'vitest'\nit('compound',()=>{\nconst value=1\nexpect(value).toBe(1)\nexpect(layout()).toEqual(['old'])\n})")
@@ -525,11 +526,14 @@ it('retains successful bounded batches without counting them as failed author at
   const fixture = await codingHarnessFixture(
     async (request) => {
       expect(JSON.stringify(request)).not.toContain('private author step')
+      expect(request.maxOutputTokens).toBe(65536)
       return codingToolReply('stop', 'report_blocked', { reason: 'The complete independent plan is now frozen' })
     },
     'node node_modules/vitest/vitest.mjs run value.test.ts',
-    {},
+    { resolveRequestPolicy: input => resolveRequestPolicy({ model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', thinking: { mode: 'enabled', effort: 'high' }, ...input }) },
     async (request) => {
+      expect(request.maxOutputTokens).toBe(16384)
+      expect(request.messages.map(message => message.role)).toEqual(['user'])
       if (request.tools[0]?.function.name === 'select_behavior_contract')
         return codingToolReply('select', 'select_behavior_contract', {
           scenarios: Array.from({ length: 14 }, (_, i) => ({
@@ -540,8 +544,6 @@ it('retains successful bounded batches without counting them as failed author at
           contextOnly: [],
         })
       const form = JSON.parse(request.messages.at(-1)!.content as string)
-      if (requests.length)
-        expect(request.messages.some(message => message.role === 'assistant' && message.reasoning_content === 'private author step '+requests.length)).toBe(true)
       await inspectState()
       const offered = form.scenarios.map((s: { id: string }) => s.id)
       requests.push(offered)

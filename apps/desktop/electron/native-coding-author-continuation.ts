@@ -68,11 +68,15 @@ export function continuePrivateAuthor(
   source: IndependentCheckSource,
   messages: NativeToolMessage[],
   state?: IndependentVerificationState,
+  toolName?: string,
 ): NativeToolMessage[] {
   const last = [...(state?.drafts ?? [])].reverse().find(
     (d) => d.objectiveVersion === source.objectiveVersion && d.sourceDigest === source.sourceDigest,
   )
   if (!last?.authorTurn || last.authorTurn.baselineDigest !== source.baselineDigest) return messages
+  // The current brief already carries an accepted selection and retained cases.
+  // Continue reasoning for corrections, not across completed phases or batches.
+  if (last.selection || last.progress || (toolName && last.authorTurn.assistant.tool_calls?.[0]?.function.name !== toolName)) return messages
   const continued = [...receipt(last.authorTurn, last.feedback), ...messages]
   return Buffer.byteLength(JSON.stringify(continued)) <= 2 * maxTurnBytes ? structuredClone(continued) : messages
 }

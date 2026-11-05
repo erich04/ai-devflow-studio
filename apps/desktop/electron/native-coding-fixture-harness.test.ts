@@ -20,6 +20,7 @@ it('rejects a projection-only delivery, then accepts the exact repaired runtime 
     selectionCalls = 0,
     caseCalls = 0
   const author = async (req: NativeConversationRequest) => {
+    expect(req.maxOutputTokens).toBe(8192)
     requests.push(req)
     if (req.tools[0]!.function.name === 'select_behavior_contract') {
       selectionCalls++
