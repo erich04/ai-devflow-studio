@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFile, rm, symlink } from 'node:fs/promises'
+import { readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { codingHarnessFixture, codingToolReply } from './native-coding-test-fixture'
@@ -74,11 +74,44 @@ it('repairs after more than three fixed failures and verifies the same contract 
   fixture.get = (codingRunId = 'coding') => fixture.executor.harness!.command({ protocolVersion: 2, type: 'get', codingRunId }, async () => {})
   await approve(fixture, 'repaired-after-restart')
   const completed = (await fixture.store.getNativeCodingSession('native-coding'))!
-  expect((await fixture.get()).snapshot.status, JSON.stringify(completed.deliveryEvidence)).toBe('completed')
+  expect((await fixture.get()).snapshot.status, JSON.stringify(completed.deliveryEvidence.at(-1)?.result?.independentVerification)).toBe('completed')
   expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(fixed)
   expect(await readFile(path.join(fixture.delivery, 'value.test.ts'), 'utf8')).toBe(publicTest)
   expect(author).not.toHaveBeenCalled()
 }, 30000)
+
+it('recognizes the exact test file when its report uses a filesystem alias', async () => {
+  provisionFramework()
+  let turn = 0
+  const fixture = await codingHarnessFixture(async () => ++turn === 1
+    ? codingToolReply('fix', 'write_file', { path: 'value.ts', content: fixed, expectedHash: codingDigest(original) })
+    : codingToolReply('submit', 'propose_changeset', { summary: 'Review' }),
+  undefined, {}, undefined, { baselineFiles, approvedTests: approvedTests() })
+  fixtures.push(fixture)
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  const originalStart = CodingCommandRunner.prototype.start
+  const originalWait = CodingCommandRunner.prototype.wait
+  let directory = ''
+  vi.spyOn(CodingCommandRunner.prototype, 'start').mockImplementation(async function (this: CodingCommandRunner, ...args) {
+    if (args[0].endsWith(':approved-tests')) directory = args[2]
+    return originalStart.apply(this, args)
+  })
+  vi.spyOn(CodingCommandRunner.prototype, 'wait').mockImplementation(async function (this: CodingCommandRunner, ...args) {
+    const receipt = await originalWait.apply(this, args)
+    if (args[0].endsWith(':approved-tests')) {
+      const alias = path.join(fixture.root, 'report-alias')
+      await symlink(directory, alias, process.platform === 'win32' ? 'junction' : 'dir')
+      const reportPath = path.join(directory, '.devflow-approved-result.json')
+      const report = JSON.parse(await readFile(reportPath, 'utf8'))
+      report.testResults[0].name = path.join(alias, 'value.test.ts')
+      await writeFile(reportPath, JSON.stringify(report))
+    }
+    return receipt
+  })
+  await approve(fixture, 'alias-report')
+  expect((await fixture.get()).snapshot.status).toBe('completed')
+  expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(fixed)
+})
 
 it.each([
   ['skipped test', approvedTest.replace("it('", "it.skip('"), 1, 'Test status skipped'],

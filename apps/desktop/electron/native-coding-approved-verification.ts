@@ -116,14 +116,18 @@ export async function runApprovedCodingVerification(input: {
     const after = await snapshotCodingTree(directory, revision.base.excludedPaths)
     const clean = (message: string) => redactSensitiveText(stripVTControlCharacters(message)
       .replaceAll(canonicalDirectory, '<verification>').replaceAll(directory, '<verification>')).value.slice(0, 1200)
-    const suites = report?.testResults ?? []
-    // Vitest resolves macOS /var aliases to /private/var in its report.
-    const relative = (name: string) => path.relative(canonicalDirectory, path.resolve(canonicalDirectory, name)).split(path.sep).join('/')
-    const observed = new Set(suites.map(suite => relative(suite.name)))
+    // Resolve both ends. macOS /var aliases and Windows short temporary paths
+    // may appear differently in the runner report and the workspace identity.
+    const suites = await Promise.all((report?.testResults ?? []).map(async suite => {
+      const absolute = path.resolve(directory, suite.name)
+      const canonical = await realpath(absolute).catch(() => absolute)
+      return { ...suite, file: path.relative(canonicalDirectory, canonical).split(path.sep).join('/') }
+    }))
+    const observed = new Set(suites.map(suite => suite.file))
     const failures = suites.flatMap(suite => {
       const failed = (suite.assertionResults ?? []).filter(test => test.status !== 'passed')
-        .map(test => ({ file: relative(suite.name), test: clean(test.fullName ?? ''), message: clean((test.failureMessages ?? []).join('\n') || `Test status ${test.status}`) }))
-      return failed.length ? failed : suite.status === 'failed' ? [{ file: relative(suite.name), test: '', message: clean(suite.message ?? 'Test module failed') }] : []
+        .map(test => ({ file: suite.file, test: clean(test.fullName ?? ''), message: clean((test.failureMessages ?? []).join('\n') || `Test status ${test.status}`) }))
+      return failed.length ? failed : suite.status === 'failed' ? [{ file: suite.file, test: '', message: clean(suite.message ?? 'Test module failed') }] : []
     }).slice(0, 12)
     const missing = tests.files.filter(file => !observed.has(file.path))
     for (const file of missing.slice(0, 12)) failures.push({ file: file.path, test: '', message: 'The approved test file was not present in the runner report.' })
