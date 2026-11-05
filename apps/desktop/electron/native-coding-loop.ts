@@ -5,7 +5,7 @@ import type { LocalStore } from './local-store'
 import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { updateNativeCodingSession, type NativeCodingSession, type CodingModelAttempt, type CodingModelRetry, type CodingToolReceipt } from './native-coding-session'
 import { codingContext } from './native-coding-context'
-import { fixtureSelectionFromResponse, fixtureChecksFromResponse, independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, needsIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
+import { fixtureSelectionFromResponse, fixtureChecksFromResponse, independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, currentIndependentChecks, needsIndependentChecks, type FrozenIndependentChecks } from './native-coding-independent-verification'
 import { NoFixtureChangeWitness, FixtureCaseCorrection, InvalidFixtureDraft } from './native-coding-fixture-cases'
 import type { IndependentPreflight } from './native-coding-check-preflight'
 import { codingRepairBudget } from './native-coding-repair-budget'
@@ -57,9 +57,6 @@ class InvalidToolBatch extends Error {
 // waits happen inside the active interval, so they count toward the task's time limit.
 const retryLimits: Record<CodingModelRetryReason, number> = { rate_limited: 5, overloaded: 5, connection_not_sent: 5, server_error: 2 }
 const maxParallelReads = 4
-// Fixture selection and small author batches share the task's wall deadline
-// with implementation. Keep their output below the full coding-turn ceiling.
-const fixtureAuthorOutputLimit = 16384
 const retryBaseDelayMs = 1_000, retryMaxDelayMs = 30_000, retryMaxTotalWaitMs = 120_000
 type ModelFailure = { kind: 'retry'; reason: CodingModelRetryReason; retryAfterMs?: number } | { kind: 'pause'; reason: string } | { kind: 'reconcile' } | { kind: 'invalid_batch'; problem: string }
 /** DeepSeek error codes: 401 authentication, 402 insufficient balance, 429 rate limit, 500 server error, 503 overloaded. */
@@ -100,6 +97,8 @@ export class NativeCodingLoop {
   private readonly acquiring = new Set<string>()
   constructor(private readonly host: { store: LoopStore; provider: AgentProvider; tools: CodingLoopTools; now?: () => string; changed?: (session: NativeCodingSession) => void;
     verificationWorkspace?: CodingCandidateWorkspace;
+    prepareIndependentChecksInBackground?(session: NativeCodingSession, signal: AbortSignal): Promise<void>;
+    stopAfterIndependentChecks?: true;
     preflightIndependentChecks?(plan: FrozenIndependentChecks, operationId: string, signal: AbortSignal): Promise<IndependentPreflight>;
     stopPreviousWorker?: (writer: NonNullable<NativeCodingSession['writer']>) => Promise<boolean>; reconcileWorkers?: () => Promise<boolean>;
     activity?(unitId: string, active: boolean): Promise<void>; rootActiveMilliseconds?(): Promise<number>; rootStepsUsed?(): Promise<number>; reserveRootStep?(attemptId: string): Promise<boolean>; assertAuthority?(): Promise<void>
@@ -238,6 +237,15 @@ export class NativeCodingLoop {
             draft.transcript.push({ role: 'user', content: noProgressNotice(draft.limits.noProgressLimit) }); draft.progressNudge.delivered = true
           }
         })
+        if (this.host.stopAfterIndependentChecks && !needsIndependentChecks(session)) {
+          if (!currentIndependentChecks(session)) throw new Error('Private acceptance worker has no frozen plan')
+          return await this.change(id, draft => { draft.status = 'completed' })
+        }
+        if (this.host.prepareIndependentChecksInBackground && needsIndependentChecks(session)) {
+          await this.host.prepareIndependentChecksInBackground(session, controller.signal)
+          session = await this.read(id)
+          if (session.status !== 'running' || controller.signal.aborted) return session
+        }
         // A re-send repeats a step that already holds its step reservation, so it is not another step.
         const retryOf = pendingModelRetry(session)
         const elapsed = this.host.rootActiveMilliseconds ? await this.host.rootActiveMilliseconds() : session.activeMilliseconds + Date.now() - started
@@ -274,7 +282,7 @@ export class NativeCodingLoop {
           candidateEditingGranted: Boolean(session.binding?.executionGranted && session.parent?.mode !== 'read_only'),
           ...(session.binding?.testInputPolicyVersion === 1 ? { testInputAuthority: 'Existing baseline tests, fixtures and runner configuration are acceptance inputs. Keep them unchanged and add new tests in new files. A changed existing input needs separate exact-content human authorization before submission; editing code and passing modified tests do not provide that authorization.' } : {}),
           finalVerification: 'Host independently verifies the approved frozen revision; neither a model statement nor human approval alone proves completion.' }
-        const planning = needsIndependentChecks(session) ? await independentCheckRequest(session, this.host.verificationWorkspace ?? (() => { throw new Error('Independent verification workspace is required') })()) : undefined
+        const planning = !this.host.prepareIndependentChecksInBackground && needsIndependentChecks(session) ? await independentCheckRequest(session, this.host.verificationWorkspace ?? (() => { throw new Error('Independent verification workspace is required') })()) : undefined
         if (planning && wallClock) {
           // This private request is constructed from B alone. Only the trusted
           // job clock crosses into it; no candidate transcript or test result.
@@ -298,7 +306,6 @@ export class NativeCodingLoop {
           : codingContext(session, provider, { systemPrompt: session.parent?.mode === 'read_only' ? readOnlySystemPrompt : systemPrompt, messages: session.transcript, tools: [...this.host.tools.definitions, ...controlTools], ...requestOptions }, JSON.stringify(runtimeState))
         const request: NativeConversationRequest = context.request
         request.maxOutputTokens = provider.resolveRequestPolicy?.(request).maxOutputTokens ?? request.maxOutputTokens ?? 8192
-        if (planning?.phase) request.maxOutputTokens = Math.min(request.maxOutputTokens, fixtureAuthorOutputLimit)
         validateNativeHistory(request.messages)
         provider.validateNativeRequest?.(request)
         const requestDigest = codingDigest(provider.serializeNativeRequest(request))
@@ -338,7 +345,7 @@ export class NativeCodingLoop {
                 if (draft.status !== 'running' || draft.writer?.owner !== this.owner || draft.writer.epoch !== epoch || controller.signal.aborted || draft.pendingInput.length || draft.objectiveVersion !== planning.source.objectiveVersion || independentCheckSourceDigest(draft) !== planning.source.sourceDigest) { attempt.error = 'Fixture selection superseded'; return }
                 draft.independentVerification ??= { plans: [], humanInputs: [] }
                 draft.independentVerification.drafts ??= []
-                draft.independentVerification.drafts.push({ attemptId, ...(receivedTurn ? {authorTurn:receivedTurn} : {}), objectiveVersion: draft.objectiveVersion, sourceDigest: planning.source.sourceDigest, selection, feedback: 'Public fixtures selected before implementation.' })
+                draft.independentVerification.drafts.push({ attemptId, ...(receivedTurn ? {authorTurn:receivedTurn} : {}), objectiveVersion: draft.objectiveVersion, sourceDigest: planning.source.sourceDigest, selection, feedback: 'Public fixtures selected from immutable B.' })
               })
               continue
             }
@@ -456,7 +463,7 @@ export class NativeCodingLoop {
               draft.independentVerification.drafts.push({ attemptId, ...(receivedTurn ? {authorTurn:receivedTurn} : {}), objectiveVersion: planning.source.objectiveVersion, sourceDigest: planning.source.sourceDigest,
                 ...(error instanceof FixtureCaseCorrection ? {partial:error.partial} : {}),
                 ...(error instanceof NoFixtureChangeWitness ? {reselect:true} : {}),
-                feedback: `${invalidEnvelope ? `Invalid tool call envelope: ${invalidEnvelope}. ` : ''}${outputTruncated ? `The prior reply reached its ${request.maxOutputTokens} token output limit before completing a tool call. Keep the analysis concise and emit the requested structured result within that limit. ` : ''}` + (planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs and return a single well-formed JSON object. ${planning.phase === 'cases' ? 'Return only the displayed pending batch. Other valid cases stay retained, and the host checks full coverage before freezing.' : 'Cover every approved source unit in the selection.'} No code has run.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.') })
+                feedback: `${invalidEnvelope ? `Invalid tool call envelope: ${invalidEnvelope}. ` : ''}${outputTruncated ? `The prior reply reached its ${request.maxOutputTokens} token output limit before completing a tool call. Keep the analysis concise and emit the requested structured result within that limit. ` : ''}` + (planning.phase ? `${error instanceof InvalidFixtureDraft ? error.message + '. ' : ''}Return one valid ${planning.request.tools[0]!.function.name} call. Use the exact listed IDs and return a single well-formed JSON object. ${planning.phase === 'cases' ? 'Return only the displayed pending batch. Other valid cases stay retained, and the host checks full coverage before freezing.' : 'Cover every approved source unit in the selection.'} No private checks have run in this attempt.` : 'The last response did not contain one valid submit_independent_checks call with exactly the approved criteria. Return concise executable checks using valid JSON string escaping. Ordinary text, truncated output, empty checks and invalid JSON are not acceptance plans.') })
               const failures = draft.independentVerification.drafts.filter(item => item.objectiveVersion === planning.source.objectiveVersion && item.sourceDigest === planning.source.sourceDigest && !item.selection && !item.progress).length
               if (failures < 3) return
             }

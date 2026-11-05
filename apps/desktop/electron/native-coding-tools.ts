@@ -68,6 +68,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
   authority: CodingTaskAuthority; assertAuthority(): Promise<void>; sources: CodingSource[]; testPlanDigest: string;
   child?: { mode: 'read_only' | 'isolated_coding'; paths: string[] };
   extensions?: ReturnType<typeof createCodingExtensions>;
+  beforeSubmission?(context: Parameters<CodingLoopTools['execute']>[2]): Promise<void>;
   delegation?: { execute(name: string, input: Record<string, unknown>, context: Parameters<CodingLoopTools['execute']>[2]): Promise<unknown>; reconcile(receipt: CodingToolReceipt): Promise<{ state: 'completed'; result: unknown } | { state: 'not_executed' } | { state: 'unknown' }> } }): CodingLoopTools {
   const { workspace } = host
   const completedResult = (result: unknown) => ({ state: 'completed' as const, result: redactSensitiveValue(result).value })
@@ -216,14 +217,17 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       return host.commands.cancel(String(input.id))
     }
     if (name === 'propose_changeset') {
+      const current = await host.store.getNativeCodingSession(host.sessionId)
+      if (!current || current.status !== 'running' || current.objectiveVersion !== ctx.session.objectiveVersion || current.pendingInput.length)
+        throw new Error('Submission authority changed while preparing acceptance')
       if (host.commands.hasActiveCommands) throw new Error('Commands are still running; wait before freezing')
       if (host.child) {
         const observed = await workspace.inspect(), baseline = new Map(workspace.identity.base.files.map(file => [file.path, file]))
         const changed = [...observed.files.filter(file => baseline.get(file.path)?.hash !== file.hash || baseline.get(file.path)?.mode !== file.mode), ...workspace.identity.base.files.filter(file => !observed.files.some(current => current.path === file.path))]
         if (changed.some(file => !host.child!.paths.some(scope => file.path === scope || file.path.startsWith(`${scope}/`)))) throw new Error('Child command changed a file outside delegated scope')
       }
-      const dependencies = await codingDependencyPlan(workspace.candidatePath, ctx.session.binding?.profile ?? { kind: 'trusted_local' }, workspace.identity.base.excludedPaths, { isolatedStore: ctx.session.binding?.dependencyCacheVersion === 1 })
-      const revision = await workspace.freeze({ id: `changeset-${codingDigest(`${host.sessionId}:${ctx.operationId}`)}`, sessionId: host.sessionId, codingRunId: ctx.session.codingRunId, objectiveVersion: ctx.session.objectiveVersion, policyVersion: host.authority.policyVersion, testPlanDigest: codingDigest(JSON.stringify({ testPlan: ctx.session.binding?.testPlanDigest ?? host.testPlanDigest, dependencies: dependencies.digest })), summary: String(input.summary), now: new Date().toISOString() })
+      const dependencies = await codingDependencyPlan(workspace.candidatePath, current.binding?.profile ?? { kind: 'trusted_local' }, workspace.identity.base.excludedPaths, { isolatedStore: current.binding?.dependencyCacheVersion === 1 })
+      const revision = await workspace.freeze({ id: `changeset-${codingDigest(`${host.sessionId}:${ctx.operationId}`)}`, sessionId: host.sessionId, codingRunId: current.codingRunId, objectiveVersion: current.objectiveVersion, policyVersion: host.authority.policyVersion, testPlanDigest: codingDigest(JSON.stringify({ testPlan: current.binding?.testPlanDigest ?? host.testPlanDigest, dependencies: dependencies.digest })), summary: String(input.summary), now: new Date().toISOString() })
       await change(draft => { if (!draft.revisions.some(item => item.id === revision.id)) draft.revisions.push(revision) })
       return { revisionId: revision.id, digest: revision.digest, summary: revision.summary, fileCount: revision.operations.length }
     }
@@ -328,6 +332,11 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
           const dependencies = await codingDependencyPlan(workspace.candidatePath, profile, workspace.identity.base.excludedPaths, { isolatedStore: session?.binding?.dependencyCacheVersion === 1 })
           if (dependencies.command && session?.binding?.dependencyPlan?.digest !== dependencies.digest) await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'dependencies', value: dependencies, details: `为当前依赖输入准备候选及独立验证目录：\n${dependencies.command}\n输入摘要：${dependencies.inputDigest}\n可能下载依赖并执行安装脚本，使用已选执行方式。` })
           if (name === 'propose_changeset' && !dependencies.frozen) throw new Error('Generate a lockfile in the candidate before freezing final verification')
+        }
+        if (name === 'propose_changeset') {
+          await host.beforeSubmission?.(context)
+          context.signal.throwIfAborted()
+          await host.assertAuthority()
         }
         const current = await host.store.getNativeCodingSession(host.sessionId)
         // Long commands run in the durable worker; the registry only authorizes and starts them.

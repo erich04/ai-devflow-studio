@@ -169,6 +169,10 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
       if (sessions.some(row => row.id === child.sessionId)) continue
       const saved = await store.getNativeCodingSession(child.sessionId); if (saved) sessions.push(saved)
     }
+    for (const descriptor of session?.acceptanceWorkers ?? []) {
+      const saved = await store.getNativeCodingSession(descriptor.sessionId)
+      if (saved) { sessions.push(saved); await saveJson(path.join(input.output, 'private-acceptance', `${saved.id}.json`), saved) }
+    }
     const permissions = sessions.flatMap(row => row.permissions)
     const events = codingRunId ? await store.listCodingAgentEvents(codingRunId) : []
     const usage = evaluationUsage(ledger.records())

@@ -21,7 +21,7 @@ export function classifyIndependentPreflight(
   if (result.status === 'timed_out' || result.status === 'cancelled')
     return {
       status: 'unavailable',
-      feedback: `Independent check preflight ${result.status}; no implementation has started.`,
+      feedback: `Independent check preflight ${result.status}; submission remains blocked.`,
     }
   const observed = (id: string) => (result.failedCriteria.includes(id) ? 'fail' : 'pass')
   const evaluated = plan.checks.filter(
@@ -60,7 +60,7 @@ export function classifyIndependentPreflight(
   return { status: 'valid', feedback: 'All criteria executed on immutable B with their declared outcomes.' }
 }
 
-/** Execute only against a fresh B copy, before implementation. Never inspect C,
+/** Execute only against a fresh B copy. Never inspect C,
  * reference patches or external acceptance tests when validating a draft. */
 export async function preflightIndependentChecks(input: { plan: FrozenIndependentChecks; workspace: CodingCandidateWorkspace; runner: CodingCommandRunner; profile: CodingExecutionProfile; operationId: string; signal: AbortSignal; dependencyCacheVersion?: 1 }): Promise<IndependentPreflight> {
   if (!input.plan.adapter) return { status: 'valid', feedback: 'Legacy node check format; no framework baseline preflight.' }

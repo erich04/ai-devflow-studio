@@ -9,8 +9,9 @@ import { CodingCommandRunner } from './coding-command-runner'
 import { preflightIndependentChecks } from './native-coding-check-preflight'
 import { freezeIndependentChecks } from './native-coding-independent-verification'
 import * as dependencies from './coding-dependency-preparation'
+import { mutateNativeCodingSession } from './native-coding-session'
 
-it('rejects a projection-only delivery, then accepts the exact repaired runtime using the same frozen public controls', async () => {
+it.each(['serial', 'parallel'] as const)('rejects a projection-only delivery, then accepts the exact repaired runtime using the same frozen public controls (%s)', async (mode) => {
   const oldCode = "export const allowed = (lane: string) => lane === 'live'\n"
   const newCode = "export const allowed = (lane: string) => ['live', 'stored'].includes(lane)\n"
   const suite = (module: string) =>
@@ -92,6 +93,9 @@ it('rejects a projection-only delivery, then accepts the exact repaired runtime 
     return { inputDigest: input.plan.inputDigest }
   })
   try {
+    if (mode === 'parallel') await mutateNativeCodingSession(fixture.store, 'native-coding', session => {
+      session.operatorDeadlineAt = new Date(Date.now() + 120000).toISOString()
+    })
     await fixture.authorize()
     await fixture.executor.settled('coding')
     expect(selectionCalls).toBe(3)

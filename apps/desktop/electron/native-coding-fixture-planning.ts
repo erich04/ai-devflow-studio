@@ -428,7 +428,7 @@ export async function fixturePlanning(
       ),
   )
   const allPending = selection.scenarios.map((s, i) => ({ ...s, id: `s${i + 1}` })).filter((s) => !retained.has(s.id))
-  const pendingScenarios = allPending.slice(0, 2)
+  const pendingScenarios = allPending.slice(0, 4)
   const selectedFixtures = [...new Set(pendingScenarios.map((s) => s.fixture))].map((key) => {
     const index = Number(key.slice(1)) - 1,
       f = fixtures[index]!

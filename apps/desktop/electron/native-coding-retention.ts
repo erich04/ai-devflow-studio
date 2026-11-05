@@ -5,6 +5,7 @@ import { mutateNativeCodingSession, type NativeCodingSession } from './native-co
 import type { CodingHarnessCommand, ModelCostRecord } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
 import { removeCodingDependencySeedStores } from './coding-dependency-seed'
+import { codingAcceptanceWorkers } from './native-coding-acceptance-worker'
 
 const cleanupQueues = new WeakMap<LocalStore, Map<string, Promise<NativeCodingSession>>>()
 /** Same command identity remains a replay even after cleanup advanced the checkpoint. */
@@ -18,7 +19,7 @@ export function cleanupNativeCodingSession(store: LocalStore, command: Extract<C
     const replay = session.commands.find(item => item.id === command.commandId)
     if (replay) { if (replay.digest !== fingerprint) throw new Error('Conflicting coding command'); return session }
     if (session.version !== command.expectedVersion) throw new Error('任务已更新，请刷新后重试。')
-    const children = await Promise.all(session.children.map(async child => { const found = await store.getNativeCodingSession(child.sessionId); if (!found) throw new Error('Missing child record'); return found }))
+    const children = [...await Promise.all(session.children.map(async child => { const found = await store.getNativeCodingSession(child.sessionId); if (!found) throw new Error('Missing child record'); return found })), ...await codingAcceptanceWorkers(store, session)]
     await cleanupCodingScratch(session, children, await costRecords(session.localProjectId))
     return mutateNativeCodingSession(store, id, draft => {
       if (draft.version !== session.version) throw new Error('任务已更新；清理收据已保留，请刷新后重试。')
@@ -32,7 +33,7 @@ export function cleanupNativeCodingSession(store: LocalStore, command: Extract<C
 
 export function codingRetentionPolicy(root: NativeCodingSession, children: NativeCodingSession[], ledger?: ModelCostRecord[]) {
   const sessions = [root, ...children]
-  const blocked = root.parent || !['completed', 'cancelled', 'failed'].includes(root.status) || root.children.some(child => child.state === 'active' && !children.some(session => session.id === child.sessionId && ['completed', 'cancelled', 'failed'].includes(session.status))) || sessions.some(session => session.writer || session.activity.some(interval => interval.endedAt === undefined))
+  const blocked = root.parent || root.privateAcceptanceFor || !['completed', 'cancelled', 'failed'].includes(root.status) || root.children.some(child => child.state === 'active' && !children.some(session => session.id === child.sessionId && ['completed', 'cancelled', 'failed'].includes(session.status))) || sessions.some(session => session.writer || session.activity.some(interval => interval.endedAt === undefined))
   if (blocked) return { cleanupAllowed: false, reason: '活跃、待审批或待恢复的任务保留全部资料。' }
   if (sessions.flatMap(session => session.attempts).filter(attempt => attempt.status !== 'not_sent').some(attempt => attempt.status !== 'completed' || !ledger?.some(row => row.sourceKind === 'model_call' && row.sourceId === attempt.id && row.status === 'settled' && row.usageKnown && row.costUsd !== null))) return { cleanupAllowed: false, reason: '存在用量未知或费用未确认的调用，暂不清理工作副本。' }
   return { cleanupAllowed: true, reason: '仅清理候选与验证工作副本、安装依赖和可重建的依赖缓存。保留文件内容、修订、对话、命令日志、缓存来源和事务证据；终态任务不能继续执行。' }
@@ -42,8 +43,11 @@ export function codingRetentionPolicy(root: NativeCodingSession, children: Nativ
 export async function cleanupCodingScratch(root: NativeCodingSession, children: NativeCodingSession[], ledger?: ModelCostRecord[]): Promise<void> {
   const policy = codingRetentionPolicy(root, children, ledger)
   if (!policy.cleanupAllowed) throw new Error(policy.reason)
+  const cleaned = new Set<string>()
   for (const session of [root, ...children]) {
     if (!session.binding?.executionGranted) continue
+    if (cleaned.has(session.binding.workspaceRoot)) continue
+    cleaned.add(session.binding.workspaceRoot)
     const workspace = await CodingCandidateWorkspace.open(session.binding.workspaceRoot)
     const receipt = path.join(workspace.root, 'scratch-retention.json')
     try {

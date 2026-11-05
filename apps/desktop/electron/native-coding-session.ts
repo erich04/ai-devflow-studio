@@ -16,6 +16,7 @@ export type NativeCodingQuestion = { id: string; toolCallId: string; text: strin
 export type CodingModelRetry = { reason: CodingModelRetryReason; number: number; limit: number; delayMs: number; notBefore: string; retryAfterMs?: number }
 export type CodingModelAttempt = { id: string; operationKey: string; requestDigest: string; step: number; objectiveVersion: number; status: 'started' | 'completed' | 'not_sent' | 'unknown'; createdAt: string; completedAt?: string; usage?: AgentProviderUsage; error?: string; acknowledgedBy?: string; retry?: CodingModelRetry; retryOf?: string }
 export type CodingToolReceipt = { id: string; name: string; input: Record<string, unknown>; inputDigest: string; objectiveVersion: number; effect: 'read' | 'write' | 'command'; status: 'started' | 'completed' | 'unknown'; result?: unknown; error?: string }
+export type CodingAcceptanceWorker = { sessionId: string; objectiveVersion: number; sourceDigest: string; baselineDigest: string }
 /** Private host record. Never project raw transcript or credentials to the Team API. */
 export type NativeCodingSession = {
   schemaVersion: 1
@@ -78,6 +79,9 @@ export type NativeCodingSession = {
   taskBudget?: import('@ai-devflow/shared').ModelTaskBudget
   parent?: { sessionId: string; codingRunId: string; objectiveVersion: number; baseDigest: string; mode: 'read_only' | 'isolated_coding'; paths: string[] }
   children: Array<{ sessionId: string; codingRunId: string; title: string; state: 'active' | 'included' | 'excluded'; mergedChangeSetId?: string }>
+  /** Private preparation is accounted with the root, but is not a callable child. */
+  acceptanceWorkers?: CodingAcceptanceWorker[]
+  privateAcceptanceFor?: { rootSessionId: string; rootCodingRunId: string; objectiveVersion: number; sourceDigest: string; baselineDigest: string }
   activity: import('./coding-activity-clock').CodingActivity[]
   acceptance: Array<{ id: string; objectiveVersion: number; sourceRef: string; text: string; confirmation: 'approved_source'; resolution: 'unresolved' | 'human_confirmed'; revisionDigest?: string }>
   /** Host-only acceptance code. Never part of implementer or child transcripts. */
@@ -133,6 +137,16 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
   if (session.rootStepAttempts && (new Set(session.rootStepAttempts).size !== session.rootStepAttempts.length || !session.rootStepAttempts.every(identifier))) throw new Error('Invalid root step reservations')
   const digest = (item: unknown) => typeof item === 'string' && /^[a-f0-9]{64}$/u.test(item)
   const natural = (item: unknown) => Number.isSafeInteger(item) && Number(item) >= 0
+  if (session.acceptanceWorkers !== undefined && (!Array.isArray(session.acceptanceWorkers) || session.acceptanceWorkers.length > 10000 ||
+      new Set(session.acceptanceWorkers.map(worker => worker?.sessionId)).size !== session.acceptanceWorkers.length ||
+      session.acceptanceWorkers.some(worker => !worker || !identifier(worker.sessionId) || worker.sessionId === session.id ||
+        !natural(worker.objectiveVersion) || worker.objectiveVersion < 1 || worker.objectiveVersion > session.objectiveVersion ||
+        !digest(worker.sourceDigest) || !digest(worker.baselineDigest)))) throw new Error('Invalid private acceptance worker history')
+  const privateOwner = session.privateAcceptanceFor
+  if (privateOwner !== undefined && (!privateOwner || session.parent || session.acceptanceWorkers?.length || !identifier(privateOwner.rootSessionId) ||
+      !identifier(privateOwner.rootCodingRunId) || privateOwner.rootSessionId === session.id || privateOwner.rootCodingRunId === session.codingRunId ||
+      privateOwner.objectiveVersion !== session.objectiveVersion || !digest(privateOwner.sourceDigest) || !digest(privateOwner.baselineDigest)))
+    throw new Error('Invalid private acceptance ownership')
   for (const name of ['attempts', 'toolReceipts', 'toolAuthorities', 'commands', 'pendingInput', 'progressFingerprints', 'deliveryEvidence', 'revisions', 'permissions', 'compactions', 'children', 'activity', 'acceptance'] as const) {
     if (!Array.isArray(session[name])) throw new Error(`Invalid coding ${name}`)
   }
@@ -163,6 +177,9 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
     parseCodingCommandRules(policy.rules)
   }
   if (previous) {
+    if (!isDeepStrictEqual(previous.privateAcceptanceFor, session.privateAcceptanceFor)) throw new Error('Private acceptance ownership is immutable')
+    if (previous.acceptanceWorkers && !isDeepStrictEqual(session.acceptanceWorkers?.slice(0, previous.acceptanceWorkers.length), previous.acceptanceWorkers))
+      throw new Error('Private acceptance worker history is append-only')
     if ((previous.operatorDeadlineAt !== undefined || previous.binding?.executionGranted) && previous.operatorDeadlineAt !== session.operatorDeadlineAt) throw new Error('A frozen operator deadline cannot change')
     if (previous.binding?.executionGranted && !isDeepStrictEqual(previous.binding.permissionPolicy, session.binding?.permissionPolicy)) throw new Error('Granted coding permission policy is immutable')
     if (previous.binding?.independentVerificationRequired !== undefined && session.binding?.independentVerificationRequired !== previous.binding.independentVerificationRequired) throw new Error('Independent verification requirement cannot change')

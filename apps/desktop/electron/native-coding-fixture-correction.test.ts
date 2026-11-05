@@ -547,7 +547,7 @@ it('retains successful bounded batches without counting them as failed author at
     'node node_modules/vitest/vitest.mjs run value.test.ts',
     { resolveRequestPolicy: input => resolveRequestPolicy({ model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', thinking: { mode: 'enabled', effort: 'high' }, ...input }) },
     async (request) => {
-      expect(request.maxOutputTokens).toBe(16384)
+      expect(request.maxOutputTokens).toBe(65536)
       expect(request.messages.map(message => message.role)).toEqual(['user'])
       if (request.tools[0]?.function.name === 'select_behavior_contract')
         return codingToolReply('select', 'select_behavior_contract', {
@@ -605,10 +605,10 @@ it('retains successful bounded batches without counting them as failed author at
       state = session.independentVerification!
     expect(state.plans).toHaveLength(1)
     expect(state.plans[0]?.checks).toHaveLength(14)
-    expect(requests.map((r) => r.length)).toEqual([2, 2, 2, 2, 2, 2, 2])
-    expect(snapshots).toEqual([0, 2, 4, 6, 8, 10, 12].map((retained) => ({ frozen: 0, retained })))
+    expect(requests.map((r) => r.length)).toEqual([4, 4, 4, 2])
+    expect(snapshots).toEqual([0, 4, 8, 12].map((retained) => ({ frozen: 0, retained })))
     expect(new Set(requests.flat()).size).toBe(14)
-    expect(state.drafts?.filter((d) => d.partial).map((d) => d.partial!.cases.length)).toEqual([2, 4, 6, 8, 10, 12])
+    expect(state.drafts?.filter((d) => d.partial).map((d) => d.partial!.cases.length)).toEqual([4, 8, 12])
     expect(state.drafts?.filter((d) => d.preflightStatus).map((d) => d.preflightStatus)).toEqual(['valid'])
     validateIndependentVerification(JSON.parse(JSON.stringify(state)))
     const malformed = structuredClone(state)
