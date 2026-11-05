@@ -26,7 +26,7 @@ const systemPrompt = `你是 DevFlow Native Coding Agent。围绕已授权任务
 const readOnlySystemPrompt = `${systemPrompt}\n你是只读调查子任务，不得编辑或运行命令。完成时用 report_findings 提供结论与文件来源。`
 const controlTools: ReadOnlyFunctionDefinition[] = [
   { type: 'function', function: { name: 'request_user_input', description: '向用户澄清真实意图，保存后等待回答。必须单独调用。', parameters: { type: 'object', additionalProperties: false, required: ['text'], properties: { text: { type: 'string', minLength: 1, maxLength: 12000 }, options: { type: 'array', items: { type: 'string', maxLength: 1000 }, maxItems: 12 } } } } },
-  { type: 'function', function: { name: 'report_blocked', description: '保存阻碍原因并暂停；不是成功。必须单独调用。', parameters: { type: 'object', additionalProperties: false, required: ['reason'], properties: { reason: { type: 'string' } } } } },
+  { type: 'function', function: { name: 'report_blocked', description: '保存具体阻碍和调查依据后暂停。必须单独调用。', parameters: { type: 'object', additionalProperties: false, required: ['reason'], properties: { reason: { type: 'string', minLength: 1, maxLength: 12000 } } } } },
 ]
 const terminal = (session: NativeCodingSession) => ['completed', 'cancelled', 'failed'].includes(session.status)
 const hostNotice = '[DevFlow 宿主状态通知，并非用户的新指令]\n'
@@ -522,6 +522,11 @@ export class NativeCodingLoop {
         try { args = JSON.parse(call.function.arguments) } catch { throw new Error(`Invalid tool batch: ${call.function.name} arguments must be valid JSON`) }
         const problem = nativeToolValueProblem(definition.function.parameters as NativeToolJsonSchema, args)
         if (problem) throw new Error(`Invalid tool batch: ${call.function.name} ${problem}`)
+        if (call.function.name === 'report_blocked') {
+          const reason = (args as { reason: string }).reason.trim()
+          if (!reason || /^(?:placeholder|todo|tbd|待补充|占位符?)[.。!！…]*$/iu.test(reason))
+            throw new Error('Invalid tool batch: report_blocked requires a concrete obstacle and its evidence. Replace placeholder text or continue the authorized task.')
+        }
         if (controls.includes(call.function.name) && pending.length !== 1) throw new Error(`Invalid tool batch: ${call.function.name} must be called alone`)
       }
     } catch (error) {
