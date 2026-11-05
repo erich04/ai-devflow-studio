@@ -11,14 +11,16 @@ it('cleans only reproducible stores in owned evaluation locations while retainin
   try {
     const execution = path.join(root, 'execution'), key = 'b'.repeat(64)
     const seed = path.join(execution, 'harness', 'a'.repeat(64), 'dependency-seeds', key)
-    for (const directory of ['source/node_modules/package', 'source/.cache/devflow-pnpm-store', 'source/.cache/unrelated', 'source/dependency-seeds/example/store', path.relative(root, path.join(seed, 'store'))]) {
+    for (const directory of ['source/node_modules/package', 'source/.cache/devflow-pnpm-store', 'source/.cache/devflow-corepack', 'source/.cache/unrelated', 'source/dependency-seeds/example/store', path.relative(root, path.join(seed, 'store')), path.relative(root, path.join(seed, 'corepack'))]) {
       await mkdir(path.join(root, directory), { recursive: true }); await writeFile(path.join(root, directory, 'value'), 'preserve or rebuild')
     }
     await writeFile(path.join(seed, 'manifest.json'), JSON.stringify({ key, identity: { version: 1 }, capturedBeforePrivateChecks: true, manifestDigest: 'proof' }))
     await removeDisposableDependencies(root); await removeTrialCommandCaches(execution)
     await expect(access(path.join(root, 'source/node_modules'))).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(access(path.join(root, 'source/.cache/devflow-pnpm-store'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(access(path.join(root, 'source/.cache/devflow-corepack'))).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(access(path.join(seed, 'store'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(access(path.join(seed, 'corepack'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(JSON.parse(await readFile(path.join(seed, 'manifest.json'), 'utf8')).manifestDigest).toBe('proof')
     expect(await readFile(path.join(root, 'source/dependency-seeds/example/store/value'), 'utf8')).toBe('preserve or rebuild')
     expect(await readFile(path.join(root, 'source/.cache/unrelated/value'), 'utf8')).toBe('preserve or rebuild')

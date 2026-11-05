@@ -11,7 +11,7 @@ import { createNativeCodingTools } from './native-coding-tools'
 import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, snapshotCodingTree, type CodingRevision, type CodingManifest } from './coding-candidate-workspace'
 import { CodingCommandRunner, type CodingCommandPlan, type CodingExecutionProfile } from './coding-command-runner'
 import { applyAndVerifyCodingRevision, recoverCodingDelivery, type CodingVerificationResult } from './coding-evidence-v3'
-import { codingDependencyPlan, codingShellPlan, prepareCodingDependencies } from './coding-dependency-preparation'
+import { codingCommandWithDependencyCache, codingDependencyCacheOptions, codingDependencyPlan, codingShellPlan, prepareCodingDependencies } from './coding-dependency-preparation'
 import { pendingCodingPermission } from './native-coding-permissions'
 import { computeSourceTreeDigest } from './source-tree-digest'
 import { captureWorktreeDiff } from './coding-runner'
@@ -160,7 +160,7 @@ function createHarnessService(host: HarnessHost): Harness {
       ? { definitions: [], effects: {}, execute: async () => { throw new Error('Private acceptance workers cannot execute candidate tools') } }
       : createNativeCodingTools({ store: host.store, sessionId: session.id, workspace, commands, assertAuthority: checkedAuthority, sources, testPlanDigest: binding.testPlanDigest,
       ...(concurrentCodingAcceptance(session) ? { beforeSubmission: context => waitForAcceptance(session.codingRunId, context.session.objectiveVersion, context.signal, checkedAuthority) } : {}),
-      ...(concurrentCodingAcceptance(session) && binding.dependencyCacheVersion === 1 && binding.dependencyPlan?.storeDirectory ? {
+      ...(concurrentCodingAcceptance(session) && binding.dependencyCacheVersion !== undefined && binding.dependencyPlan?.storeDirectory ? {
         beforeTestPreparation: async (context: Parameters<CodingLoopTools['execute']>[2], dependencyPlanDigest: string) => {
           // Changed dependency inputs use their own exact authorization and
           // preparation. Only the original plan can reuse the B bootstrap.
@@ -202,10 +202,10 @@ function createHarnessService(host: HarnessHost): Harness {
       authority })
     const loop = new NativeCodingLoop({ store: host.store, provider: host.provider, tools, verificationWorkspace: workspace, changed: () => { host.changed?.(session.privateAcceptanceFor?.rootCodingRunId ?? session.codingRunId); if (session.parent) host.changed?.(session.parent.codingRunId) },
       ...(session.privateAcceptanceFor ? { stopAfterIndependentChecks: true as const } : {}),
-      ...(session.privateAcceptanceFor && binding.dependencyCacheVersion === 1 && binding.dependencyPlan?.storeDirectory ? {
+      ...(session.privateAcceptanceFor && binding.dependencyCacheVersion !== undefined && binding.dependencyPlan?.storeDirectory ? {
         prepareIndependentDependencies: async (operationId: string, signal: AbortSignal) => {
           await checkedAuthority()
-          await prepareIndependentDependencies({ workspace, runner: commands, profile: binding.profile, operationId, signal, approvedPlanDigest: binding.dependencyPlan!.digest })
+          await prepareIndependentDependencies({ workspace, runner: commands, profile: binding.profile, operationId, signal, approvedPlanDigest: binding.dependencyPlan!.digest, dependencyCacheVersion: binding.dependencyCacheVersion ?? 1 })
         },
       } : {}),
       ...(concurrentCodingAcceptance(session) ? { prepareIndependentChecksInBackground: (current: NativeCodingSession, signal: AbortSignal) => startAcceptance(current.codingRunId, signal, checkedAuthority).then(() => undefined) } : {}),
@@ -540,7 +540,7 @@ function createHarnessService(host: HarnessHost): Harness {
       if (profile.kind === 'os_sandbox' && !(await codingSandboxAvailability()).available) throw new Error('系统沙箱不可用，任务未启动；不会自动回退为本机可信执行。')
       const input = await inspectCodingInput(session.binding!.context.workspace.worktreePath, session.binding!.context.workspace.baseCommitSha!)
       if (input.digest !== session.binding!.input?.digest) throw new Error('Input files changed after the authorization was presented; start a fresh run with the new baseline')
-      const dependencyPlan = await codingDependencyPlan(session.binding!.context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], { isolatedStore: session.binding!.dependencyCacheVersion === 1 })
+      const dependencyPlan = await codingDependencyPlan(session.binding!.context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], codingDependencyCacheOptions(session.binding!.dependencyCacheVersion))
       if (dependencyPlan.inputDigest !== session.binding!.dependencyPlan?.inputDigest || dependencyPlan.command !== session.binding!.dependencyPlan?.command) throw new Error('Dependency plan changed since execution was presented')
       const fixedTests = session.binding!.approvedVerification?.tests
       const approvedPlan = fixedTests ? approvedCodingTestCommand(fixedTests, profile, '.devflow-approved-result.json') : undefined
@@ -557,7 +557,7 @@ function createHarnessService(host: HarnessHost): Harness {
         binding.profile = profile
         binding.dependencyPlan = dependencyPlan
         binding.authorizationExpiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString()
-        binding.testPlan = shellPlan(binding.context.project.testCommand, profile)
+        binding.testPlan = codingCommandWithDependencyCache(shellPlan(binding.context.project.testCommand, profile), dependencyPlan)
         let verification: unknown = binding.testPlan
         if (binding.approvedVerification) verification = { testPlan: binding.testPlan, approvedTests: binding.approvedVerification.tests.digest }
         if (command.manualValidationPlan) {
@@ -574,7 +574,7 @@ function createHarnessService(host: HarnessHost): Harness {
         verifications.set(id, controller)
         try {
           await prepareIndependentDependencies({ workspace: core.workspace, runner: core.commands, profile,
-            operationId: `${session.id}:approved-baseline:${command.commandId}`, approvedPlanDigest: dependencyPlan.digest, signal: controller.signal })
+            operationId: `${session.id}:approved-baseline:${command.commandId}`, approvedPlanDigest: dependencyPlan.digest, signal: controller.signal, dependencyCacheVersion: session.binding!.dependencyCacheVersion ?? 1 })
           controller.signal.throwIfAborted()
           await assertAuthority()
         } catch (error) {
@@ -697,7 +697,7 @@ function createHarnessService(host: HarnessHost): Harness {
           verify: async directory => {
             await mutate(id, draft => { draft.status = 'verifying' })
             const publicVerification = async (): Promise<CodingVerificationResult> => {
-              const dependencies = await codingDependencyPlan(directory, session.binding!.profile, revision.base.excludedPaths, { isolatedStore: session.binding!.dependencyCacheVersion === 1 })
+              const dependencies = await codingDependencyPlan(directory, session.binding!.profile, revision.base.excludedPaths, codingDependencyCacheOptions(session.binding!.dependencyCacheVersion))
               if (revision.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlanDigest, dependencies: dependencies.digest }))) throw new Error('Frozen verification plan changed')
               await restoreCodingDependencySeed({ workspace: core.workspace, directory, plan: dependencies, signal: verificationController.signal })
               await prepareCodingDependencies({ directory, profile: session.binding!.profile, excludedPaths: revision.base.excludedPaths, runner: core.commands, operationId: `${session.id}:verify:${command.commandId}`, plan: dependencies, signal: verificationController.signal, final: true })
@@ -714,7 +714,7 @@ function createHarnessService(host: HarnessHost): Harness {
               const [publicResult, fixedResult] = await Promise.allSettled([
                 publicVerification(),
                 runApprovedCodingVerification({ approved, workspace: core.workspace, revision, runner: core.commands,
-                  profile: session.binding!.profile, operationId: `${session.id}:verify:${command.commandId}`, signal: verificationController.signal }),
+                  profile: session.binding!.profile, operationId: `${session.id}:verify:${command.commandId}`, signal: verificationController.signal, dependencyCacheVersion: session.binding!.dependencyCacheVersion ?? 1 }),
               ])
               if (publicResult.status === 'rejected') throw publicResult.reason
               if (fixedResult.status === 'rejected') throw fixedResult.reason
@@ -766,8 +766,10 @@ function createHarnessService(host: HarnessHost): Harness {
       if (!context.workspace.baseCommitSha) throw new Error('Native v3 requires an immutable input commit')
       const session = createNativeCodingSession({ id: sessionId(input.request.id), codingRunId: input.request.id, workflowRunId: context.run.id, nodeId: context.node.id,
         localProjectId: context.project.id, providerId: host.provider.id, model: host.provider.model, objective: context.userInstruction, now: new Date().toISOString() })
-      const profile: CodingExecutionProfile = { kind: 'os_sandbox', network: 'none' }, testPlan = shellPlan(context.project.testCommand, profile)
-      session.binding = { permissionPolicy: { version: 1, mode: 'ask', rules: parseCodingCommandRules(host.commandRules ?? []) }, request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyCacheVersion: 1, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], { isolatedStore: true }) }
+      const profile: CodingExecutionProfile = { kind: 'os_sandbox', network: 'none' }
+      const dependencyPlan = await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], codingDependencyCacheOptions(2))
+      const testPlan = codingCommandWithDependencyCache(shellPlan(context.project.testCommand, profile), dependencyPlan)
+      session.binding = { permissionPolicy: { version: 1, mode: 'ask', rules: parseCodingCommandRules(host.commandRules ?? []) }, request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyCacheVersion: 2, dependencyPlan }
       session.binding.input = await inspectCodingInput(context.workspace.worktreePath, context.workspace.baseCommitSha)
       session.binding.testInputPolicyVersion = 1
       session.binding.independentVerificationRequired = true

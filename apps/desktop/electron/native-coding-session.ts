@@ -70,7 +70,7 @@ export type NativeCodingSession = {
     /** Required for newly authorized automatic V3 tasks; old records retain their historical semantics. */
     independentVerificationRequired?: boolean
     independentVerificationVersion?: 2 | 3 | 4
-    dependencyCacheVersion?: 1
+    dependencyCacheVersion?: 1 | 2
     testInputPolicyVersion?: 1
     approvedVerification?: ApprovedCodingVerification
   }
@@ -133,7 +133,7 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
   if (session.binding?.independentVerificationRequired !== undefined && typeof session.binding.independentVerificationRequired !== 'boolean') throw new Error('Invalid independent verification requirement')
   if (session.operatorDeadlineAt !== undefined && !timestamp(session.operatorDeadlineAt)) throw new Error('Invalid operator wall deadline')
   if (session.binding?.independentVerificationVersion !== undefined && ![2, 3, 4].includes(session.binding.independentVerificationVersion)) throw new Error('Invalid independent verification version')
-  if (session.binding?.dependencyCacheVersion !== undefined && session.binding.dependencyCacheVersion !== 1) throw new Error('Invalid dependency cache version')
+  if (session.binding?.dependencyCacheVersion !== undefined && ![1, 2].includes(session.binding.dependencyCacheVersion)) throw new Error('Invalid dependency cache version')
   if (session.binding?.testInputPolicyVersion !== undefined && session.binding.testInputPolicyVersion !== 1) throw new Error('Invalid test input policy version')
   if (session.binding?.manualValidationPlan !== undefined && (typeof session.binding.manualValidationPlan !== 'string' || !session.binding.manualValidationPlan.trim() || session.binding.manualValidationPlan.length > 8000)) throw new Error('Invalid manual validation plan')
   if (session.rootStepAttempts && (new Set(session.rootStepAttempts).size !== session.rootStepAttempts.length || !session.rootStepAttempts.every(identifier))) throw new Error('Invalid root step reservations')

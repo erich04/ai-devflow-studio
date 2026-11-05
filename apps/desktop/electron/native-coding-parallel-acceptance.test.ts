@@ -38,6 +38,7 @@ it.each(['complete', 'pause'] as const)('overlaps baseline preparation with auth
   let releaseDependencies!: () => void
   const gate = new Promise<void>(resolve => { releaseDependencies = resolve })
   const packageFile = '.cache/devflow-pnpm-store/v3/files/ab/package-content'
+  const managerFile = '.cache/devflow-corepack/v1/pnpm/9.15.0/bin/pnpm.cjs'
   const prepare = vi.spyOn(dependencies, 'prepareCodingDependencies').mockImplementation(async input => {
     input.signal!.addEventListener('abort', releaseDependencies, { once: true })
     expect(await readFile(path.join(input.directory, 'value.ts'), 'utf8')).toBe(original)
@@ -45,11 +46,14 @@ it.each(['complete', 'pause'] as const)('overlaps baseline preparation with auth
     input.signal!.throwIfAborted()
     await mkdir(path.dirname(path.join(input.directory, packageFile)), { recursive: true })
     await writeFile(path.join(input.directory, packageFile), 'baseline-package')
+    await mkdir(path.dirname(path.join(input.directory, managerFile)), { recursive: true })
+    await writeFile(path.join(input.directory, managerFile), 'baseline-package-manager')
     return { inputDigest: input.plan.inputDigest, logId: `${input.operationId}:prepared` }
   })
   const startCommand = CodingCommandRunner.prototype.start
   const started = vi.spyOn(CodingCommandRunner.prototype, 'start').mockImplementation(async function (this: CodingCommandRunner, id, command, directory, signal) {
     expect(await readFile(path.join(directory, packageFile), 'utf8')).toBe('baseline-package')
+    expect(await readFile(path.join(directory, managerFile), 'utf8')).toBe('baseline-package-manager')
     // Package transport is doubled above. The approved Node test command and
     // its process receipt still run through the real command runner.
     const { preparation: _prepared, ...readyCommand } = command
@@ -91,7 +95,7 @@ it.each(['complete', 'pause'] as const)('overlaps baseline preparation with auth
       await fixture.executor.settled('coding')
       expect((await fixture.get()).snapshot.status).toBe('review')
       expect(started).toHaveBeenCalledTimes(1)
-      const dependencyPlan = await dependencies.codingDependencyPlan(workspace.candidatePath, root.binding!.profile, workspace.identity.base.excludedPaths, { isolatedStore: true })
+      const dependencyPlan = await dependencies.codingDependencyPlan(workspace.candidatePath, root.binding!.profile, workspace.identity.base.excludedPaths, dependencies.codingDependencyCacheOptions(root.binding!.dependencyCacheVersion))
       expect((await restoreCodingDependencySeed({ workspace, directory: workspace.candidatePath, plan: dependencyPlan })).status).toBe('already_present')
       expect(await readFile(path.join(workspace.candidatePath, packageFile), 'utf8')).toBe('baseline-package')
     }

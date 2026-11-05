@@ -4,6 +4,7 @@ import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from
 import path from 'node:path'
 import { codingDigest, codingFilePath, codingRelativePath, snapshotCodingTree, type CodingCandidateWorkspace, type CodingManifest } from './coding-candidate-workspace'
 import { codingDependencyStoreDirectory, type CodingDependencyPlan } from './coding-dependency-preparation'
+import { codingCorepackHome } from './coding-command-runner'
 
 type SeedInput = { workspace: CodingCandidateWorkspace; directory: string; plan: CodingDependencyPlan; signal?: AbortSignal }
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
@@ -49,12 +50,14 @@ export async function codingDependencySeedPublished(input: Pick<SeedInput, 'work
 }
 async function readSeed(input: SeedInput) {
   const { identity, key } = seedIdentity(input), root = path.join(input.workspace.root, 'dependency-seeds', key)
-  let saved: { key: string; identity: typeof identity; manifestDigest: string }
+  let saved: { key: string; identity: typeof identity; manifestDigest: string; corepackManifestDigest?: string }
   try { saved = JSON.parse(await readFile(await codingFilePath(root, 'manifest.json'), 'utf8')) }
   catch (error) { if (missing(error)) return undefined; throw error }
   const manifest = await storeManifest(path.join(root, 'store'), input.signal)
   if (saved.key !== key || JSON.stringify(saved.identity) !== JSON.stringify(identity) || saved.manifestDigest !== manifest.digest) throw new Error('Dependency seed identity or bytes changed')
-  return { root, manifest }
+  const corepack = input.plan.plan?.corepackHome === codingCorepackHome ? await storeManifest(path.join(root, 'corepack'), input.signal) : undefined
+  if (corepack && saved.corepackManifestDigest !== corepack.digest) throw new Error('Dependency toolchain seed identity or bytes changed')
+  return { root, manifest, corepack }
 }
 async function copyStore(source: string, destination: string, manifest: CodingManifest, signal?: AbortSignal) {
   for (const file of manifest.files) {
@@ -79,14 +82,23 @@ export async function captureCodingDependencySeed(input: SeedInput & { preparati
   let manifest: CodingManifest
   try { manifest = await storeManifest(source, input.signal) } catch (error) { if (missing(error)) return { status: 'unavailable' as const }; throw error }
   if (!manifest.files.length) return { status: 'unavailable' as const }
+  const corepackSource = input.plan.plan?.corepackHome === codingCorepackHome
+    ? path.dirname(await codingFilePath(input.directory, `${codingCorepackHome}/.path-check`)) : undefined
+  const corepack = corepackSource ? await storeManifest(corepackSource, input.signal) : undefined
+  if (corepack && !corepack.files.length) throw new Error('Missing prepared package manager in baseline cache')
   const { identity, key } = seedIdentity(input), parent = path.join(input.workspace.root, 'dependency-seeds')
   await mkdir(parent, { recursive: true, mode: 0o700 })
   const staging = path.join(parent, `.preparing-${randomUUID()}`); await mkdir(staging, { mode: 0o700 })
   try {
     const destination = path.join(staging, 'store'); await mkdir(destination)
     await copyStore(source, destination, manifest, input.signal)
+    if (corepack && corepackSource) {
+      const managerDestination = path.join(staging, 'corepack'); await mkdir(managerDestination)
+      await copyStore(corepackSource, managerDestination, corepack, input.signal)
+    }
     if ((await snapshotCodingTree(input.directory, input.workspace.identity.base.excludedPaths)).digest !== input.workspace.identity.base.digest) throw new Error('Dependency seed baseline changed during capture')
-    await writeFile(path.join(staging, 'manifest.json'), JSON.stringify({ key, identity, manifestDigest: manifest.digest, preparationLogId: input.preparationLogId, capturedBeforePrivateChecks: true }), { flag: 'wx', mode: 0o600 })
+    await writeFile(path.join(staging, 'manifest.json'), JSON.stringify({ key, identity, manifestDigest: manifest.digest,
+      ...(corepack ? { corepackManifestDigest: corepack.digest } : {}), preparationLogId: input.preparationLogId, capturedBeforePrivateChecks: true }), { flag: 'wx', mode: 0o600 })
     input.signal?.throwIfAborted()
     await rename(staging, path.join(parent, key))
     return { status: 'captured' as const, manifestDigest: manifest.digest }
@@ -98,20 +110,32 @@ export async function captureCodingDependencySeed(input: SeedInput & { preparati
 export async function restoreCodingDependencySeed(input: SeedInput) {
   input.signal?.throwIfAborted()
   if (!input.plan.frozen || input.plan.storeDirectory !== codingDependencyStoreDirectory) return { status: 'unavailable' as const }
-  const destination = path.dirname(await codingFilePath(input.directory, `${codingDependencyStoreDirectory}/.path-check`))
-  try {
-    const stat = await lstat(destination)
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe dependency store')
-    return { status: 'already_present' as const }
-  } catch (error) { if (!missing(error)) throw error }
+  const components = [
+    { name: 'store', relative: codingDependencyStoreDirectory },
+    ...(input.plan.plan?.corepackHome === codingCorepackHome ? [{ name: 'corepack', relative: codingCorepackHome }] : []),
+  ]
+  const missingComponents = []
+  for (const component of components) {
+    const destination = path.dirname(await codingFilePath(input.directory, `${component.relative}/.path-check`))
+    try {
+      const stat = await lstat(destination)
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe dependency store')
+    } catch (error) { if (!missing(error)) throw error; missingComponents.push({ ...component, destination }) }
+  }
+  if (!missingComponents.length) return { status: 'already_present' as const }
   const seed = await readSeed(input)
   if (!seed) return { status: 'unavailable' as const }
   await codingFilePath(input.directory, '.cache/.path-check', true)
-  await mkdir(destination, { mode: 0o700 })
+  const created: string[] = []
   try {
-    await copyStore(path.join(seed.root, 'store'), destination, seed.manifest, input.signal)
+    for (const component of missingComponents) {
+      const manifest = component.name === 'corepack' ? seed.corepack : seed.manifest
+      if (!manifest) throw new Error('Missing dependency seed component')
+      await mkdir(component.destination, { mode: 0o700 }); created.push(component.destination)
+      await copyStore(path.join(seed.root, component.name), component.destination, manifest, input.signal)
+    }
     return { status: 'restored' as const, manifestDigest: seed.manifest.digest }
-  } catch (error) { await rm(destination, { recursive: true, force: true }); throw error }
+  } catch (error) { for (const directory of created) await rm(directory, { recursive: true, force: true }); throw error }
 }
 
 /** Terminal cleanup retains the seed provenance, removing only rebuildable bytes.
@@ -126,10 +150,12 @@ export async function removeCodingDependencySeedStores(workspace: CodingCandidat
     const saved = JSON.parse(await readFile(manifestFile, 'utf8'))
     if (saved.key !== entry.name || saved.identity?.version !== 1 || saved.identity.baselineDigest !== workspace.identity.base.digest ||
         codingDigest(JSON.stringify(saved.identity)) !== entry.name || saved.capturedBeforePrivateChecks !== true) throw new Error('Invalid dependency seed cleanup identity')
-    const store = path.join(parent, entry.name, 'store')
-    const stat = await lstat(store).catch(error => { if (missing(error)) return undefined; throw error })
-    if (!stat) continue
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe dependency seed store')
-    await rm(store, { recursive: true, force: true })
+    for (const component of ['store', 'corepack']) {
+      const store = path.join(parent, entry.name, component)
+      const stat = await lstat(store).catch(error => { if (missing(error)) return undefined; throw error })
+      if (!stat) continue
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe dependency seed store')
+      await rm(store, { recursive: true, force: true })
+    }
   }
 }

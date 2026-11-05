@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import { codingDigest, snapshotCodingTree, type CodingCandidateWorkspace } from './coding-candidate-workspace'
-import { codingDependencyPlan, prepareCodingDependencies } from './coding-dependency-preparation'
+import { codingDependencyCacheOptions, codingDependencyPlan, prepareCodingDependencies } from './coding-dependency-preparation'
 import { captureCodingDependencySeed, restoreCodingDependencySeed } from './coding-dependency-seed'
 import type { CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import { runIndependentChecks, type FrozenIndependentChecks, type IndependentCheckResult } from './native-coding-independent-verification'
@@ -17,7 +17,7 @@ export type IndependentPreflight = {
  * authored. Only this pre-check baseline may publish a reusable package seed. */
 export async function prepareIndependentDependencies(input: {
   workspace: CodingCandidateWorkspace; runner: CodingCommandRunner; profile: CodingExecutionProfile
-  operationId: string; approvedPlanDigest: string; signal: AbortSignal
+  operationId: string; approvedPlanDigest: string; signal: AbortSignal; dependencyCacheVersion?: 1 | 2
 }): Promise<void> {
   const { workspace, runner, profile, signal } = input
   const base = workspace.identity.base
@@ -25,7 +25,7 @@ export async function prepareIndependentDependencies(input: {
   signal.throwIfAborted()
   try {
     await workspace.materialize(base, directory)
-    const plan = await codingDependencyPlan(directory, profile, base.excludedPaths, { isolatedStore: true })
+    const plan = await codingDependencyPlan(directory, profile, base.excludedPaths, codingDependencyCacheOptions(input.dependencyCacheVersion ?? 1))
     if (plan.digest !== input.approvedPlanDigest) throw new Error('Baseline dependency authorization changed')
     const seed = await restoreCodingDependencySeed({ workspace, directory, plan, signal })
     if (seed.status === 'restored') return
@@ -84,14 +84,14 @@ export function classifyIndependentPreflight(
 
 /** Execute only against a fresh B copy. Never inspect C,
  * reference patches or external acceptance tests when validating a draft. */
-export async function preflightIndependentChecks(input: { plan: FrozenIndependentChecks; workspace: CodingCandidateWorkspace; runner: CodingCommandRunner; profile: CodingExecutionProfile; operationId: string; signal: AbortSignal; dependencyCacheVersion?: 1 }): Promise<IndependentPreflight> {
+export async function preflightIndependentChecks(input: { plan: FrozenIndependentChecks; workspace: CodingCandidateWorkspace; runner: CodingCommandRunner; profile: CodingExecutionProfile; operationId: string; signal: AbortSignal; dependencyCacheVersion?: 1 | 2 }): Promise<IndependentPreflight> {
   if (!input.plan.adapter) return { status: 'valid', feedback: 'Legacy node check format; no framework baseline preflight.' }
   const { plan, workspace, runner, profile, signal } = input, base = workspace.identity.base
   const directory = path.join(workspace.root, `preflight-${codingDigest(input.operationId).slice(0, 20)}`)
   signal.throwIfAborted()
   await workspace.materialize(base, directory)
   try {
-    const dependencies = await codingDependencyPlan(directory, profile, base.excludedPaths, { isolatedStore: input.dependencyCacheVersion === 1 })
+    const dependencies = await codingDependencyPlan(directory, profile, base.excludedPaths, codingDependencyCacheOptions(input.dependencyCacheVersion))
     await restoreCodingDependencySeed({ workspace, directory, plan: dependencies, signal })
     const prepared = await prepareCodingDependencies({ directory, profile, excludedPaths: base.excludedPaths, runner, operationId: input.operationId, plan: dependencies, signal, final: true })
     // Publish only the successful B bootstrap, before loading any private test.

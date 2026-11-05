@@ -3,7 +3,7 @@ import path from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import { redactSensitiveText } from '@ai-devflow/shared'
 import { atomicCodingFile, codingDigest, codingFilePath, codingRelativePath, snapshotCodingTree, type CodingCandidateWorkspace, type CodingRevision } from './coding-candidate-workspace'
-import { codingDependencyCommandId, codingDependencyPlan, prepareCodingDependencies } from './coding-dependency-preparation'
+import { codingCommandWithDependencyCache, codingDependencyCacheOptions, codingDependencyCommandId, codingDependencyPlan, prepareCodingDependencies } from './coding-dependency-preparation'
 import { restoreCodingDependencySeed } from './coding-dependency-seed'
 import type { CodingCommandPlan, CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import type { CodingVerificationResult } from './coding-evidence-v3'
@@ -100,7 +100,7 @@ function approvedFailureSource(fixture: FixtureTemplate | undefined, testName: s
  * separate observation of the eventual delivery. */
 export async function runApprovedCodingVerification(input: {
   approved: ApprovedCodingVerification; workspace: CodingCandidateWorkspace; revision: CodingRevision
-  runner: CodingCommandRunner; profile: CodingExecutionProfile; operationId: string; signal: AbortSignal
+  runner: CodingCommandRunner; profile: CodingExecutionProfile; operationId: string; signal: AbortSignal; dependencyCacheVersion?: 1 | 2
 }): Promise<CodingVerificationResult> {
   const { approved, workspace, revision, runner, profile, signal } = input
   const tests = validateApprovedCodingTests(approved.tests)
@@ -122,11 +122,11 @@ export async function runApprovedCodingVerification(input: {
       await atomicCodingFile(await codingFilePath(directory, file.path, true), Buffer.from(file.content), 0o644)
     }
     const expected = await snapshotCodingTree(directory, revision.base.excludedPaths)
-    const dependencies = await codingDependencyPlan(directory, profile, revision.base.excludedPaths, { isolatedStore: true })
+    const dependencies = await codingDependencyPlan(directory, profile, revision.base.excludedPaths, codingDependencyCacheOptions(input.dependencyCacheVersion ?? 1))
     await restoreCodingDependencySeed({ workspace, directory, plan: dependencies, signal })
     await prepareCodingDependencies({ directory, profile, excludedPaths: revision.base.excludedPaths, runner,
       operationId: input.operationId, plan: dependencies, signal, final: true })
-    await runner.start(logId, approvedCodingTestCommand(tests, profile, reportPath), directory, signal)
+    await runner.start(logId, codingCommandWithDependencyCache(approvedCodingTestCommand(tests, profile, reportPath), dependencies), directory, signal)
     const receipt = await runner.wait(logId)
     let report: TestReport | undefined, reportBytes: Buffer | undefined
     try {

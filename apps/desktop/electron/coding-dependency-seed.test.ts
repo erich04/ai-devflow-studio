@@ -9,6 +9,38 @@ import { codingDependencyPlan } from './coding-dependency-preparation'
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 
+it('restores the pinned package manager from B without importing candidate or post-bootstrap changes', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-toolchain-seed-')); roots.push(root)
+  const delivery = path.join(root, 'delivery'); await mkdir(delivery)
+  await writeFile(path.join(delivery, 'package.json'), '{"packageManager":"pnpm@9.15.0","private":true}')
+  await writeFile(path.join(delivery, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n')
+  const workspace = await CodingCandidateWorkspace.create({ root: path.join(root, 'workspace'), delivery, baseCommitSha: 'a'.repeat(40), excludedPaths: ['node_modules', '.cache'] })
+  const options = { isolatedStore: true, corepackCache: true }
+  const plan = await codingDependencyPlan(delivery, { kind: 'trusted_local' }, workspace.identity.base.excludedPaths, options)
+  const baseline = path.join(root, 'baseline'); await workspace.materialize(workspace.identity.base, baseline)
+  const manager = '.cache/devflow-corepack/v1/pnpm/9.15.0/bin/pnpm.cjs'
+  const packageFile = '.cache/devflow-pnpm-store/v3/files/package'
+  for (const [file, content] of [[manager, 'baseline manager'], [packageFile, 'baseline package']]) {
+    await mkdir(path.dirname(path.join(baseline, file!)), { recursive: true })
+    await writeFile(path.join(baseline, file!), content!)
+  }
+  const { captureCodingDependencySeed, restoreCodingDependencySeed } = await import('./coding-dependency-seed')
+  await captureCodingDependencySeed({ workspace, directory: baseline, plan, preparationLogId: 'baseline-install' })
+  await restoreCodingDependencySeed({ workspace, directory: workspace.candidatePath, plan })
+  // The same source used for final verification must survive candidate poisoning.
+  await mkdir(path.dirname(path.join(workspace.candidatePath, manager)), { recursive: true })
+  await writeFile(path.join(workspace.candidatePath, manager), 'candidate manager')
+  await writeFile(path.join(baseline, manager), 'post-bootstrap check changed manager')
+  const verification = path.join(root, 'verification'); await workspace.materialize(workspace.identity.base, verification)
+  await restoreCodingDependencySeed({ workspace: await CodingCandidateWorkspace.open(workspace.root), directory: verification, plan })
+  expect(await readFile(path.join(verification, manager), 'utf8')).toBe('baseline manager')
+  expect(await readFile(path.join(verification, packageFile), 'utf8')).toBe('baseline package')
+  const seed = path.join(workspace.root, 'dependency-seeds', (await readdir(path.join(workspace.root, 'dependency-seeds')))[0]!)
+  await writeFile(path.join(seed, 'corepack/v1/pnpm/9.15.0/bin/pnpm.cjs'), 'corrupt seed manager')
+  const fresh = path.join(root, 'fresh'); await workspace.materialize(workspace.identity.base, fresh)
+  await expect(restoreCodingDependencySeed({ workspace, directory: fresh, plan })).rejects.toThrow('identity or bytes changed')
+})
+
 it('keeps historical plans unchanged and copies only a baseline dependency store into independent consumers', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-dependency-seed-')); roots.push(root)
   const delivery = path.join(root, 'delivery'); await mkdir(delivery)

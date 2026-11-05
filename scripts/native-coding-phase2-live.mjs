@@ -43,23 +43,33 @@ export function validIndependentObservation(result) {
 }
 /** The host copies the report out only after the sandboxed process has stopped. */
 export async function sandboxOracleCommand(root, executable, args, cwd, log, timeoutMs = 300000, seedWorkspaceRoot) {
-  if (seedWorkspaceRoot && executable === corepack && JSON.stringify(args) === JSON.stringify(['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts'])) {
+  let corepackHome
+  if (seedWorkspaceRoot) {
     const { CodingCandidateWorkspace } = await import('../apps/desktop/electron/coding-candidate-workspace.ts')
     const { codingDependencyPlan } = await import('../apps/desktop/electron/coding-dependency-preparation.ts')
-    const { restoreCodingDependencySeed } = await import('../apps/desktop/electron/coding-dependency-seed.ts')
+    const { codingDependencySeedPublished, restoreCodingDependencySeed } = await import('../apps/desktop/electron/coding-dependency-seed.ts')
     const workspace = await CodingCandidateWorkspace.open(seedWorkspaceRoot)
-    const plan = await codingDependencyPlan(cwd, { kind: 'os_sandbox', network: 'enabled' }, workspace.identity.base.excludedPaths, { isolatedStore: true })
-    const restored = await restoreCodingDependencySeed({ workspace, directory: cwd, plan })
-    if (restored.status === 'restored') args = [...args, '--store-dir', plan.storeDirectory, '--verify-store-integrity']
-    await mkdir(root, { recursive: true })
-    await json(path.join(root, 'dependency-seed.json'), { baselineDigest: workspace.identity.base.digest, dependencyPlanDigest: plan.digest, ...restored }, true)
+    let plan = await codingDependencyPlan(cwd, { kind: 'os_sandbox', network: 'enabled' }, workspace.identity.base.excludedPaths, { isolatedStore: true, corepackCache: true })
+    // Old observations retain their original v1 seed. New runs also restore the
+    // pinned package manager; no credentials or candidate-written cache is used.
+    if (!await codingDependencySeedPublished({ workspace, plan })) {
+      const legacy = await codingDependencyPlan(cwd, { kind: 'os_sandbox', network: 'enabled' }, workspace.identity.base.excludedPaths, { isolatedStore: true })
+      if (await codingDependencySeedPublished({ workspace, plan: legacy })) plan = legacy
+    }
+    corepackHome = plan.plan?.corepackHome
+    if (executable === corepack && JSON.stringify(args) === JSON.stringify(['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts'])) {
+      const restored = await restoreCodingDependencySeed({ workspace, directory: cwd, plan })
+      if (restored.status === 'restored') args = [...args, '--store-dir', plan.storeDirectory, '--verify-store-integrity']
+      await mkdir(root, { recursive: true })
+      await json(path.join(root, 'dependency-seed.json'), { baselineDigest: workspace.identity.base.digest, dependencyPlanDigest: plan.digest, ...restored }, true)
+    }
   }
   const { CodingCommandRunner } = await import('../apps/desktop/electron/coding-command-runner.ts')
   const oracle = new CodingCommandRunner(root), outputIndex = args.indexOf('--outputFile'), rewritten = [...args]
   const report = path.join(cwd, '.devflow-reference-result.json'), id = path.basename(log)
   if (outputIndex >= 0) rewritten[outputIndex + 1] = report
   try {
-    await oracle.start(id, { executable, args: rewritten, timeoutMs, profile: { kind: 'os_sandbox', network: 'enabled' } }, cwd)
+    await oracle.start(id, { executable, args: rewritten, timeoutMs, profile: { kind: 'os_sandbox', network: 'enabled' }, ...(corepackHome ? { corepackHome } : {}) }, cwd)
     const receipt = await oracle.wait(id)
     let offset = 0, text = ''
     do {
