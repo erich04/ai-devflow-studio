@@ -2,6 +2,7 @@ import { validPrivateAuthorTurn, type PrivateAuthorTurn } from './native-coding-
 import { requestsTimeBoundary, hasClockStimulus } from './native-coding-clock-fixtures'
 import { hasCommitThenLostReply, lostReplyHelper, requestsLostAcknowledgement } from './native-coding-lost-reply'
 import { checkObservedResultFields } from './native-coding-output-assertions'
+import { scopedPublicFixture } from './native-coding-fixture-cases'
 import { requestsDurableRoundTrip, requestsStoredRecovery, variantHasStoreRoundTrip } from './native-coding-storage-fixtures'
 import { randomUUID } from 'node:crypto'
 import { readFile, rm, writeFile } from 'node:fs/promises'
@@ -196,7 +197,7 @@ export function fixtureChecksFromResponse(
   planning: AcceptancePlanning, response: NativeConversationResponse, now: string, collectProgress = false,
 ): FrozenIndependentChecks | PartialFixtureCases {
   const draft = planToolValue(response, 'submit_fixture_cases') as {
-    cases?: Array<{ scenario: string; edits: unknown; baseline: string; contrast?: unknown }>
+    cases?: Array<{ scenario: string; edits: unknown; baseline: string; contrast?: unknown; throughLine?: number }>
   } | null
   const selection = planning.selection!
   const selectionDigest = codingDigest(JSON.stringify(selection))
@@ -240,9 +241,9 @@ export function fixtureChecksFromResponse(
       const scenario = selection.scenarios[Number(item.scenario.slice(1)) - 1]
       const fixture = scenario && planning.fixtures?.[Number(scenario.fixture.slice(1)) - 1]
       const anchor = fixture?.anchors.find((a) => a.id === scenario?.anchor)
-      const control = anchor?.control
       try {
-        if (!scenario || !fixture || !control) throw new InvalidFixtureDraft('Retained public fixture is unavailable')
+        if (!scenario || !fixture || !anchor?.control) throw new InvalidFixtureDraft('Retained public fixture is unavailable')
+        const control = scopedPublicFixture(fixture.path, anchor.control, item.throughLine)
         validateReply(fixture.path, item.body, scenario.units, !!anchor?.replySeam, !!item.contrast)
         checkObservedResultFields(fixture.path,control,item.body,approvedFor(scenario.units))
         checkOwnedFixtureInputs(fixture.path, control, item.body, ownership, approvedFor(scenario.units))
@@ -261,15 +262,15 @@ export function fixtureChecksFromResponse(
       const selected = selection.scenarios[Number(id.slice(1)) - 1]!
       const fixture = planning.fixtures![Number(selected.fixture.slice(1)) - 1]
       const anchor = fixture?.anchors.find((a) => a.id === selected.anchor)
-      const control = anchor?.control
-      if (control === undefined) throw new InvalidFixtureDraft('Missing public control')
+      if (anchor?.control === undefined) throw new InvalidFixtureDraft('Missing public control')
+      const control = scopedPublicFixture(fixture!.path, anchor.control, reply.throughLine)
       const body = varyPublicFixture(control, reply.edits, fixture!.path)
       validateReply(fixture!.path, body, selected.units, !!anchor?.replySeam, reply.contrast !== undefined)
       checkObservedResultFields(fixture!.path,control,body,approvedFor(selected.units))
       checkOwnedFixtureInputs(fixture!.path, control, body, ownership, approvedFor(selected.units))
       const contrast = bindFixtureContrast(reply.contrast, body, planning.namedInputs ?? [], planning.inputExamples)
       if (planning.requireWitness && reply.baseline === 'fail' && !contrast) fixtureWitness(fixture!.path,body,control)
-      byScenario.set(id, { scenario: id, baseline: reply.baseline, body, ...(contrast ? { contrast } : {}) })
+      byScenario.set(id, { scenario: id, baseline: reply.baseline, body, ...(contrast ? { contrast } : {}), ...(reply.throughLine !== undefined ? { throughLine: reply.throughLine } : {}) })
     } catch (error) {
       if (!(error instanceof InvalidFixtureDraft)) throw error
       issues.push(`${id}: ${error.message}`)

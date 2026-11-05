@@ -81,6 +81,8 @@ it('distinguishes an empty file scope from no text matches and exposes the actua
     const call = (name: string, input: Record<string, unknown>, operationId: string) => tools.execute(name, input, { session, operationId, signal: new AbortController().signal })
     expect(await call('search_text', { query: 'needle', glob: '*.ts' }, 'root-only')).toMatchObject({ matches: [], matchedFiles: 0, emptyReason: 'no_matching_files', totalMatches: 0 })
     expect(await call('search_text', { query: 'absent', glob: '**/*.ts' }, 'no-text')).toMatchObject({ matches: [], matchedFiles: 1, scannedTextFiles: 1, emptyReason: 'no_text_matches' })
+    expect(await call('search_text', { query: 'needle|absent', glob: '**/*.ts' }, 'literal-pattern')).toMatchObject({ matches: [], regex: false, hint: expect.stringContaining('regex=true') })
+    expect(await call('search_text', { query: 'needle|absent', regex: true, glob: '**/*.ts' }, 'explicit-pattern')).toMatchObject({ totalMatches: 45, regex: true })
     expect(await call('search_text', { query: 'needle', limit: 200 }, 'first-page')).toMatchObject({ totalMatches: 45, returned: 30, pageSize: 30, matchedFiles: 2, scannedTextFiles: 1, binaryFilesSkipped: 1, nextOffset: 30 })
     expect(await call('search_text', { query: 'needle', offset: 30, limit: 200 }, 'last-page')).toMatchObject({ totalMatches: 45, returned: 15, nextOffset: null })
     expect(await call('glob_files', { pattern: '*.ts' }, 'glob-root')).toMatchObject({ files: [], totalFiles: 0, emptyReason: 'no_matching_files' })

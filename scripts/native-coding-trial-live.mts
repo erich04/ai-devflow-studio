@@ -15,10 +15,10 @@ import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.ts'
 import { createWorkflowRuntime } from '../apps/desktop/electron/workflow-runtime.ts'
 import { createEvaluationLedger, evaluationUsage, saveJson, digest, configureEvaluationHarnessLimits } from './native-coding-live-support.ts'
 import { historicalPrefixSystem, legacyPrefixRequest } from './native-coding-cache-probe.ts'
-import { handleEvaluationChildControls } from './native-coding-live-operator.ts'
+import { handleEvaluationChildControls, evaluationPermissionDecision, type EvaluationTestInputPolicy } from './native-coding-live-operator.ts'
 import { parseCodingCommandRules, type CodingCommandRule, type CodingPermissionMode } from '../packages/shared/src/index.ts'
 
-export type TrialInput = { requestLayout?: 'legacy' | 'fixed'; id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; roundRoot?: string; scopeId?: string; execution?: { profile: 'os_sandbox'; network: 'none' | 'enabled'; permissionMode: CodingPermissionMode; commandRules: CodingCommandRule[] } }
+export type TrialInput = { requestLayout?: 'legacy' | 'fixed'; id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; testInputPolicy?: EvaluationTestInputPolicy; roundRoot?: string; scopeId?: string; execution?: { profile: 'os_sandbox'; network: 'none' | 'enabled'; permissionMode: CodingPermissionMode; commandRules: CodingCommandRule[] } }
 export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const start = Date.now(), now = () => new Date().toISOString(), projectId = 'evaluation-project', providerId = 'deepseek-evaluation'
   const ledger = await createEvaluationLedger({ file: path.join(input.output, 'ledger.json'), projectId, maxCalls: input.maxCalls, maxCostUsd: input.maxCostUsd,
@@ -120,12 +120,18 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
       const get = (target = codingRunId!) => coding.codingHarnessCommand({ protocolVersion: 2, type: 'get', codingRunId: target })
       const command = async (body: Record<string, unknown>, target = codingRunId!) => { const snapshot = await get(target); const value = { protocolVersion: 2, codingRunId: target, commandId: `operator-${actions.length}`, expectedVersion: snapshot.version, ...body } as CodingHarnessCommand; await recordAction({ command: value }); return coding.codingHarnessCommand(value) }
       await command({ type: 'authorize', ...(input.execution ? { profile: input.execution.profile, network: input.execution.network, permissionMode: input.execution.permissionMode } : { profile: 'trusted_local' }) })
+      const decidePermission = async (permissionId: string, target: string) => {
+        const session = await store.getNativeCodingSession(`native-${target}`)
+        const decision = evaluationPermissionDecision(permissionId, session, input.testInputPolicy)
+        await recordAction({ type: 'evaluation_permission_policy', codingRunId: target, permissionId, testInputPolicy: input.testInputPolicy ?? 'reject', decision })
+        return decision
+      }
       let answered = false
       while (!deadlineExpired) {
         await native.settled(codingRunId)
         const snapshot = await get(); finalSnapshot = snapshot
         await saveJson(path.join(input.output, 'snapshot.json'), snapshot)
-        const childControls = await handleEvaluationChildControls(snapshot, { get, command })
+        const childControls = await handleEvaluationChildControls(snapshot, { get, command, decidePermission })
         if (childControls.unansweredChild) { failure = `unanswered_child_question:${childControls.unansweredChild}`; break }
         if (childControls.handled) continue
         if (snapshot.status === 'review' && snapshot.revision) {
@@ -133,7 +139,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
           await command({ type: 'approve', revisionDigest: snapshot.revision.digest, objectiveVersion: snapshot.objectiveVersion, confirmedCriteria: [] }); continue
         }
         if (snapshot.status === 'waiting_input' && snapshot.question && input.questionAnswer && !answered) { answered = true; await command({ type: 'reply', questionId: snapshot.question.id, objectiveVersion: snapshot.objectiveVersion, text: input.questionAnswer }); continue }
-        if (snapshot.status === 'waiting_permission' && snapshot.permission) { await command({ type: 'permission', permissionId: snapshot.permission.id, decision: 'rejected' }); continue }
+        if (snapshot.status === 'waiting_permission' && snapshot.permission) { await command({ type: 'permission', permissionId: snapshot.permission.id, decision: await decidePermission(snapshot.permission.id, codingRunId) }); continue }
         if (['running', 'ready', 'waiting_task'].includes(snapshot.status)) { await new Promise(resolve => setTimeout(resolve, 100)); continue }
         break
       }

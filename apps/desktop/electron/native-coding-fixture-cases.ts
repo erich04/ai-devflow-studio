@@ -22,7 +22,7 @@ export class NoFixtureChangeWitness extends InvalidFixtureDraft {
 
 export type AcceptanceCriterion = { id: string; text: string; sourceRef: string }
 type FixtureContrast = { control: string; requested: string; field?: string; boundCall?: true }
-export type AuthoredFixtureCase = { scenario: string; baseline: 'pass' | 'fail'; body: string; contrast?: FixtureContrast }
+export type AuthoredFixtureCase = { scenario: string; baseline: 'pass' | 'fail'; body: string; contrast?: FixtureContrast; throughLine?: number }
 export type PartialFixtureCases = { selectionDigest: string; cases: AuthoredFixtureCase[]; digest: string }
 export function partialFixtureCases(selectionDigest: string, cases: AuthoredFixtureCase[]): PartialFixtureCases {
   return { selectionDigest, cases, digest: codingDigest(JSON.stringify({ selectionDigest, cases })) }
@@ -47,7 +47,7 @@ export function validPartialFixtureCases(partial: PartialFixtureCases) {
     partial.digest === codingDigest(JSON.stringify({ selectionDigest: partial.selectionDigest, cases: partial.cases })) &&
     new Set(partial.cases.map((c) => c?.scenario)).size === partial.cases.length &&
     partial.cases.every(
-      (c) => c && /^s[1-9]\d*$/u.test(c.scenario) && ['pass', 'fail'].includes(c.baseline) && bounded(c.body, 64000),
+      (c) => c && /^s[1-9]\d*$/u.test(c.scenario) && ['pass', 'fail'].includes(c.baseline) && bounded(c.body, 64000) && validThroughLine(c.throughLine),
     )
   )
 }
@@ -61,6 +61,7 @@ export type FixtureBinding = {
   contrast?: FixtureContrast
   witnessed?: true
   lostReply?: true
+  throughLine?: number
 }
 export type CoverageRecord = { sources: AcceptanceCriterion[]; contextOnly: Array<{ unit: string; reason: string }> }
 type Region = { start: number; end: number }
@@ -281,6 +282,26 @@ export function protectedAssertionLines(fileName: string, body: string): Array<[
     tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1,
     tree.getLineAndCharacterOfPosition(node.end - 1).line + 1,
   ])
+}
+
+function validThroughLine(value: unknown): boolean {
+  return value === undefined || (Number.isSafeInteger(value) && Number(value) > 0)
+}
+
+/** A compound public callback can contain unrelated expectations that the task
+ * deliberately changes. Scope a private observation at a complete top-level
+ * assertion. Keep all preceding setup/assertions, and never drop cleanup or
+ * subsequent actions. The full public suite remains a separate revision check. */
+export function scopedPublicFixture(fileName: string, body: string, throughLine?: number): string {
+  if (throughLine === undefined) return body
+  if (!validThroughLine(throughLine)) throw new InvalidFixtureDraft('Invalid fixture observation boundary')
+  const { tree } = publicStatements(fileName, body)
+  const boundary = tree.statements.findIndex((node) =>
+    protectedPublicAssertion(node, tree) && tree.getLineAndCharacterOfPosition(node.end - 1).line + 1 === throughLine,
+  )
+  if (boundary < 0 || tree.statements.slice(boundary + 1).some((node) => !protectedPublicAssertion(node, tree)))
+    throw new InvalidFixtureDraft('throughLine must end a complete top-level assertion; the omitted suffix may contain only further assertions, never setup, actions, or cleanup')
+  return body.slice(0, tree.statements[boundary]!.end)
 }
 
 /** A compound test can fail during setup on both the baseline and a correct
@@ -548,7 +569,7 @@ export function fixtureTemplate(file: string, source: string) {
     }
     return pieces.join('') + source.slice(offset)
   }
-  function render(anchorId: string, title: string, body: string, paired = false) {
+  function render(anchorId: string, title: string, body: string, paired = false, throughLine?: number) {
     const anchor = menu.find((item) => item.id === anchorId)
     if (!anchor) throw new Error('Missing immutable fixture anchor')
     const parameters = anchor.row?.parameters.join(', ') ?? ''
@@ -557,7 +578,7 @@ export function fixtureTemplate(file: string, source: string) {
       return `__devflowFixtureCase.sequential(${JSON.stringify(name)}, async () => {\nconst __before = __devflowAssert.getState().assertionCalls;\nawait (async (${parameters}) => {\n${code}\n})(${args});\nif (__devflowAssert.getState().assertionCalls <= __before) throw new Error('Private case made no assertion');\n});`
     }
     if (paired && anchor.control === undefined) throw new Error('Fixture has no independent control')
-    const original = paired ? test('devflow:original-control', anchor.control!) : ''
+    const original = paired ? test('devflow:original-control', scopedPublicFixture(file, anchor.control!, throughLine)) : ''
     return (
       "import { it as __devflowFixtureCase, expect as __devflowAssert } from 'vitest';\n" +
       replace(anchor, original + '\n' + test(title, body))
@@ -587,6 +608,7 @@ export function bindFixtureCases(sources: AcceptanceCriterion[], fixtures: Fixtu
       !bounded(item.anchor, 40) ||
       !['pass', 'fail'].includes(String(item.baseline)) ||
       !Array.isArray(item.units) ||
+      !validThroughLine(item.throughLine) ||
       !item.units.length ||
       item.units.length > units.length
     )
@@ -618,6 +640,7 @@ export function bindFixtureCases(sources: AcceptanceCriterion[], fixtures: Fixtu
         ...(contrast ? { contrast } : {}),
         ...(item.witnessed === true ? { witnessed: true as const } : {}),
         ...(item.lostReply === true ? { lostReply: true as const } : {}),
+        ...(item.throughLine !== undefined ? { throughLine: Number(item.throughLine) } : {}),
       },
     }
   })
@@ -826,6 +849,7 @@ export function validateCoverageBinding(
       !validFixturePath(f.path) ||
       !/^[a-f0-9]{64}$/u.test(f.hash) ||
       !fixtureAnchorId.test(f.anchor) ||
+      !validThroughLine(f.throughLine) ||
       !Array.isArray(f.units) ||
       !f.units.length ||
       new Set(f.units).size !== f.units.length

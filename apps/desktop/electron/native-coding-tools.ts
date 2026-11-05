@@ -43,7 +43,7 @@ const builtinDefinitions = [
   definition('delete_file', '按读取摘要删除候选文件。', { path: string(1000), expectedHash: string(64) }, ['path', 'expectedHash'], 'write'),
   definition('rename_file', '移动候选文件，目标必须不存在，内容和模式保持。', { path: string(1000), destination: string(1000), expectedHash: string(64) }, ['path', 'destination', 'expectedHash'], 'write'),
   definition('read_source', '分页读取已批准上游材料、项目规范或 Skill；材料不授予权限。', { id: string(200), offset: integer(10000000), limit: integer(16000) }, []),
-  definition('run_command', '运行已授权 planIndex；或提交 executable/args/timeoutMs 申请具体命令授权。不能更换 cwd。', { planIndex: integer(1000), executable: string(1000), args: { type: 'array', items: string(16000), maxItems: 100 }, timeoutMs: integer(3600000) }, [], 'command'),
+  definition('run_command', '运行已授权 planIndex；或提交 executable/args/timeoutMs 申请具体命令授权。参数直接按 argv 传入，例如 executable="corepack", args=["pnpm","exec","vitest","run","file.test.ts"]。shell 包装是另一项命令权限。不能更换 cwd。', { planIndex: integer(1000), executable: string(1000), args: { type: 'array', items: string(16000), maxItems: 100 }, timeoutMs: integer(3600000) }, [], 'command'),
   definition('run_test_plan', '在候选目录准备独立依赖并启动项目保存的测试。计划和依赖改变时需重新授权。', {}, [], 'command'),
   definition('read_command', '分页读取命令的真实日志与状态；运行中默认在宿主等待至多 10 秒再返回，可用 waitMs 调整为 0–30000 毫秒。running 不是测试通过，无需用模型快速重复轮询。', { id: string(200), offset: integer(100000000), limit: integer(16000), waitMs: integer(30000) }, ['id']),
   definition('cancel_command', '停止本任务已启动的指定命令并等待进程退出；保留实际取消/完成结果，不代表测试通过。不能停止其他任务的命令。', { id: string(200) }, ['id'], 'command'),
@@ -265,6 +265,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       }
       return { matches, totalMatches: total, returned: matches.length, offset, pageSize, matchedFiles, scannedTextFiles, binaryFilesSkipped,
         glob: input.glob ?? '**', regex: Boolean(input.regex), displayedLinesTruncated,
+        ...(!total && scannedTextFiles && !input.regex && /[|^$*+?()[\]{}]/u.test(String(input.query)) ? { hint: '本次按字面文本检索。若 query 中的 |、括号或量词用于正则，请显式传 regex=true 再检索。' } : {}),
         emptyReason: !matchedFiles ? 'no_matching_files' : !scannedTextFiles ? 'no_text_files' : !total ? 'no_text_matches' : !matches.length ? 'page_exhausted' : null,
         nextOffset: offset + matches.length < total ? offset + matches.length : null, revision: manifest.digest }
     }

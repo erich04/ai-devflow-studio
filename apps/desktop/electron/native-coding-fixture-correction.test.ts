@@ -11,6 +11,25 @@ import { classifyIndependentPreflight } from './native-coding-check-preflight'
 import type { AcceptancePlanning } from './native-coding-fixture-planning'
 import { codingHarnessFixture, codingToolReply } from './native-coding-test-fixture'
 
+it('freezes a scoped public observation through the normal author response and binds its boundary', () => {
+  const fixture = fixtureTemplate('example.test.ts', "import {it,expect} from 'vitest'\nit('compound',()=>{\nconst value=1\nexpect(value).toBe(1)\nexpect(layout()).toEqual(['old'])\n})")
+  const planning: AcceptancePlanning = {
+    source: { objectiveVersion: 1, baselineDigest: 'b'.repeat(64), sourceDigest: 'c'.repeat(64), adapter: { kind: 'vitest', directory: '.' }, criteria: [{ id: 'objective', sourceRef: 'approved', text: 'Observe the changed action.' }] },
+    fixtures: [fixture],
+    selection: { scenarios: [{ units: ['r1.1'], fixture: 'f1', anchor: 't1', precondition: 'Known action result' }], contextOnly: [] },
+    phase: 'cases', request: { systemPrompt: '', messages: [], tools: [] },
+  }
+  const response = codingToolReply('author', 'submit_fixture_cases', { cases: [{ scenario: 's1', baseline: 'fail', throughLine: 3, edits: [{ line: 2, deleteCount: 1, insert: 'const value=2' }] }] })
+  const plan = fixtureChecksFromResponse(planning, response, '2026-11-05T01:00:00Z')
+  expect(plan.checks[0]?.fixture?.throughLine).toBe(3)
+  expect(plan.checks[0]?.body).toContain('expect(value).toBe(1)')
+  expect(plan.checks[0]?.body).not.toContain('layout')
+  expect(validateFrozenIndependentChecks(plan).digest).toBe(plan.digest)
+  const changed = structuredClone(plan)
+  changed.checks[0]!.fixture!.throughLine = 2
+  expect(() => validateFrozenIndependentChecks(changed)).toThrow(/digest/)
+})
+
 it('retains a valid private variation while correcting its sibling and freezes only the complete sourced plan', () => {
   const fixture = fixtureTemplate(
     'example.test.ts',

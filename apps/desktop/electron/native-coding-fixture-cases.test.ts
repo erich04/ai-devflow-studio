@@ -9,6 +9,7 @@ import {
   namedFixtureSubjects,
   requireNamedFixtureSubjects,
   readFixtureSelection,
+  scopedPublicFixture,
 } from './native-coding-fixture-cases'
 import { codingDigest } from './coding-candidate-workspace'
 
@@ -19,6 +20,26 @@ const fixture = fixtureTemplate('feature/runtime.test.ts', text)
 const criteria = [{ id: 'approved', text: '界面展示入口。执行入口要真正运行。', sourceRef: 'design@1' }]
 const first = { units: ['r1.1'], fixture: 'f1', anchor: 't1', baseline: 'pass', body: 'expect(true).toBe(true)' }
 const second = { units: ['r1.2'], fixture: 'f1', anchor: 't2', baseline: 'fail', body: 'expect(run()).toBe(3)' }
+
+it('scopes a compound observation at a complete assertion without discarding setup or cleanup', () => {
+  const body = [
+    'const result = run()',
+    'expect(result.action).toBe("approve")',
+    'expect(result.sections).toEqual(["old-layout"])',
+  ].join('\n')
+  const scoped = scopedPublicFixture('screen.test.ts', body, 2)
+  expect(scoped).toBe(body.split('\n').slice(0, 2).join('\n'))
+  expect(scopedPublicFixture('screen.test.ts', body)).toBe(body)
+  expect(() => scopedPublicFixture('screen.test.ts', body, 1)).toThrow(/boundary|top-level/)
+  expect(() => scopedPublicFixture('screen.test.ts', body + '\ncleanup()', 2)).toThrow(/cleanup/)
+  expect(() => scopedPublicFixture('screen.test.ts', 'if (enabled) {\nexpect(true).toBe(true)\n}', 2)).toThrow(/top-level/)
+  expect(() => varyPublicFixture(scoped, [{ line: 2, deleteCount: 1, insert: 'expect(true).toBe(true)' }])).toThrow(/assertion/)
+  const compound = fixtureTemplate('screen.test.ts', `import {it,expect} from 'vitest';\nit('layout',async()=>{${body}\n})`)
+  const program = compound.render('t1', 'requested action', scoped + '\nexpect(result.allowed).toBe(true)', true, 2)
+  expect(program).toContain('devflow:original-control')
+  expect(program).not.toContain('old-layout')
+  expect(compound.render('t1', 'whole callback', body, true)).toContain('old-layout')
+})
 it('requires an executable call on a named subject and keeps incidental terms out of that requirement', () => {
   const units = sourceUnits([{ id: 'action', sourceRef: 'design', text: 'ARCHIVE 作业可审阅。不要创建 DRAFT 记录。' }])
   const subjects = namedFixtureSubjects(units, [

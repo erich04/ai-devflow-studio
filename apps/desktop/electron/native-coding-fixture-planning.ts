@@ -112,6 +112,11 @@ const casesTool: ReadOnlyFunctionDefinition = {
             properties: {
               scenario: string,
               baseline: { type: 'string', enum: ['pass', 'fail'] },
+              throughLine: {
+                type: 'integer',
+                minimum: 1,
+                description: 'Optional original callback line ending a top-level assertion. Retain the complete prefix and omit only unrelated later assertions. All setup, actions and cleanup must remain. Edits still use original line numbers within that prefix.',
+              },
               edits: {
                 type: 'array',
                 minItems: 1,
@@ -391,6 +396,7 @@ export async function fixturePlanning(
                 baseline: c.baselineExpectation,
                 body: c.body,
                 ...(c.fixture?.contrast ? { contrast: c.fixture.contrast } : {}),
+                ...(c.fixture?.throughLine !== undefined ? { throughLine: c.fixture.throughLine } : {}),
               },
             ]
           : [],
@@ -494,6 +500,8 @@ export async function fixturePlanning(
     request: {
       systemPrompt:
         casePrompt +
+        ' If a public callback bundles unrelated observations, throughLine may bind the complete prefix ending at a top-level assertion relevant to this scenario. Preserve all assertions inside that prefix. The host refuses a scope that would drop later setup, actions or cleanup. Cover other requested behaviors in their own scenarios; the complete public test suite still runs separately.' +
+        ' Observe derived states from actual output or documented provenance. A synthetic record name, missing optional input chunk, or fixture label does not prove that a producer omitted, truncated, persisted or injected that record. Establish the claimed boundary through its real supported input and assert the resulting relationship.' +
         ' Author only the displayed batch. Other scenarios remain queued. The host retains valid batches unchanged and runs the full baseline preflight before any implementation.' +
         (selectedFixtures.some((f) => f.examples.some((example) => 'immutableParameters' in example))
           ? ' The host binds the displayed immutableParameters from the selected public table row in both the control and the variation. Use those parameters directly without declaring replacements. Trace the entry that actually receives their values.'

@@ -87,7 +87,7 @@ export async function runVitestIndependentChecks(input: { plan: FrozenIndependen
         const withInput = (value: string) => contrastedBody(value, check.body, binding.contrast!.boundCall, binding.contrast!.field)
         matched = {
           file: path.posix.join(targetDirectory, `${stem}-control-${index}.test.${extension}`),
-          body: template.render(binding.anchor, 'devflow:matched-control', withInput(binding.contrast.control), true),
+          body: template.render(binding.anchor, 'devflow:matched-control', withInput(binding.contrast.control), true, binding.throughLine),
         }
         body = withInput(binding.contrast.requested)
       }
@@ -95,11 +95,11 @@ export async function runVitestIndependentChecks(input: { plan: FrozenIndependen
       if (binding.lostReply) {
         matched = {
           file: path.posix.join(targetDirectory, `${stem}-acknowledged-${index}.test.${extension}`),
-          body: template.render(binding.anchor, 'devflow:matched-control', replyDeliveryBody(check.body, false), true),
+          body: template.render(binding.anchor, 'devflow:matched-control', replyDeliveryBody(check.body, false), true, binding.throughLine),
         }
         body = replyDeliveryBody(body, true)
       }
-      body = template.render(binding.anchor, title, body, true)
+      body = template.render(binding.anchor, title, body, true, binding.throughLine)
     }
     tests.push({id:check.criterionId, file:path.posix.join(targetDirectory, `${stem}-${index}.test.${extension}`), body, title, matched})
   }
