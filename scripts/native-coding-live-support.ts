@@ -10,13 +10,14 @@ export const digest = (value: string | Buffer) => createHash('sha256').update(va
 
 /** Bind the isolated evaluator's frozen caps before authorization. The separate
  * wall deadline still includes setup/review/verification and is never extended. */
-export async function configureEvaluationHarnessLimits(store: Pick<LocalStore, 'getNativeCodingSession' | 'saveNativeCodingSession'>, codingRunId: string, limits: { maxSteps: number; maxActiveMilliseconds: number }) {
+export async function configureEvaluationHarnessLimits(store: Pick<LocalStore, 'getNativeCodingSession' | 'saveNativeCodingSession'>, codingRunId: string, limits: { maxSteps: number; maxActiveMilliseconds: number }, operatorDeadlineAt?: string) {
   const { maxSteps, maxActiveMilliseconds } = limits
   if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 10000 || !Number.isSafeInteger(maxActiveMilliseconds) || maxActiveMilliseconds < 1 || maxActiveMilliseconds > 24 * 60 * 60_000) throw new Error('Invalid frozen evaluation limits')
   await mutateNativeCodingSession(store, `native-${codingRunId}`, session => {
     if (session.codingRunId !== codingRunId || !session.binding || session.binding.executionGranted || session.status !== 'waiting_permission' || session.steps || session.attempts.length || session.children.length || session.writer || session.activity.length) throw new Error('Evaluation limits must be frozen before execution authorization')
     session.limits.maxSteps = maxSteps
     session.limits.maxActiveMilliseconds = maxActiveMilliseconds
+    if (operatorDeadlineAt !== undefined) session.operatorDeadlineAt = operatorDeadlineAt
   })
   return { maxSteps, maxActiveMilliseconds }
 }

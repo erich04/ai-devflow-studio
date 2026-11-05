@@ -1,6 +1,6 @@
 # Native Coding v3 harness 路线图
 
-日期：2026-11-01；进度更新：2026-11-02。阶段 1 已由 #291、#292 合入 V3。阶段 2 的第 7—9 条已通过工程验证并合入 V3，但真实质量验收尚未通过；检查生成的可靠性仍需修复。详见[实施记录](native-coding-harness-phase2.zh-CN.md)与[真实评测报告](../evaluation/native-coding-v3-phase2-20261102.md)。阶段 3 未开始，#238 继续保持草稿。
+日期：2026-11-01；进度更新：2026-11-05。阶段 1 已由 #291、#292 合入 V3，第 7—9 条工程实现亦已合入。第二阶段后续修复见 [#307](https://github.com/erich04/ai-devflow-studio/pull/307)；用户选择固定失败反馈后，[R14](../evaluation/native-coding-v3-phase2-r14-20261105.md)在同一冻结版本完成原十题实际交付 **10/10、零误报**，六项 CI 全部通过。生成式盲测与固定反馈分别记分，历史失败记录保留。详见[实施记录](native-coding-harness-phase2.zh-CN.md)。阶段 3 未开始，#238 继续保持草稿。
 
 ## 背景
 
@@ -15,7 +15,7 @@ Native Coding v3 是 DevFlow 自己写的编码 Agent harness，没有使用 Ope
 - 每条单独开分支、worktree 和 PR。worktree 从 `origin/codex/native-coding-harness-v3` 新建，PR 的目标分支是 `codex/native-coding-harness-v3`，不推送 main。
 - 合入前在该条的 worktree 里跑 `corepack pnpm verify`，再等 PR 上的 CI 检查全部通过（目前是 6 项，包括 “Native v3 Linux lifecycle and Electron”），然后用 `gh pr merge <n> --merge --match-head-commit <sha>` 合入。
 - PR #238 保持草稿，直到阶段 3 达到发布门槛。
-- 真实模型评测须在当前已获授权的项目、提供方和有界预算内进行。本轮用户已授权开展第二阶段及必要权限，执行者主动设定累计 3 美元上限；具体账本与每次冻结条件见评测报告，不沿用历史 r8 的一次性预算。
+- 真实模型评测须在当前已获授权的项目、提供方和有界预算内进行，每轮预算写入冻结清单。本次用户授权的固定反馈十题使用每轮 2.70 美元上限；早期累计 3 美元边界及各轮实际账本保留在对应历史报告，不把不同轮次的授权或成绩拼接。
 - 不碰其他会话的 worktree，也不碰主 checkout 里未提交的文件。
 - 每个阶段结束，更新一次面试讲稿（当前版本在评审第 8 节）。
 - 每条的 PR 同时更新文末的状态表。
@@ -38,6 +38,8 @@ Native Coding v3 是 DevFlow 自己写的编码 Agent harness，没有使用 Ope
 9. **权限规则**：命令前缀规则，按 deny、ask、allow 的顺序判断；三种模式（逐条问；沙箱内按规则放行；无人值守时需要问的一律当拒绝）；权限卡加一个“本任务内允许”按钮；子任务的权限请求冒泡到主任务处理。
 
 阶段 2 完成标准：重跑 r8 那 10 道题，假完成为 0，至少 1 题通过独立验收；沙箱测试在 macOS 和 Linux 都通过；记下每题弹了几次权限。
+
+2026-11-05 更新：用户将本轮目标提高为同一轮十题全部交付通过，并明确选择固定失败反馈模式。R14 已达到 10/10、零误报，逐题权限指标见正式报告；原盲测口径与历史分数继续保留。
 
 ### 阶段 3：任务管理与编排（付费，31 题 × 3 个执行器跑一轮约 8-10 美元）
 
@@ -116,7 +118,7 @@ Native Coding v3 是 DevFlow 自己写的编码 Agent harness，没有使用 Ope
 | 4 | 读文件提速 | [#287](https://github.com/erich04/ai-devflow-studio/pull/287) | 已合入 v3 |
 | 5 | 预算预留 | [#286](https://github.com/erich04/ai-devflow-studio/pull/286) | 已合入 v3 |
 | 6 | DeepSeek 适配 | [#289](https://github.com/erich04/ai-devflow-studio/pull/289) | 回归测试已合入；记忆脚本改名另行交接 |
-| 7 | 独立验证者 | [#293](https://github.com/erich04/ai-devflow-studio/pull/293)、[#297](https://github.com/erich04/ai-devflow-studio/pull/297) | 实现已合入、六项 CI 通过；检查可靠性与真实质量验收未达标 |
+| 7 | 独立验证者 | [#293](https://github.com/erich04/ai-devflow-studio/pull/293)、[#297](https://github.com/erich04/ai-devflow-studio/pull/297)、[#307](https://github.com/erich04/ai-devflow-studio/pull/307) | 初版已合入；补充修复六项 CI 通过，R14 固定反馈十题 10/10、零误报；盲测另计 |
 | 8 | 系统沙箱设为默认 | [#294](https://github.com/erich04/ai-devflow-studio/pull/294) | 已合入 V3，macOS/Linux 实测与六项 CI 通过 |
 | 9 | 权限规则 | [#295](https://github.com/erich04/ai-devflow-studio/pull/295) | 已合入 V3，真实授权回归、完整 verify 与六项 CI 通过 |
 | 10 | 计划和任务图 | — | 未开始 |
@@ -141,3 +143,9 @@ Native Coding v3 是 DevFlow 自己写的编码 Agent harness，没有使用 Ope
 - 交接项：`scripts/project-memory-full-validation.mts`、`scripts/project-memory-live-validation.mts` 的默认旧模型名由记忆会话维护，本轮不改其工作范围；该兼容别名仍可使用。
 
 以上是第一阶段当时的交付边界。随后经用户授权实施了第二阶段第 7—9 条；#238 仍为草稿，任务编排仍未开始。
+
+## 第二阶段十题收尾记录（2026-11-05）
+
+R14 冻结 `d16b766`，原十题、参考验收、模型和限额逐项保留；实际交付与候选均 10/10，误报及无效观察均为 0，V3 模型调用已知费用 0.869244612 美元。修复代码的六项 CI 全部通过。固定反馈模式、原生成式检查和完整 31 题发布验收分别管理。
+
+评测停止后按重建摘要证明清理源码包和 V 副本，保留源码、报告、账本、对话和恢复依据。面试讲稿已更新到本次实际结果，见[评审第 8 节](../research/native-coding-harness-review-2026-11/review.md#8-面试怎么讲)。后续路线图仍为任务图、委派、后台唤醒与编排，本次未启动这些工作。

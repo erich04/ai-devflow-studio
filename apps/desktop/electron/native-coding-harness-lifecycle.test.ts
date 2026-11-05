@@ -11,21 +11,35 @@ import { CodingCommandRunner } from './coding-command-runner'
 import { AgentProviderRequestError, type NativeConversationRequest, type NativeConversationResponse } from '@ai-devflow/shared'
 
 it('enforces active time while a model request is in flight, without waiting for another step', async () => {
-  let aborted = false
+  let started = false, aborted = false, releaseStalled = () => {}
   const stalled = async (request: NativeConversationRequest) => new Promise<NativeConversationResponse>((_resolve, reject) => {
-    request.signal!.addEventListener('abort', () => { aborted = true; reject(new Error('Endpoint request interrupted')) }, { once: true })
+    started = true
+    releaseStalled = () => reject(new Error('Fixture cleanup'))
+    const abort = () => { aborted = true; reject(new Error('Endpoint request interrupted')) }
+    if (request.signal!.aborted) abort()
+    else request.signal!.addEventListener('abort', abort, { once: true })
   })
   const fixture = await codingHarnessFixture(stalled, undefined, {}, stalled)
+  // Let real I/O progress normally, then expire the active budget only after the
+  // endpoint has started. A 150 ms setup race did not reliably test an in-flight request.
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
   try {
-    await mutateNativeCodingSession(fixture.store, 'native-coding', draft => { draft.limits.maxActiveMilliseconds = 150 })
+    await mutateNativeCodingSession(fixture.store, 'native-coding', draft => { draft.limits.maxActiveMilliseconds = 30_000 })
     await fixture.authorize()
+    await expect.poll(() => started, { timeout: 2000 }).toBe(true)
+    expect(aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(30_000)
     await expect.poll(() => aborted, { timeout: 2000 }).toBe(true)
     await fixture.executor.settled('coding')
     const view = (await fixture.get()).snapshot
     expect(view.status, JSON.stringify(view)).toBe('reconciling')
     expect(view.cost.unknownAttempts).toBe(1)
     expect(view.messages).toHaveLength(1)
-  } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
+  } finally {
+    releaseStalled()
+    vi.useRealTimers()
+    await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true })
+  }
 })
 
 it('returns a restored frozen revision for fresh approval without asking the model to finish it again', async () => {

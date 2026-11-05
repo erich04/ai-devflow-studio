@@ -19,6 +19,7 @@ it('preflights real framework checks on immutable B, distinguishes bad programs 
   const root = await mkdtemp(path.join(os.tmpdir(), 'df-check-preflight-')); roots.push(root)
   const delivery = path.join(root, 'delivery'); await mkdir(delivery); await mkdir(path.join(delivery, 'tests'))
   await writeFile(path.join(delivery, 'value.ts'), 'export const value = 1')
+  await writeFile(path.join(delivery, 'save-state.ts'), "export function save(next: number, previous: number) {\n  if (next !== previous + 1) throw new Error('Invalid saved revision')\n}\n")
   await writeFile(path.join(delivery, 'tests/base.test.ts'), '// directory anchor')
   await writeFile(path.join(delivery, 'package.json'), '{"type":"module","private":true}')
   await writeFile(path.join(delivery, 'vitest.config.mjs'), "export default { test: { environment: 'node', include: ['tests/**/*.test.ts'] } }")
@@ -36,13 +37,20 @@ it('preflights real framework checks on immutable B, distinguishes bad programs 
   const source: IndependentCheckSource = { objectiveVersion: 1, sourceDigest: 'a'.repeat(64), baselineDigest: workspace.identity.base.digest,
     criteria: [{ id: 'value', text: 'Export value 2', sourceRef: 'approved' }], adapter: { kind: 'vitest', directory: 'tests' } }
   const body = "import { test, expect } from 'vitest'; import { value } from '../value'; test('value', () => expect(value).toBe(2))"
+  const badSetup = "import { it, expect } from 'vitest'; import { save } from '../save-state'; it('persist', () => { save(3, 1); expect(1).toBe(1) })"
   for (const [index, [program, baselineExpectation, expected]] of [
-    [body, 'fail', 'valid'], [body, 'pass', 'invalid'], ['const x = ""/report""', 'fail', 'invalid'],
+    [badSetup, 'fail', 'invalid'], [body, 'fail', 'valid'], [body, 'pass', 'invalid'], ['const x = ""/report""', 'fail', 'invalid'],
     ["import { test, expect } from 'vitest'; import { writeFileSync } from 'node:fs'; test('write', () => { writeFileSync('value.ts', 'tampered'); expect(true).toBe(true) })", 'pass', 'invalid'],
   ].entries()) {
     const plan = freezeIndependentChecks(source, { checks: [{ criterionId: 'value', body: program, baselineExpectation }] }, '2026-11-02T00:00:00.000Z')
     const result = await preflightIndependentChecks({ plan, workspace, runner, profile: { kind: 'trusted_local' }, operationId: `case-${index}`, signal: new AbortController().signal })
     expect(result.status, `case ${index}: ${result.feedback}`).toBe(expected)
+    if (program === badSetup) {
+      expect(result.feedback).toContain('save-state.ts:2')
+      expect(result.feedback).toContain('next !== previous + 1')
+      expect(result.feedback).toContain('Invalid saved revision')
+      expect(result.feedback).not.toContain(root)
+    }
     expect(await readFile(path.join(workspace.candidatePath, 'value.ts'), 'utf8')).toBe('export const value = 2')
     expect(await readFile(path.join(delivery, 'value.ts'), 'utf8')).toBe('export const value = 1')
     expect((await readdir(workspace.root)).some(name => name.startsWith('preflight-'))).toBe(false)

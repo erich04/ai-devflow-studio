@@ -213,6 +213,54 @@ const call = (id: string, name: string, args: unknown) => {
 const discover: CodingLoopTools = { definitions: [{ type: 'function', function: { name: 'discover', description: '', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } } }], effects: { discover: 'read' }, execute: async () => ({ unchanged: true }) }
 const notice = '[DevFlow 宿主状态通知，并非用户的新指令]'
 
+it.each(['placeholder', ' PLACEHOLDER. ', 'TODO', '占位符', '   '])('corrects the non-substantive blocker %j and preserves received-call accounting', async reason => {
+  const { store } = await sessionStore()
+  const model = scriptedModel([
+    () => call('invalid-blocker', 'report_blocked', { reason }),
+    () => call('inspect', 'discover', {}),
+    () => call('real-blocker', 'report_blocked', { reason: 'API key missing' }),
+  ])
+  try {
+    const loop = new NativeCodingLoop({ store, provider: model.provider, tools: discover })
+    const saved = await loop.runBatch('session')
+    expect(saved).toMatchObject({ status: 'paused', pauseReason: 'API key missing', steps: 3 })
+    expect(model.requests[1]!.messages.at(-1)!.content).toContain('concrete obstacle')
+    expect(saved.attempts).toHaveLength(3)
+    expect(saved.attempts.every(attempt => attempt.status === 'completed' && attempt.usage?.inputTokens === 40)).toBe(true)
+    expect(saved.invalidToolBatches).toBeUndefined()
+    expect(saved.transcript.find(message => message.role === 'tool' && message.tool_call_id === 'invalid-blocker')?.content).toContain('"executed":false')
+  } finally { await store.close() }
+})
+
+it('pauses after two consecutive placeholder blockers instead of correcting them without a bound', async () => {
+  const { store } = await sessionStore()
+  const model = scriptedModel([
+    () => call('placeholder-1', 'report_blocked', { reason: 'placeholder' }),
+    () => call('placeholder-2', 'report_blocked', { reason: 'placeholder' }),
+  ])
+  try {
+    const loop = new NativeCodingLoop({ store, provider: model.provider, tools: discover })
+    expect(await loop.runBatch('session')).toMatchObject({ status: 'paused', pauseReason: 'invalid_tool_batch', steps: 2, invalidToolBatches: 2 })
+    expect(model.requests).toHaveLength(2)
+  } finally { await store.close() }
+})
+
+it('continues the normal executor after a placeholder blocker and still requires actual revision approval', async () => {
+  let calls = 0
+  const fixture = await codingHarnessFixture(async () => ++calls === 1
+    ? codingToolReply('placeholder', 'report_blocked', { reason: 'placeholder' })
+    : codingToolReply('submit', 'propose_changeset', { summary: 'Submit the real workspace' }))
+  try {
+    await fixture.authorize(); await fixture.executor.settled('coding')
+    const view = (await fixture.get()).snapshot
+    expect(view.status).toBe('review')
+    expect(calls).toBe(2)
+    const approved = await fixture.executor.harness!.command({ protocolVersion: 2, type: 'approve', codingRunId: 'coding', commandId: 'review',
+      expectedVersion: view.version, objectiveVersion: view.objectiveVersion, revisionDigest: view.revision!.digest, confirmedCriteria: [] }, async () => {})
+    expect(approved.snapshot.status).toBe('completed')
+  } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
+})
+
 it('explains an invalid tool batch once and continues when the next batch is valid', async () => {
   const { store } = await sessionStore()
   const model = scriptedModel([

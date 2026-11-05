@@ -4,12 +4,13 @@ import { promisify } from 'node:util'
 import { appendFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { atomicCodingFile, codingDigest } from './coding-candidate-workspace'
+import { atomicCodingFile, codingDigest, codingFilePath } from './coding-candidate-workspace'
 import { terminateProcessTree } from './opencode-process'
 import { prepareCodingSandbox } from './coding-os-sandbox'
 
 export type CodingExecutionProfile = { kind: 'trusted_local' } | { kind: 'container'; image: string; network: 'none' | 'bridge' } | { kind: 'os_sandbox'; network: 'none' | 'enabled' }
-export type CodingCommandPlan = { executable: string; args: string[]; timeoutMs: number; profile: CodingExecutionProfile; preparation?: { executable: string; args: string[]; timeoutMs: number } }
+export const codingCorepackHome = '.cache/devflow-corepack'
+export type CodingCommandPlan = { executable: string; args: string[]; timeoutMs: number; profile: CodingExecutionProfile; corepackHome?: typeof codingCorepackHome; preparation?: { executable: string; args: string[]; timeoutMs: number } }
 export type CodingCommandReceipt = {
   schemaVersion: 1; id: string; plan: CodingCommandPlan; planDigest: string; cwd: string; pid?: number; workerToken?: string
   status: 'starting' | 'running' | 'passed' | 'failed' | 'timed_out' | 'cancelled' | 'unknown'
@@ -171,6 +172,8 @@ export class CodingCommandRunner {
       (plan.profile.kind === 'container' && !['none', 'bridge'].includes(plan.profile.network))) throw new Error('Invalid command execution profile')
     if (!plan.executable || plan.executable.includes('\0') || !Array.isArray(plan.args) || plan.args.some(arg => typeof arg !== 'string' || arg.includes('\0')) ||
       !Number.isSafeInteger(plan.timeoutMs) || plan.timeoutMs < 1 || plan.timeoutMs > 60 * 60_000 || !path.isAbsolute(cwd)) throw new Error('Invalid command plan')
+    if (plan.corepackHome !== undefined && plan.corepackHome !== codingCorepackHome) throw new Error('Invalid workspace Corepack cache')
+    const corepackDirectory = plan.corepackHome ? path.dirname(await codingFilePath(cwd, `${codingCorepackHome}/.path-check`)) : undefined
     await mkdir(this.root, { recursive: true, mode: 0o700 })
     const privateHome = path.join(this.root, 'home'); await mkdir(privateHome, { recursive: true, mode: 0o700 })
     const emptyConfig = path.join(this.root, 'empty-gitconfig'); await writeFile(emptyConfig, '', { mode: 0o600 })
@@ -182,7 +185,9 @@ export class CodingCommandRunner {
       await exec('docker', ['image', 'inspect', plan.profile.image], { timeout: 10_000 })
       const profile = plan.profile
       commands = commands.map(command => ({ executable: 'docker', args: ['run', '--rm', '--name', containerName, '--network', profile.network, '--cap-drop=ALL', '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev',
-        '--mount', `type=bind,source=${cwd},target=/workspace`, '--workdir', '/workspace', '--env', 'HOME=/tmp', ...(process.getuid ? ['--user', `${process.getuid()}:${process.getgid!()}`] : []), profile.image, command.executable, ...command.args] }))
+        '--mount', `type=bind,source=${cwd},target=/workspace`, '--workdir', '/workspace', '--env', 'HOME=/tmp',
+        ...(corepackDirectory ? ['--env', `COREPACK_HOME=/workspace/${codingCorepackHome}`, '--env', 'COREPACK_DEFAULT_TO_LATEST=0'] : []),
+        ...(process.getuid ? ['--user', `${process.getuid()}:${process.getgid!()}`] : []), profile.image, command.executable, ...command.args] }))
     }
     const receipt: CodingCommandReceipt = { schemaVersion: 1, id, plan, planDigest, cwd, status: 'starting', exitCode: null, outputBytes: 0, startedAt: new Date().toISOString(), workerToken: randomUUID() }
     if (!transport || plan.profile.kind === 'os_sandbox') receipt.temporaryDirectory = await createCommandTemporaryDirectory(receipt)
@@ -209,6 +214,7 @@ export class CodingCommandRunner {
       const confinedConfig = path.join(receipt.temporaryDirectory!, 'gitconfig'); await writeFile(confinedConfig, '')
       Object.assign(environment, { HOME: confinedHome, USERPROFILE: confinedHome, TEMP: receipt.temporaryDirectory, TMP: receipt.temporaryDirectory, TMPDIR: receipt.temporaryDirectory, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: confinedConfig })
     }
+    if (corepackDirectory) Object.assign(environment, { COREPACK_HOME: corepackDirectory, COREPACK_DEFAULT_TO_LATEST: '0' })
     const workerFile = path.join(this.root, 'command-worker.cjs'); await atomicCodingFile(workerFile, Buffer.from(workerSource))
     const child = fork(workerFile, [receipt.workerToken!], { execPath: process.execPath, execArgv: [], cwd, detached: process.platform !== 'win32', stdio: [transport ? 'pipe' : 'ignore', 'pipe', 'pipe', 'ipc'], env: { ...environment, ELECTRON_RUN_AS_NODE: '1' } })
     let reason: 'cancelled' | 'timed_out' | undefined, stopping: Promise<void> | undefined, output = Promise.resolve(), logError: unknown

@@ -1,6 +1,7 @@
 import { codingHarnessSnapshot, markCodingDeliveryConflict, currentCodingDeliveryDigest } from './native-coding-projection'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { parseCodingHarnessCommand, parseCodingCommandRules, decideCodingCommand, sanitizeCodingDiffArtifact, redactSensitiveText, type AgentProvider, type CodingAgentRun, type CodingHarnessCommand, type CodingHarnessSnapshot, type CodingHarnessPage, type TestEvidence, type ModelCostRecord } from '@ai-devflow/shared'
 import type { CodingExecutor, CodingExecutorHarnessResult, CodingExecutorStartInput } from './coding-executor'
 import type { LocalStore } from './local-store'
@@ -9,8 +10,9 @@ import { NativeCodingLoop } from './native-coding-loop'
 import { createNativeCodingTools } from './native-coding-tools'
 import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, snapshotCodingTree, type CodingRevision, type CodingManifest } from './coding-candidate-workspace'
 import { CodingCommandRunner, type CodingCommandPlan, type CodingExecutionProfile } from './coding-command-runner'
-import { applyAndVerifyCodingRevision, recoverCodingDelivery } from './coding-evidence-v3'
-import { codingDependencyPlan, codingShellPlan, prepareCodingDependencies } from './coding-dependency-preparation'
+import { codingCommandFeedback } from './coding-command-feedback'
+import { applyAndVerifyCodingRevision, recoverCodingDelivery, type CodingVerificationResult } from './coding-evidence-v3'
+import { codingCommandWithDependencyCache, codingDependencyCacheOptions, codingDependencyPlan, codingShellPlan, prepareCodingDependencies } from './coding-dependency-preparation'
 import { pendingCodingPermission } from './native-coding-permissions'
 import { computeSourceTreeDigest } from './source-tree-digest'
 import { captureWorktreeDiff } from './coding-runner'
@@ -22,9 +24,11 @@ import type { NativeCodingProfile } from './native-coding-profile'
 import type { CodingTaskAuthority } from './native-coding-tools'
 import { inspectCodingInput } from './coding-input'
 import { codingSandboxAvailability } from './coding-os-sandbox'
-import { currentIndependentChecks, runIndependentChecks } from './native-coding-independent-verification'
-import { preflightIndependentChecks } from './native-coding-check-preflight'
-import { restoreCodingDependencySeed } from './coding-dependency-seed'
+import { currentApprovedVerification, currentIndependentChecks, independentCheckSourceDigest, runIndependentChecks } from './native-coding-independent-verification'
+import { approvedCodingTestCommand, runApprovedCodingVerification, validateApprovedCodingTests, type ApprovedCodingTests } from './native-coding-approved-verification'
+import { codingAcceptanceWorkers, codingRootRunId, concurrentCodingAcceptance, mergeCodingAcceptancePlan, prepareCodingAcceptanceWorker } from './native-coding-acceptance-worker'
+import { preflightIndependentChecks, prepareIndependentDependencies } from './native-coding-check-preflight'
+import { codingDependencySeedPublished, restoreCodingDependencySeed } from './coding-dependency-seed'
 import { assertCodingTestInputAuthority } from './coding-test-inputs'
 
 type Core = { loop: NativeCodingLoop; workspace: CodingCandidateWorkspace; commands: CodingCommandRunner }
@@ -33,7 +37,7 @@ function shellPlan(command: string, profile: CodingExecutionProfile): CodingComm
   return codingShellPlan(command, profile)
 }
 
-type HarnessHost = { store: LocalStore; provider: AgentProvider; root: string; configVersion: number; containerProfile?: Extract<CodingExecutionProfile, { kind: 'container' }>; network?: NativeCodingProfile['network']; commandRules?: NativeCodingProfile['commandRules']; changed?: (codingRunId: string) => void; costRecords?(projectId: string): Promise<ModelCostRecord[]> }
+type HarnessHost = { store: LocalStore; provider: AgentProvider; root: string; configVersion: number; approvedTests?: ApprovedCodingTests; containerProfile?: Extract<CodingExecutionProfile, { kind: 'container' }>; network?: NativeCodingProfile['network']; commandRules?: NativeCodingProfile['commandRules']; changed?: (codingRunId: string) => void; costRecords?(projectId: string): Promise<ModelCostRecord[]> }
 type Harness = CodingExecutor & { settled(codingRunId: string): Promise<void>; shutdown(): Promise<void> }
 const services = new WeakMap<LocalStore, Map<string, Harness>>()
 export async function shutdownNativeCodingHarnesses(store: LocalStore): Promise<void> {
@@ -42,12 +46,13 @@ export async function shutdownNativeCodingHarnesses(store: LocalStore): Promise<
 }
 /** IPC creates runtime facades repeatedly. Workers and command ownership must outlive those facades. */
 export function createNativeCodingExecutorV3(host: HarnessHost): Harness {
+  const approvedTests = host.approvedTests ? structuredClone(validateApprovedCodingTests(host.approvedTests)) : undefined
   let cache = services.get(host.store)
   if (!cache) { cache = new Map(); services.set(host.store, cache) }
-  const key = JSON.stringify([host.root, host.configVersion, host.provider.id, host.provider.model, host.containerProfile, host.network, host.commandRules])
+  const key = JSON.stringify([host.root, host.configVersion, host.provider.id, host.provider.model, host.containerProfile, host.network, host.commandRules, approvedTests?.digest])
   const existing = cache.get(key)
   if (existing) return existing
-  const service = createHarnessService(host); cache.set(key, service); return service
+  const service = createHarnessService({ ...host, ...(approvedTests ? { approvedTests } : {}) }); cache.set(key, service); return service
 }
 function createHarnessService(host: HarnessHost): Harness {
   const cores = new Map<string, Core>(), jobs = new Map<string, Promise<void>>()
@@ -85,7 +90,7 @@ function createHarnessService(host: HarnessHost): Harness {
       const root = await read(id)
       verifications.get(id)?.abort()
       await commandQueues.get(id)?.catch(() => undefined)
-      const sessions = [root, ...await Promise.all(root.children.filter(child => child.state === 'active').map(child => read(child.codingRunId)))]
+      const sessions = [root, ...await Promise.all(root.children.filter(child => child.state === 'active').map(child => read(child.codingRunId))), ...await codingAcceptanceWorkers(host.store, root)]
       for (const session of sessions) {
         if (terminal(await read(session.codingRunId))) continue
         if (!session.binding?.executionGranted) continue
@@ -115,7 +120,7 @@ function createHarnessService(host: HarnessHost): Harness {
   const createCore = async (session: NativeCodingSession, assertAuthority: () => Promise<void>): Promise<Core> => {
     const binding = session.binding!, workspace = await CodingCandidateWorkspace.open(binding.workspaceRoot)
     const activity = async (unitId: string, active: boolean) => {
-      const rootId = session.parent?.codingRunId ?? session.codingRunId
+      const rootId = codingRootRunId(session)
       await mutate(rootId, draft => {
         const interval = draft.activity.find(item => item.unitId === unitId && item.endedAt === undefined)
         if (active && !interval) draft.activity.push({ unitId, startedAt: Date.now() })
@@ -124,7 +129,10 @@ function createHarnessService(host: HarnessHost): Harness {
       await monitorBudget(rootId)
       host.changed?.(rootId)
     }
-    const commands = new CodingCommandRunner(path.join(binding.workspaceRoot, 'commands'), (id, active) => activity(`command:${id}`, active))
+    const commandRoot = session.privateAcceptanceFor
+      ? path.join(binding.workspaceRoot, 'private-acceptance', session.codingRunId, 'commands')
+      : path.join(binding.workspaceRoot, 'commands')
+    const commands = new CodingCommandRunner(commandRoot, (id, active) => activity(`command:${id}`, active))
     const { context, request } = binding
     const sources = [{ id: 'coding-brief', title: '已批准任务与约束', version: request.contextDigest, content: context.brief.prompt },
       ...context.upstreamArtifacts.map(artifact => ({ id: artifact.id, title: artifact.title, version: codingDigest(artifact.content), content: artifact.content }))]
@@ -135,13 +143,45 @@ function createHarnessService(host: HarnessHost): Harness {
         const parent = await read(session.parent.codingRunId)
         if (parent.objectiveVersion !== session.parent.objectiveVersion || parent.pendingInput.length || !['ready', 'running', 'waiting_input', 'waiting_task', 'waiting_permission'].includes(parent.status) || parent.children.find(child => child.codingRunId === session.codingRunId)?.state !== 'active') throw new Error('Delegated authority is no longer current')
       }
+      if (session.privateAcceptanceFor) {
+        const owner = session.privateAcceptanceFor
+        const root = await read(owner.rootCodingRunId)
+        if (root.objectiveVersion !== owner.objectiveVersion || root.pendingInput.length ||
+            independentCheckSourceDigest(root) !== owner.sourceDigest ||
+            !['ready', 'running', 'waiting_input', 'waiting_task', 'waiting_permission'].includes(root.status))
+          throw new Error('Private acceptance authority is no longer current')
+      }
     }
     const authority: CodingTaskAuthority = { scope: request.scope.organizationId && request.scope.projectId
       ? { kind: 'team', organizationId: request.scope.organizationId, projectId: request.scope.projectId, userId: request.scope.userId, sessionId: request.scope.sessionId, localProjectId: session.localProjectId }
       : { kind: 'local', organizationId: null, projectId: null, userId: request.scope.userId, sessionId: request.scope.sessionId, localProjectId: session.localProjectId },
       runVersion: request.authority.runVersion, policyVersion: request.authority.policyVersion,
       expiresAt: binding.authorizationExpiresAt ?? session.createdAt, allowCandidateEdits: binding.executionGranted, commands: [binding.testPlan] }
-    const tools = createNativeCodingTools({ store: host.store, sessionId: session.id, workspace, commands, assertAuthority: checkedAuthority, sources, testPlanDigest: binding.testPlanDigest,
+    const tools: CodingLoopTools = session.privateAcceptanceFor
+      ? { definitions: [], effects: {}, execute: async () => { throw new Error('Private acceptance workers cannot execute candidate tools') } }
+      : createNativeCodingTools({ store: host.store, sessionId: session.id, workspace, commands, assertAuthority: checkedAuthority, sources, testPlanDigest: binding.testPlanDigest,
+      ...(concurrentCodingAcceptance(session) ? { beforeSubmission: context => waitForAcceptance(session.codingRunId, context.session.objectiveVersion, context.signal, checkedAuthority) } : {}),
+      ...(concurrentCodingAcceptance(session) && binding.dependencyCacheVersion !== undefined && binding.dependencyPlan?.storeDirectory ? {
+        beforeTestPreparation: async (context: Parameters<CodingLoopTools['execute']>[2], dependencyPlanDigest: string) => {
+          // Changed dependency inputs use their own exact authorization and
+          // preparation. Only the original plan can reuse the B bootstrap.
+          if (dependencyPlanDigest !== binding.dependencyPlan!.digest) return
+          const worker = await startAcceptance(session.codingRunId, context.signal, checkedAuthority)
+          if (!worker) return
+          while (!await codingDependencySeedPublished({ workspace, plan: binding.dependencyPlan! })) {
+            context.signal.throwIfAborted()
+            const root = await read(session.codingRunId)
+            if (root.status !== 'running' || root.objectiveVersion !== context.session.objectiveVersion || root.pendingInput.length)
+              throw new Error('Dependency preparation authority changed')
+            const current = await read(worker.codingRunId)
+            // An empty package store has no seed to publish. Successful private
+            // completion also proves that its bootstrap has already drained.
+            if (current.status === 'completed') return
+            if (!['ready', 'running'].includes(current.status)) throw new Error('Private dependency preparation stopped')
+            await delay(100, undefined, { signal: context.signal })
+          }
+        },
+      } : {}),
       extensions: createCodingExtensions({ store: host.store, sessionId: session.id, workspace, commands, authority, ...(host.network ? { network: host.network } : {}), assertAuthority: checkedAuthority }),
       ...(session.parent ? { child: { mode: session.parent.mode, paths: session.parent.paths } } : { delegation: {
         execute: (name, input, context) => childOperation(name, input, context, workspace, assertAuthority),
@@ -161,15 +201,26 @@ function createHarnessService(host: HarnessHost): Harness {
         },
       } }),
       authority })
-    const loop = new NativeCodingLoop({ store: host.store, provider: host.provider, tools, verificationWorkspace: workspace, changed: () => { host.changed?.(session.codingRunId); if (session.parent) host.changed?.(session.parent.codingRunId) },
-      preflightIndependentChecks: (plan, operationId, signal) => preflightIndependentChecks({ plan, workspace, runner: commands, profile: binding.profile, operationId, signal, ...(binding.dependencyCacheVersion ? { dependencyCacheVersion: binding.dependencyCacheVersion } : {}) }),
+    const loop = new NativeCodingLoop({ store: host.store, provider: host.provider, tools, verificationWorkspace: workspace, changed: () => { host.changed?.(session.privateAcceptanceFor?.rootCodingRunId ?? session.codingRunId); if (session.parent) host.changed?.(session.parent.codingRunId) },
+      ...(session.privateAcceptanceFor ? { stopAfterIndependentChecks: true as const } : {}),
+      ...(session.privateAcceptanceFor && binding.dependencyCacheVersion !== undefined && binding.dependencyPlan?.storeDirectory ? {
+        prepareIndependentDependencies: async (operationId: string, signal: AbortSignal) => {
+          await checkedAuthority()
+          await prepareIndependentDependencies({ workspace, runner: commands, profile: binding.profile, operationId, signal, approvedPlanDigest: binding.dependencyPlan!.digest, dependencyCacheVersion: binding.dependencyCacheVersion ?? 1 })
+        },
+      } : {}),
+      ...(concurrentCodingAcceptance(session) ? { prepareIndependentChecksInBackground: (current: NativeCodingSession, signal: AbortSignal) => startAcceptance(current.codingRunId, signal, checkedAuthority).then(() => undefined) } : {}),
+      preflightIndependentChecks: async (plan, operationId, signal) => {
+        await checkedAuthority()
+        return preflightIndependentChecks({ plan, workspace, runner: commands, profile: binding.profile, operationId, signal, ...(binding.dependencyCacheVersion ? { dependencyCacheVersion: binding.dependencyCacheVersion } : {}) })
+      },
       assertAuthority: checkedAuthority,
       reconcileWorkers: () => commands.reconcile(),
       activity: (unitId, active) => activity(`${session.id}:${unitId}`, active),
-      rootActiveMilliseconds: async () => codingActiveMilliseconds((await read(session.parent?.codingRunId ?? session.codingRunId)).activity),
-      rootStepsUsed: async () => { const root = await read(session.parent?.codingRunId ?? session.codingRunId); return root.rootStepAttempts?.length ?? root.attempts.length },
+      rootActiveMilliseconds: async () => codingActiveMilliseconds((await read(codingRootRunId(session))).activity),
+      rootStepsUsed: async () => { const root = await read(codingRootRunId(session)); return root.rootStepAttempts?.length ?? root.attempts.length },
       reserveRootStep: async attemptId => {
-        const rootId = session.parent?.codingRunId ?? session.codingRunId
+        const rootId = codingRootRunId(session)
         const root = await mutate(rootId, draft => {
           draft.rootStepAttempts ??= draft.attempts.map(attempt => attempt.id)
           if (!draft.rootStepAttempts.includes(attemptId) && draft.rootStepAttempts.length < draft.limits.maxSteps && !terminal(draft) && ['ready', 'running', 'waiting_input', 'waiting_task', 'waiting_permission'].includes(draft.status)) draft.rootStepAttempts.push(attemptId)
@@ -182,14 +233,92 @@ function createHarnessService(host: HarnessHost): Harness {
       } })
     const core = { loop, workspace, commands }; cores.set(session.codingRunId, core); return core
   }
+  const uncertainModel = (session: NativeCodingSession) => session.attempts.some(attempt =>
+    attempt.status === 'started' || (attempt.status === 'unknown' && !attempt.acknowledgedBy))
+  const unresolvedAcceptance = (worker: NativeCodingSession) =>
+    worker.attempts.some(attempt => attempt.status === 'unknown' && !attempt.acknowledgedBy) ||
+    (uncertainModel(worker) && (worker.status === 'reconciling' || !jobs.has(worker.codingRunId)))
+  const blockForAcceptance = async (id: string, worker: NativeCodingSession) => {
+    const root = await read(id)
+    const owner = worker.privateAcceptanceFor!
+    const unresolvedWorker = unresolvedAcceptance(worker)
+    if (!unresolvedWorker && (root.pendingInput.length || ['paused', 'reconciling'].includes(root.status))) return
+    if (terminal(root) || (!unresolvedWorker && (currentIndependentChecks(root) || root.objectiveVersion !== owner.objectiveVersion ||
+        independentCheckSourceDigest(root) !== owner.sourceDigest))) return
+    const unknown = uncertainModel(root) || (await codingAcceptanceWorkers(host.store, root)).some(uncertainModel)
+    const reason = unknown ? 'model_delivery_unknown' : worker.pauseReason ?? 'independent_verification_plan_invalid'
+    await cores.get(id)?.loop.pause(root.id, reason)
+    await cores.get(id)?.commands.cancelAll()
+    await mutate(id, draft => {
+      if (!terminal(draft)) {
+        draft.status = unknown ? 'reconciling' : 'paused'
+        draft.pauseReason = reason
+      }
+    })
+  }
+  const startAcceptance = async (id: string, signal: AbortSignal, assertAuthority: () => Promise<void>): Promise<NativeCodingSession | undefined> => {
+    signal.throwIfAborted()
+    const root = await read(id)
+    if (currentIndependentChecks(root)) return undefined
+    // A restarted root must not dispatch new calls while a private request's
+    // outcome is unknown. Requests owned by a live job are the intended overlap.
+    for (const previous of await codingAcceptanceWorkers(host.store, root)) {
+      if (unresolvedAcceptance(previous)) {
+        await blockForAcceptance(id, previous)
+        return previous
+      }
+    }
+    const core = await loadCore(root, assertAuthority)
+    const worker = await prepareCodingAcceptanceWorker(host.store, root.id, core.workspace.identity.base.digest)
+    if (!worker) return undefined
+    if (worker.status === 'completed') {
+      await mergeCodingAcceptancePlan(host.store, root.id, worker.id)
+      return worker
+    }
+    if (worker.status === 'paused' && ['application_shutdown', 'parent_pause'].includes(worker.pauseReason ?? '')) {
+      const privateCore = await loadCore(worker, assertAuthority)
+      await privateCore.loop.resume(worker.id)
+    } else if (['paused', 'cancelled', 'failed', 'reconciling'].includes(worker.status) && !jobs.has(worker.codingRunId)) {
+      await blockForAcceptance(id, worker)
+      return worker
+    }
+    schedule(worker.codingRunId, assertAuthority)
+    return worker
+  }
+  const waitForAcceptance = async (id: string, objectiveVersion: number, signal: AbortSignal, assertAuthority: () => Promise<void>) => {
+    const root = await read(id)
+    if (root.objectiveVersion !== objectiveVersion || root.pendingInput.length) throw new Error('Submission objective changed')
+    if (currentIndependentChecks(root)) return
+    const worker = await startAcceptance(id, signal, assertAuthority)
+    if (!worker) return
+    let interrupted: (() => void) | undefined
+    const aborted = new Promise<never>((_, reject) => {
+      interrupted = () => reject(signal.reason ?? new Error('Acceptance preparation interrupted'))
+      signal.addEventListener('abort', interrupted, { once: true })
+    })
+    try {
+      signal.throwIfAborted()
+      while (jobs.has(worker.codingRunId)) await Promise.race([jobs.get(worker.codingRunId)!, aborted])
+      signal.throwIfAborted()
+      const current = await read(id)
+      if (current.objectiveVersion !== objectiveVersion || current.pendingInput.length) throw new Error('Submission objective changed')
+      const settled = await read(worker.codingRunId)
+      if (settled.status !== 'completed' || !currentIndependentChecks(settled)) {
+        await blockForAcceptance(id, settled)
+        throw new Error('Independent acceptance preparation did not complete')
+      }
+      await mergeCodingAcceptancePlan(host.store, root.id, worker.id)
+    } finally {
+      if (interrupted) signal.removeEventListener('abort', interrupted)
+    }
+  }
   const stopChildren = async (session: NativeCodingSession, cancel: boolean, assertAuthority: () => Promise<void>) => {
-    for (const entry of session.children.filter(child => child.state === 'active')) {
-      const child = await read(entry.codingRunId)
+    const descendants = [...await Promise.all(session.children.filter(child => child.state === 'active').map(child => read(child.codingRunId))), ...await codingAcceptanceWorkers(host.store, session)]
+    for (const child of descendants) {
       if (terminal(child)) continue
       const core = await loadCore(child, assertAuthority)
-      await core.loop.pause(child.id); await core.commands.cancelAll(); await jobs.get(entry.codingRunId)
+      await core.loop.pause(child.id, 'parent_pause'); await core.commands.cancelAll(); await jobs.get(child.codingRunId)
       if (cancel) await core.loop.cancel(child.id)
-      else await mutate(child.codingRunId, draft => { if (draft.status === 'paused') draft.pauseReason = 'parent_pause' })
     }
   }
   const childOperation = async (name: string, input: Record<string, unknown>, context: Parameters<CodingLoopTools['execute']>[2], workspace: CodingCandidateWorkspace, assertAuthority: () => Promise<void>): Promise<unknown> => {
@@ -225,7 +354,9 @@ function createHarnessService(host: HarnessHost): Harness {
         }
         if (childWorkspace.identity.base.digest !== base.digest) throw new Error('Child workspace differs from its frozen delegation input')
         child = createNativeCodingSession({ id: sessionId(childId), codingRunId: childId, workflowRunId: parent.workflowRunId, nodeId: parent.nodeId, localProjectId: parent.localProjectId, providerId: parent.providerId, model: parent.model, objective: String(input.prompt), now: new Date().toISOString() })
+        if (parent.operatorDeadlineAt) child.operatorDeadlineAt = parent.operatorDeadlineAt
         child.binding = { ...structuredClone(parent.binding!), workspaceRoot: root, context: { ...structuredClone(parent.binding!.context), id: childId, userInstruction: String(input.prompt) } }
+        delete child.binding.approvedVerification
         child.parent = { sessionId: parent.id, codingRunId: parent.codingRunId, objectiveVersion: parent.objectiveVersion, baseDigest: childWorkspace.identity.base.digest, mode: input.mode as 'read_only' | 'isolated_coding', paths: input.paths as string[] }
         child.taskBudget = { ...parent.taskBudget, taskId: `coding-task-${codingDigest(child.id)}`, parentTaskId: parent.taskBudget.rootId, maxTokens: Number(input.maxTokens), maxCostUsd: Number(input.maxCostUsd) }
         child.transcript[0] = { role: 'user', content: JSON.stringify({ task: child.objective, rootObjective: parent.objective, sourceDigest: child.parent.baseDigest, writablePaths: child.parent.paths, mode: child.parent.mode, context: parent.binding!.context.brief.prompt }) }
@@ -268,12 +399,13 @@ function createHarnessService(host: HarnessHost): Harness {
       changedPaths: [], startedAt: session.createdAt, redacted: true }),
       // `running` keeps the existing workflow reservation active; v2 turn state is explicit below.
       status: session.status === 'cancelled' ? 'cancelled' : session.status === 'failed' ? 'failed' : 'running',
-      summary: session.pauseReason ?? `Native v3 · ${session.status} · ${session.steps} 个模型步骤`,
+      summary: session.pauseReason ?? `Native v3 · ${session.status} · ${session.rootStepAttempts?.length ?? session.steps} 个模型步骤`,
       harness: { protocolVersion: 2, sessionId: session.id, status: session.status, version: session.version },
       ...(revisionFor(session) ? { changedPaths: revisionFor(session)!.operations.map(operation => operation.path) } : {}),
     }
   }
   const publish = async (session: NativeCodingSession) => {
+    if (session.privateAcceptanceFor) { host.changed?.(session.privateAcceptanceFor.rootCodingRunId); return }
     const previous = (await host.store.listCodingAgentRuns()).find(run => run.id === session.codingRunId)
     if (previous && !['completed', 'cancelled', 'failed', 'timed_out'].includes(previous.status)) {
       await host.store.commitCodingAgentMutation({ expectedRun: previous, expectedPendingPermissionRequestIds: [], run: await projectRun(session) })
@@ -304,10 +436,11 @@ function createHarnessService(host: HarnessHost): Harness {
       try { await cores.get(id)?.commands.cancelAll() } catch { stopped = false }
       if (!terminal(current)) await publish(await mutate(id, draft => { draft.status = stopped ? 'paused' : 'reconciling'; draft.pauseReason = stopped ? error instanceof Error ? error.message : 'Native execution interrupted' : 'previous_command_not_stopped' }))
     }).finally(async () => {
-      jobs.delete(id)
       // A reply can be persisted while the previous batch is releasing its lease.
       const current = await read(id)
-      if (current.status === 'ready') schedule(id, assertAuthority)
+      if (current.privateAcceptanceFor && ['paused', 'failed', 'cancelled', 'reconciling'].includes(current.status) &&
+          !['application_shutdown', 'parent_pause', 'source_superseded'].includes(current.pauseReason ?? '') && !shuttingDown)
+        await blockForAcceptance(current.privateAcceptanceFor.rootCodingRunId, current)
       if (current.parent && ['review', 'cancelled', 'failed', 'paused', 'reconciling'].includes(current.status)) {
         const parent = await read(current.parent.codingRunId)
         if (parent.status === 'waiting_task' && parent.pauseReason === `child:${id}`) { await wakeForChild(parent.codingRunId, current); schedule(parent.codingRunId, assertAuthority) }
@@ -316,6 +449,22 @@ function createHarnessService(host: HarnessHost): Harness {
         const child = await read(current.pauseReason.slice(6))
         if (['review', 'cancelled', 'failed', 'paused', 'reconciling'].includes(child.status)) { await wakeForChild(id, child); schedule(id, assertAuthority) }
       }
+      if (!current.privateAcceptanceFor && ['paused', 'reconciling', 'cancelled', 'failed'].includes(current.status)) {
+        for (const worker of await codingAcceptanceWorkers(host.store, current)) {
+          if (!jobs.has(worker.codingRunId)) continue
+          if (['ready', 'running'].includes(worker.status)) {
+            const privateCore = await loadCore(worker, assertAuthority)
+            await privateCore.loop.pause(worker.id, 'parent_pause')
+            await privateCore.commands.cancelAll()
+          }
+          await jobs.get(worker.codingRunId)
+        }
+      }
+      // settled() and shutdown() must include these final checkpoint writes.
+      // Nothing asynchronous may run after removing this job from the map.
+      const latest = await read(id)
+      jobs.delete(id)
+      if (latest.status === 'ready') schedule(id, assertAuthority)
     })
     jobs.set(id, job)
   }
@@ -355,6 +504,7 @@ function createHarnessService(host: HarnessHost): Harness {
   const executeCommand = async (value: CodingHarnessCommand, assertAuthority: () => Promise<void>, acceptedInterruption = false): Promise<CodingExecutorHarnessResult> => {
     const command = parseCodingHarnessCommand(value), id = command.codingRunId
     let session = await read(id)
+    if (session.privateAcceptanceFor) throw new Error('Private acceptance workers are controlled through their root task')
     if (command.type === 'get') return result(id, command)
     const fingerprint = codingDigest(JSON.stringify(command)), replay = session.commands.find(item => item.id === command.commandId)
     if (replay) { if (replay.digest !== fingerprint) throw new Error('Conflicting coding command'); return result(id) }
@@ -375,25 +525,64 @@ function createHarnessService(host: HarnessHost): Harness {
       await mutate(id, draft => { draft.binding!.authorizationExpiresAt = expiresAt; draft.commands.push({ id: command.commandId, digest: fingerprint }) })
       cores.delete(id)
       for (const child of session.children.filter(item => item.state === 'active')) { await mutate(child.codingRunId, draft => { draft.binding!.authorizationExpiresAt = expiresAt }); cores.delete(child.codingRunId) }
+      for (const worker of await codingAcceptanceWorkers(host.store, session)) if (!terminal(worker)) {
+        await mutate(worker.codingRunId, draft => { draft.binding!.authorizationExpiresAt = expiresAt })
+        cores.delete(worker.codingRunId)
+      }
       return result(id)
     }
     if (command.type === 'authorize') {
       if (session.binding!.executionGranted || session.status !== 'waiting_permission') throw new Error('Execution authorization is stale')
+      if (session.binding!.approvedVerification && (session.pendingInput.length || !currentApprovedVerification(session))) throw new Error('Approved acceptance source changed')
+      if (session.binding!.approvedVerification && command.manualValidationPlan) throw new Error('This task uses its approved automated acceptance contract')
       if (!command.manualValidationPlan && !session.binding!.context.project.testCommand.trim()) throw new Error('请在开工前选择明确的人工验收计划，或保存适用的自动测试命令。')
       const profile: CodingExecutionProfile | undefined = command.profile === 'container' ? host.containerProfile : command.profile === 'os_sandbox' ? { kind: 'os_sandbox', network: command.network ?? 'none' } : { kind: 'trusted_local' }
       if (!profile) throw new Error('Container profile is not configured; no local fallback')
       if (profile.kind === 'os_sandbox' && !(await codingSandboxAvailability()).available) throw new Error('系统沙箱不可用，任务未启动；不会自动回退为本机可信执行。')
       const input = await inspectCodingInput(session.binding!.context.workspace.worktreePath, session.binding!.context.workspace.baseCommitSha!)
       if (input.digest !== session.binding!.input?.digest) throw new Error('Input files changed after the authorization was presented; start a fresh run with the new baseline')
-      const dependencyPlan = await codingDependencyPlan(session.binding!.context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], { isolatedStore: session.binding!.dependencyCacheVersion === 1 })
+      const dependencyPlan = await codingDependencyPlan(session.binding!.context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], codingDependencyCacheOptions(session.binding!.dependencyCacheVersion))
       if (dependencyPlan.inputDigest !== session.binding!.dependencyPlan?.inputDigest || dependencyPlan.command !== session.binding!.dependencyPlan?.command) throw new Error('Dependency plan changed since execution was presented')
-      for (const plan of [shellPlan(session.binding!.context.project.testCommand, profile), dependencyPlan.plan].filter(Boolean)) {
+      const fixedTests = session.binding!.approvedVerification?.tests
+      const approvedPlan = fixedTests ? approvedCodingTestCommand(fixedTests, profile, '.devflow-approved-result.json') : undefined
+      for (const plan of [shellPlan(session.binding!.context.project.testCommand, profile), dependencyPlan.plan, approvedPlan].filter(Boolean)) {
         if (decideCodingCommand({ rules: session.binding!.permissionPolicy?.rules ?? [], mode: 'ask', sandboxed: profile.kind !== 'trusted_local', executable: plan!.executable, args: plan!.args }) === 'deny') throw new Error('Initial test or dependency plan conflicts with a deny rule')
       }
       await mkdir(host.root, { recursive: true, mode: 0o700 })
       const created = await CodingCandidateWorkspace.create({ root: session.binding!.workspaceRoot, delivery: session.binding!.context.workspace.worktreePath, baseCommitSha: session.binding!.context.workspace.baseCommitSha!, excludedPaths: ['node_modules', '.cache', 'coverage'] })
       if (created.identity.base.digest !== input.digest) throw new Error('Input changed while creating the immutable candidate')
-      session = await mutate(id, draft => { draft.binding!.permissionPolicy = { version: 1, mode: command.permissionMode ?? 'ask', rules: draft.binding!.permissionPolicy?.rules ?? parseCodingCommandRules(host.commandRules ?? []) }; draft.binding!.executionGranted = true; draft.binding!.profile = profile; draft.binding!.dependencyPlan = dependencyPlan; draft.binding!.authorizationExpiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString(); draft.binding!.testPlan = shellPlan(draft.binding!.context.project.testCommand, profile); draft.binding!.testPlanDigest = codingDigest(JSON.stringify(command.manualValidationPlan ? { manualValidationPlan: command.manualValidationPlan } : draft.binding!.testPlan)); if (command.manualValidationPlan) { draft.binding!.manualValidationPlan = command.manualValidationPlan; draft.transcript.push({ role: 'user', content: `本任务事先选择人工验收，自动测试不会被记为通过。人工计划：${command.manualValidationPlan}` }) }; draft.status = 'ready'; draft.commands.push({ id: command.commandId, digest: fingerprint }) })
+      session = await mutate(id, draft => {
+        const binding = draft.binding!
+        binding.permissionPolicy = { version: 1, mode: command.permissionMode ?? 'ask', rules: binding.permissionPolicy?.rules ?? parseCodingCommandRules(host.commandRules ?? []) }
+        binding.executionGranted = true
+        binding.profile = profile
+        binding.dependencyPlan = dependencyPlan
+        binding.authorizationExpiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString()
+        binding.testPlan = codingCommandWithDependencyCache(shellPlan(binding.context.project.testCommand, profile), dependencyPlan)
+        let verification: unknown = binding.testPlan
+        if (binding.approvedVerification) verification = { testPlan: binding.testPlan, approvedTests: binding.approvedVerification.tests.digest }
+        if (command.manualValidationPlan) {
+          binding.manualValidationPlan = command.manualValidationPlan
+          verification = { manualValidationPlan: command.manualValidationPlan }
+          draft.transcript.push({ role: 'user', content: `本任务事先选择人工验收，自动测试不会被记为通过。人工计划：${command.manualValidationPlan}` })
+        }
+        binding.testPlanDigest = codingDigest(JSON.stringify(verification))
+        draft.status = 'ready'
+        draft.commands.push({ id: command.commandId, digest: fingerprint })
+      })
+      if (session.binding!.approvedVerification && dependencyPlan.storeDirectory) {
+        const core = await loadCore(session, assertAuthority), controller = new AbortController()
+        verifications.set(id, controller)
+        try {
+          await prepareIndependentDependencies({ workspace: core.workspace, runner: core.commands, profile,
+            operationId: `${session.id}:approved-baseline:${command.commandId}`, approvedPlanDigest: dependencyPlan.digest, signal: controller.signal, dependencyCacheVersion: session.binding!.dependencyCacheVersion ?? 1 })
+          controller.signal.throwIfAborted()
+          await assertAuthority()
+        } catch (error) {
+          await mutate(id, draft => { if (!terminal(draft)) { draft.status = 'paused'; draft.pauseReason = 'approved_baseline_preparation_failed' } })
+          throw error
+        } finally { verifications.delete(id) }
+      }
       schedule(id, assertAuthority)
     } else {
       const core = await loadCore(session, assertAuthority)
@@ -412,6 +601,8 @@ function createHarnessService(host: HarnessHost): Harness {
         if (command.maxSteps < session.limits.maxSteps || command.maxActiveMilliseconds < session.limits.maxActiveMilliseconds) throw new Error('Extension must preserve the existing limits')
         await mutate(id, draft => { draft.limits.maxSteps = command.maxSteps; draft.limits.maxActiveMilliseconds = command.maxActiveMilliseconds })
         for (const entry of session.children.filter(child => child.state === 'active')) await mutate(entry.codingRunId, draft => { draft.limits.maxSteps = command.maxSteps; draft.limits.maxActiveMilliseconds = command.maxActiveMilliseconds })
+        for (const worker of await codingAcceptanceWorkers(host.store, session)) if (!terminal(worker))
+          await mutate(worker.codingRunId, draft => { draft.limits.maxSteps = command.maxSteps; draft.limits.maxActiveMilliseconds = command.maxActiveMilliseconds })
       } else if (command.type === 'pause') { await core.loop.pause(session.id); await core.commands.cancelAll(); await jobs.get(id) }
       else if (command.type === 'cancel') { await stopChildren(session, true, assertAuthority); await core.loop.pause(session.id); await core.commands.cancelAll(); await jobs.get(id); await core.loop.cancel(session.id) }
       else if (command.type === 'resume') {
@@ -427,6 +618,13 @@ function createHarnessService(host: HarnessHost): Harness {
             await mutate(id, draft => { draft.status = 'review'; delete draft.pauseReason })
           }
         } else {
+          const workers = await codingAcceptanceWorkers(host.store, session)
+          if (workers.some(uncertainModel)) throw new Error('Reconciliation required before resuming private acceptance')
+          for (const worker of workers) if (worker.status === 'paused' && worker.privateAcceptanceFor!.objectiveVersion === session.objectiveVersion &&
+              worker.privateAcceptanceFor!.sourceDigest === independentCheckSourceDigest(session)) {
+            const privateCore = await loadCore(worker, assertAuthority)
+            await privateCore.loop.resume(worker.id)
+          }
           await core.loop.resume(session.id)
           for (const entry of session.children.filter(child => child.state === 'active')) { const child = await read(entry.codingRunId); if (child.status === 'paused' && child.pauseReason === 'parent_pause') { const childCore = await loadCore(child, assertAuthority); await childCore.loop.resume(child.id); schedule(child.codingRunId, assertAuthority) } }
           schedule(id, assertAuthority)
@@ -445,7 +643,24 @@ function createHarnessService(host: HarnessHost): Harness {
       else if (command.type === 'retry_unknown') {
         if (session.status !== 'reconciling' || session.pauseReason !== 'model_delivery_unknown') throw new Error('No unknown model request to retry')
         if (jobs.has(id) || session.writer || core.commands.hasActiveCommands) throw new Error('Previous execution has not stopped')
-        await mutate(id, draft => { for (const attempt of draft.attempts) if (attempt.status === 'started' || attempt.status === 'unknown') { attempt.status = 'unknown'; attempt.acknowledgedBy = command.commandId }; draft.status = 'ready'; draft.pauseReason = 'human_authorized_new_attempt' })
+        const workers = await codingAcceptanceWorkers(host.store, session)
+        for (const worker of workers) {
+          const privateCore = await loadCore(worker, assertAuthority)
+          if (jobs.has(worker.codingRunId) || worker.writer || privateCore.commands.hasActiveCommands) throw new Error('Private acceptance has not stopped')
+        }
+        for (const worker of workers.filter(uncertainModel)) await mutate(worker.codingRunId, draft => {
+          for (const attempt of draft.attempts) if (attempt.status === 'started' || attempt.status === 'unknown') {
+            attempt.status = 'unknown'; attempt.acknowledgedBy = command.commandId
+          }
+          const current = draft.privateAcceptanceFor!.objectiveVersion === session.objectiveVersion && draft.privateAcceptanceFor!.sourceDigest === independentCheckSourceDigest(session)
+          draft.status = current ? 'ready' : 'paused'
+          draft.pauseReason = current ? 'human_authorized_new_attempt' : 'source_superseded'
+        })
+        await mutate(id, draft => {
+          for (const attempt of draft.attempts) if (attempt.status === 'started' || attempt.status === 'unknown') { attempt.status = 'unknown'; attempt.acknowledgedBy = command.commandId }
+          draft.status = 'ready'; draft.pauseReason = 'human_authorized_new_attempt'
+          draft.commands.push({ id: command.commandId, digest: fingerprint })
+        })
         // Explicit new attempt; previous unknown charges remain in the authoritative ledger.
         schedule(id, assertAuthority)
       } else if (command.type === 'reject') {
@@ -460,7 +675,8 @@ function createHarnessService(host: HarnessHost): Harness {
         if (session.status !== 'review' || session.pendingInput.length || !revision || revision.digest !== command.revisionDigest || session.objectiveVersion !== command.objectiveVersion) throw new Error('Stale coding approval')
         if (core.commands.hasActiveCommands) throw new Error('Candidate writers are still active')
         if (session.binding!.manualValidationPlan ? !command.manualValidationEvidence : command.manualValidationEvidence !== undefined) throw new Error('人工验收必须事先选择计划，并在批准确切修订时填写人工检查依据。')
-        if (session.binding!.independentVerificationRequired && !session.binding!.manualValidationPlan && !currentIndependentChecks(session)) throw new Error('Independent acceptance must be frozen before revision approval')
+        if (session.binding!.approvedVerification && !currentApprovedVerification(session)) throw new Error('Approved acceptance source changed')
+        if (session.binding!.independentVerificationRequired && !session.binding!.manualValidationPlan && !currentApprovedVerification(session) && !currentIndependentChecks(session)) throw new Error('Independent acceptance must be frozen before revision approval')
         assertCodingTestInputAuthority(session, revision)
         await mutate(id, draft => {
           if (draft.status !== 'review' || draft.pendingInput.length || draft.objectiveVersion !== command.objectiveVersion || revisionFor(draft)?.digest !== command.revisionDigest) throw new Error('Stale coding approval')
@@ -481,20 +697,41 @@ function createHarnessService(host: HarnessHost): Harness {
           assertAuthority: assertVerification,
           verify: async directory => {
             await mutate(id, draft => { draft.status = 'verifying' })
-            const dependencies = await codingDependencyPlan(directory, session.binding!.profile, revision.base.excludedPaths, { isolatedStore: session.binding!.dependencyCacheVersion === 1 })
-            if (revision.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlanDigest, dependencies: dependencies.digest }))) throw new Error('Frozen verification plan changed')
-            await restoreCodingDependencySeed({ workspace: core.workspace, directory, plan: dependencies, signal: verificationController.signal })
-            await prepareCodingDependencies({ directory, profile: session.binding!.profile, excludedPaths: revision.base.excludedPaths, runner: core.commands, operationId: `${session.id}:verify:${command.commandId}`, plan: dependencies, signal: verificationController.signal, final: true })
-            const logId = `${session.id}:verify:${command.commandId}`
-            await core.commands.start(logId, session.binding!.testPlan, directory, verificationController.signal)
-            const tested = await core.commands.wait(logId)
+            const publicVerification = async (): Promise<CodingVerificationResult> => {
+              const dependencies = await codingDependencyPlan(directory, session.binding!.profile, revision.base.excludedPaths, codingDependencyCacheOptions(session.binding!.dependencyCacheVersion))
+              if (revision.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlanDigest, dependencies: dependencies.digest }))) throw new Error('Frozen verification plan changed')
+              await restoreCodingDependencySeed({ workspace: core.workspace, directory, plan: dependencies, signal: verificationController.signal })
+              await prepareCodingDependencies({ directory, profile: session.binding!.profile, excludedPaths: revision.base.excludedPaths, runner: core.commands, operationId: `${session.id}:verify:${command.commandId}`, plan: dependencies, signal: verificationController.signal, final: true })
+              const logId = `${session.id}:verify:${command.commandId}`
+              await core.commands.start(logId, session.binding!.testPlan, directory, verificationController.signal)
+              const tested = await core.commands.wait(logId)
+              const publicVerification = await codingCommandFeedback(core.commands, tested)
+              return { exitCode: tested.exitCode, status: publicVerification.status, logId, publicVerification }
+            }
+            const approved = currentApprovedVerification(session)
+            if (approved && session.binding!.independentVerificationRequired) {
+              if (session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, approvedTests: approved.tests.digest }))) throw new Error('Frozen approved acceptance changed')
+              // Both read the same revision in independently owned copies. Drain
+              // both outcomes, including on failure, before deciding delivery.
+              const [publicResult, fixedResult] = await Promise.allSettled([
+                publicVerification(),
+                runApprovedCodingVerification({ approved, workspace: core.workspace, revision, runner: core.commands,
+                  profile: session.binding!.profile, operationId: `${session.id}:verify:${command.commandId}`, signal: verificationController.signal, dependencyCacheVersion: session.binding!.dependencyCacheVersion ?? 1 }),
+              ])
+              if (publicResult.status === 'rejected') throw publicResult.reason
+              if (fixedResult.status === 'rejected') throw fixedResult.reason
+              if (publicResult.value.status === 'passed') return { ...fixedResult.value, ...(publicResult.value.publicVerification ? { publicVerification: publicResult.value.publicVerification } : {}) }
+              const independentVerification = fixedResult.value.independentVerification
+              return { ...publicResult.value, ...(independentVerification ? { independentVerification } : {}) }
+            }
+            const tested = await publicVerification()
             if (tested.status === 'passed' && session.binding!.independentVerificationRequired) {
               const plan = currentIndependentChecks(session)
               if (!plan || plan.baselineDigest !== revision.base.digest || session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, independentChecks: plan.digest }))) throw new Error('Frozen independent acceptance changed')
-              const independentVerification = await runIndependentChecks({ plan, runner: core.commands, directory, profile: session.binding!.profile, operationId: `${session.id}:independent:${command.commandId}`, signal: verificationController.signal })
-              return { exitCode: independentVerification.status === 'passed' ? 0 : 1, status: independentVerification.status === 'invalid' ? 'failed' : independentVerification.status, logId, independentVerification }
+              const independentVerification = await runIndependentChecks({ plan, baseline: core.workspace, runner: core.commands, directory, profile: session.binding!.profile, operationId: `${session.id}:independent:${command.commandId}`, signal: verificationController.signal })
+              return { ...tested, exitCode: independentVerification.status === 'passed' ? 0 : 1, status: independentVerification.status === 'invalid' ? 'failed' : independentVerification.status, independentVerification }
             }
-            return { exitCode: tested.exitCode, status: tested.status === 'passed' ? 'passed' : tested.status === 'timed_out' ? 'timed_out' : tested.status === 'cancelled' ? 'cancelled' : 'failed', logId }
+            return tested
           } }).catch(async error => { await mutate(id, draft => { if (draft.status === 'applying') { draft.status = 'paused'; draft.pauseReason = error instanceof Error ? error.message : 'Application did not start' } }); throw error }).finally(() => { verifications.delete(id) })
         await mutate(id, draft => {
           draft.deliveryEvidence.push(evidence)
@@ -503,8 +740,8 @@ function createHarnessService(host: HarnessHost): Harness {
           if (verifierInvalid && draft.status === 'ready') draft.status = 'paused'
           if (draft.status === 'paused' || draft.status === 'ready') { draft.pauseReason = verifierInvalid ? 'independent_verification_invalid' : evidence.status === 'evidence_invalid' ? 'invalid_test_plan' : 'final_test_failed'; draft.transcript.push({ role: 'user', content: JSON.stringify({ finalVerification: evidence, deliveryRestored: true,
             failedRequirements: evidence.result?.independentVerification?.failedRequirements?.length ? evidence.result.independentVerification.failedRequirements : currentIndependentChecks(draft)?.criteria.filter(item => evidence.result?.independentVerification?.failedCriteria.includes(item.id)),
-            instruction: verifierInvalid ? 'The independent checker could not evaluate the requirement. Candidate correctness is unknown. This is not an implementation repair attempt; the frozen check requires investigation.' : 'Repair the candidate against the listed approved requirements, then submit a NEW revision for human approval. The independent plan digest and the public test plan digest identify different objects and are not expected to match.' }) }) }
-          if (draft.status === 'ready' && draft.binding!.independentVerificationRequired) {
+            instruction: verifierInvalid ? 'The independent checker could not evaluate the requirement. Candidate correctness is unknown. This is not an implementation repair attempt; the frozen check requires investigation.' : 'Check publicVerification and independentVerification separately; both must pass. Read the supplied public command diagnostics first; read_command can page the retained log by logId without rerunning it. Repair the candidate against the approved objective, then submit a NEW revision for human approval. If the approved objective changes an old public expectation, stage the smallest corresponding test-input update and call propose_changeset to request separate exact-content authorization. Preserve unrelated assertions and never change the host fixed acceptance. The independent plan digest and the public test plan digest identify different objects and are not expected to match.' }) }) }
+          if (draft.status === 'ready' && draft.binding!.independentVerificationRequired && !draft.binding!.approvedVerification) {
             const revisions = new Set(draft.revisions.filter(item => item.objectiveVersion === draft.objectiveVersion).map(item => item.digest))
             const failures = draft.deliveryEvidence.filter(item => revisions.has(item.revisionDigest) && item.status === 'test_failed' && item.result?.status !== 'cancelled' && item.result?.independentVerification?.status !== 'invalid').length
             if (failures >= 3) { draft.status = 'paused'; draft.pauseReason = 'independent_verification_repair_limit' }
@@ -531,12 +768,14 @@ function createHarnessService(host: HarnessHost): Harness {
       if (!context.workspace.baseCommitSha) throw new Error('Native v3 requires an immutable input commit')
       const session = createNativeCodingSession({ id: sessionId(input.request.id), codingRunId: input.request.id, workflowRunId: context.run.id, nodeId: context.node.id,
         localProjectId: context.project.id, providerId: host.provider.id, model: host.provider.model, objective: context.userInstruction, now: new Date().toISOString() })
-      const profile: CodingExecutionProfile = { kind: 'os_sandbox', network: 'none' }, testPlan = shellPlan(context.project.testCommand, profile)
-      session.binding = { permissionPolicy: { version: 1, mode: 'ask', rules: parseCodingCommandRules(host.commandRules ?? []) }, request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyCacheVersion: 1, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], { isolatedStore: true }) }
+      const profile: CodingExecutionProfile = { kind: 'os_sandbox', network: 'none' }
+      const dependencyPlan = await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage'], codingDependencyCacheOptions(2))
+      const testPlan = codingCommandWithDependencyCache(shellPlan(context.project.testCommand, profile), dependencyPlan)
+      session.binding = { permissionPolicy: { version: 1, mode: 'ask', rules: parseCodingCommandRules(host.commandRules ?? []) }, request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyCacheVersion: 2, dependencyPlan }
       session.binding.input = await inspectCodingInput(context.workspace.worktreePath, context.workspace.baseCommitSha)
       session.binding.testInputPolicyVersion = 1
       session.binding.independentVerificationRequired = true
-      session.binding.independentVerificationVersion = 2
+      session.binding.independentVerificationVersion = 4
       session.independentVerification = { plans: [], humanInputs: [] }
       session.acceptance = context.upstreamArtifacts.flatMap(artifact => artifact.clarificationRevision?.status === 'approved' ? artifact.clarificationRevision.acceptanceCriteria.map((text, index) => ({ id: `criterion-${codingDigest(`${artifact.id}:${index}:${text}`)}`, objectiveVersion: 1, sourceRef: `${artifact.id}@${artifact.clarificationRevision!.revisionDigest}`, text, confirmation: 'approved_source' as const, resolution: 'unresolved' as const })) : [])
       if (session.acceptance.length > 100) throw new Error('More than 100 confirmed acceptance criteria; split the approved workflow scope first')
@@ -544,6 +783,10 @@ function createHarnessService(host: HarnessHost): Harness {
       session.taskBudget = { rootId: taskId, taskId, maxTokens: input.request.budget.maxTokens, rootMaxTokens: input.request.budget.maxTokens, maxCostUsd: input.request.budget.maxCostUsd, rootMaxCostUsd: input.request.budget.maxCostUsd }
       session.status = 'waiting_permission'
       session.transcript[0] = { role: 'user', content: `${context.userInstruction}\n\n任务简报（宿主提供的已批准来源）：\n${context.brief.prompt}` }
+      if (host.approvedTests) session.binding.approvedVerification = {
+        objectiveVersion: session.objectiveVersion, sourceDigest: independentCheckSourceDigest(session), baselineDigest: session.binding.input.digest,
+        tests: structuredClone(host.approvedTests),
+      }
       if (!await host.store.saveNativeCodingSession(session, 0)) throw new Error('Native coding run already exists')
       return result(input.request.id)
     },
@@ -579,7 +822,7 @@ function createHarnessService(host: HarnessHost): Harness {
         if (session.binding?.executionGranted && !terminal(session)) {
           const core = await loadCore(session, assertAuthority)
           if (!await core.commands.reconcile()) { await mutate(codingRun.id, draft => { draft.status = 'reconciling'; draft.pauseReason = 'previous_command_not_stopped' }); return result(codingRun.id) }
-          const children = await Promise.all(session.children.filter(child => child.state === 'active').map(child => read(child.codingRunId)))
+          const children = [...await Promise.all(session.children.filter(child => child.state === 'active').map(child => read(child.codingRunId))), ...await codingAcceptanceWorkers(host.store, session)]
           // Reconcile every descendant before either side can resume. Children
           // own independent workspaces but their old processes still spend the
           // parent's authority and budget.
@@ -614,7 +857,7 @@ function createHarnessService(host: HarnessHost): Harness {
       budgetTimers.clear()
       const projectIds = new Set((await host.store.listProjects()).map(project => project.id))
       const sessions = (await Promise.all([...projectIds].map(id => host.store.listNativeCodingSessions(id)))).flat()
-      await Promise.all(sessions.filter(session => !session.parent && !terminal(session) && session.binding?.workspaceRoot.startsWith(host.root + path.sep)).map(session => stopScope(session.codingRunId, 'application_shutdown')))
+      await Promise.all(sessions.filter(session => !session.parent && !session.privateAcceptanceFor && !terminal(session) && session.binding?.workspaceRoot.startsWith(host.root + path.sep)).map(session => stopScope(session.codingRunId, 'application_shutdown')))
     },
   }
   return executor

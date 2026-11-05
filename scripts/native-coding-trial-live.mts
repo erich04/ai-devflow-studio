@@ -6,6 +6,7 @@ import { createLocalStore } from '../apps/desktop/electron/local-store.ts'
 import { createCodingRuntime } from '../apps/desktop/electron/coding-runtime.ts'
 import { createNativeCodingExecutorV2, createAgentProviderNativeCodingV2DecisionProvider } from '../apps/desktop/electron/native-coding-executor-v2.ts'
 import { createNativeCodingExecutorV3 } from '../apps/desktop/electron/native-coding-harness.ts'
+import type { ApprovedCodingTests } from '../apps/desktop/electron/native-coding-approved-verification.ts'
 import { createOpencodeHttpCodingEngineAdapter } from '../apps/desktop/electron/opencode-http-engine.ts'
 import { createOpencodeProcessManager } from '../apps/desktop/electron/opencode-process.ts'
 import { buildOpencodeRuntimeEnv } from '../apps/desktop/electron/coding-engine.ts'
@@ -15,10 +16,10 @@ import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.ts'
 import { createWorkflowRuntime } from '../apps/desktop/electron/workflow-runtime.ts'
 import { createEvaluationLedger, evaluationUsage, saveJson, digest, configureEvaluationHarnessLimits } from './native-coding-live-support.ts'
 import { historicalPrefixSystem, legacyPrefixRequest } from './native-coding-cache-probe.ts'
-import { handleEvaluationChildControls } from './native-coding-live-operator.ts'
+import { handleEvaluationChildControls, evaluationPermissionDecision, type EvaluationTestInputPolicy } from './native-coding-live-operator.ts'
 import { parseCodingCommandRules, type CodingCommandRule, type CodingPermissionMode } from '../packages/shared/src/index.ts'
 
-export type TrialInput = { requestLayout?: 'legacy' | 'fixed'; id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; roundRoot?: string; scopeId?: string; execution?: { profile: 'os_sandbox'; network: 'none' | 'enabled'; permissionMode: CodingPermissionMode; commandRules: CodingCommandRule[] } }
+export type TrialInput = { requestLayout?: 'legacy' | 'fixed'; id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; testInputPolicy?: EvaluationTestInputPolicy; approvedTests?: ApprovedCodingTests; roundRoot?: string; scopeId?: string; execution?: { profile: 'os_sandbox'; network: 'none' | 'enabled'; permissionMode: CodingPermissionMode; commandRules: CodingCommandRule[] } }
 export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const start = Date.now(), now = () => new Date().toISOString(), projectId = 'evaluation-project', providerId = 'deepseek-evaluation'
   const ledger = await createEvaluationLedger({ file: path.join(input.output, 'ledger.json'), projectId, maxCalls: input.maxCalls, maxCostUsd: input.maxCostUsd,
@@ -67,7 +68,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const manager = createOpencodeProcessManager()
   let engine: ReturnType<typeof createOpencodeHttpCodingEngineAdapter> | undefined
   let executor: ReturnType<typeof createNativeCodingExecutorV2> | ReturnType<typeof createNativeCodingExecutorV3> | undefined
-  if (input.engine === 'native-v3') executor = native = createNativeCodingExecutorV3({ store, provider, root: path.join(input.output, 'harness'), configVersion: 1, ...(input.execution ? { commandRules: parseCodingCommandRules(input.execution.commandRules) } : {}) })
+  if (input.engine === 'native-v3') executor = native = createNativeCodingExecutorV3({ store, provider, root: path.join(input.output, 'harness'), configVersion: 1, ...(input.approvedTests ? { approvedTests: input.approvedTests } : {}), ...(input.execution ? { commandRules: parseCodingCommandRules(input.execution.commandRules) } : {}) })
   else if (input.engine === 'native-v2') executor = createNativeCodingExecutorV2({ store, decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(provider), configVersion: 1, runSavedTest: runBoundedTest, testTimeoutMs: 300000 })
   else {
     relay = await createGovernedOpencodeProxy({ binding: { providerId, modelId: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey, fingerprint: digest('frozen-deepseek-flash-high') }, projectId, governance: ledger, maxOutputTokens: input.maxOutputTokens,
@@ -114,17 +115,24 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   try {
     const started = await coding.runCodingAgent({ runId: run.id, nodeId: run.currentNodeId, projectId, requestedBy: run.creatorId, userInstruction: input.prompt }); codingRunId = started.codingRun.id
     if (native) {
-      const limits = await configureEvaluationHarnessLimits(store, codingRunId, input)
-      await recordAction({ type: 'frozen_harness_limits', limits, wallDeadline: new Date(start + input.maxActiveMilliseconds).toISOString() })
+      const wallDeadline = new Date(start + input.maxActiveMilliseconds).toISOString()
+      const limits = await configureEvaluationHarnessLimits(store, codingRunId, input, wallDeadline)
+      await recordAction({ type: 'frozen_harness_limits', limits, wallDeadline })
       const get = (target = codingRunId!) => coding.codingHarnessCommand({ protocolVersion: 2, type: 'get', codingRunId: target })
       const command = async (body: Record<string, unknown>, target = codingRunId!) => { const snapshot = await get(target); const value = { protocolVersion: 2, codingRunId: target, commandId: `operator-${actions.length}`, expectedVersion: snapshot.version, ...body } as CodingHarnessCommand; await recordAction({ command: value }); return coding.codingHarnessCommand(value) }
       await command({ type: 'authorize', ...(input.execution ? { profile: input.execution.profile, network: input.execution.network, permissionMode: input.execution.permissionMode } : { profile: 'trusted_local' }) })
+      const decidePermission = async (permissionId: string, target: string) => {
+        const session = await store.getNativeCodingSession(`native-${target}`)
+        const decision = evaluationPermissionDecision(permissionId, session, input.testInputPolicy)
+        await recordAction({ type: 'evaluation_permission_policy', codingRunId: target, permissionId, testInputPolicy: input.testInputPolicy ?? 'reject', decision })
+        return decision
+      }
       let answered = false
       while (!deadlineExpired) {
         await native.settled(codingRunId)
         const snapshot = await get(); finalSnapshot = snapshot
         await saveJson(path.join(input.output, 'snapshot.json'), snapshot)
-        const childControls = await handleEvaluationChildControls(snapshot, { get, command })
+        const childControls = await handleEvaluationChildControls(snapshot, { get, command, decidePermission })
         if (childControls.unansweredChild) { failure = `unanswered_child_question:${childControls.unansweredChild}`; break }
         if (childControls.handled) continue
         if (snapshot.status === 'review' && snapshot.revision) {
@@ -132,7 +140,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
           await command({ type: 'approve', revisionDigest: snapshot.revision.digest, objectiveVersion: snapshot.objectiveVersion, confirmedCriteria: [] }); continue
         }
         if (snapshot.status === 'waiting_input' && snapshot.question && input.questionAnswer && !answered) { answered = true; await command({ type: 'reply', questionId: snapshot.question.id, objectiveVersion: snapshot.objectiveVersion, text: input.questionAnswer }); continue }
-        if (snapshot.status === 'waiting_permission' && snapshot.permission) { await command({ type: 'permission', permissionId: snapshot.permission.id, decision: 'rejected' }); continue }
+        if (snapshot.status === 'waiting_permission' && snapshot.permission) { await command({ type: 'permission', permissionId: snapshot.permission.id, decision: await decidePermission(snapshot.permission.id, codingRunId) }); continue }
         if (['running', 'ready', 'waiting_task'].includes(snapshot.status)) { await new Promise(resolve => setTimeout(resolve, 100)); continue }
         break
       }
@@ -161,6 +169,10 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     for (let i = 0; i < sessions.length; i++) for (const child of sessions[i]!.children) {
       if (sessions.some(row => row.id === child.sessionId)) continue
       const saved = await store.getNativeCodingSession(child.sessionId); if (saved) sessions.push(saved)
+    }
+    for (const descriptor of session?.acceptanceWorkers ?? []) {
+      const saved = await store.getNativeCodingSession(descriptor.sessionId)
+      if (saved) { sessions.push(saved); await saveJson(path.join(input.output, 'private-acceptance', `${saved.id}.json`), saved) }
     }
     const permissions = sessions.flatMap(row => row.permissions)
     const events = codingRunId ? await store.listCodingAgentEvents(codingRunId) : []

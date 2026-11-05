@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -8,6 +8,39 @@ import * as processes from './opencode-process'
 
 const roots: string[] = []
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
+
+it('reuses only the explicitly selected workspace Corepack cache across separate commands', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'df-corepack-env-')); roots.push(root)
+  const first = path.join(root, 'first'), second = path.join(root, 'second')
+  await mkdir(first); await mkdir(second)
+  const runner = new CodingCommandRunner(path.join(root, 'receipts'))
+  const plan = { executable: process.execPath, args: ['-e', 'const fs=require("node:fs"),path=require("node:path");if(!process.env.COREPACK_HOME)throw Error("Missing confined cache");fs.mkdirSync(process.env.COREPACK_HOME,{recursive:true});fs.writeFileSync(path.join(process.env.COREPACK_HOME,"prepared"),"pinned manager");console.log(process.env.COREPACK_HOME)'], timeoutMs: 5000, profile: { kind: 'trusted_local' as const }, corepackHome: '.cache/devflow-corepack' as const }
+  try {
+    await runner.start('prepare-cache', plan, first)
+    expect((await runner.wait('prepare-cache')).status, (await runner.read('prepare-cache')).output).toBe('passed')
+    expect((await runner.read('prepare-cache')).output.trim()).toBe(path.join(first, '.cache/devflow-corepack'))
+    const read = { ...plan, args: ['-e', 'console.log(require("node:fs").readFileSync(require("node:path").join(process.env.COREPACK_HOME,"prepared"),"utf8"))'] }
+    await runner.start('reuse-cache', read, first)
+    expect((await runner.wait('reuse-cache')).status).toBe('passed')
+    expect((await runner.read('reuse-cache')).output.trim()).toBe('pinned manager')
+    await runner.start('other-workspace', read, second)
+    expect((await runner.wait('other-workspace')).status).toBe('failed')
+    const legacy = { executable: process.execPath, args: ['-e', 'console.log(process.env.COREPACK_HOME ?? "not supplied")'], timeoutMs: 5000, profile: { kind: 'trusted_local' as const } }
+    await runner.start('legacy-command', legacy, first)
+    expect((await runner.read('legacy-command', 0, 1000, { waitMs: 5000 })).output.trim()).toBe('not supplied')
+  } finally { await runner.cancelAll() }
+})
+
+it('rejects a Corepack cache redirected outside the workspace before starting the command', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'df-corepack-link-')); roots.push(root)
+  const workspace = path.join(root, 'workspace'), outside = path.join(root, 'outside')
+  await mkdir(workspace); await mkdir(outside)
+  await symlink(outside, path.join(workspace, '.cache'), process.platform === 'win32' ? 'junction' : 'dir')
+  const runner = new CodingCommandRunner(path.join(root, 'receipts'))
+  const plan = { executable: process.execPath, args: ['-e', 'throw Error("Command must not start")'], timeoutMs: 5000, profile: { kind: 'trusted_local' as const }, corepackHome: '.cache/devflow-corepack' as const }
+  try { await expect(runner.start('redirected-cache', plan, workspace)).rejects.toThrow() }
+  finally { await runner.cancelAll() }
+})
 
 it('keeps command temporary files private and outside deep workspaces, so real local sockets work', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'df-command-env-')); roots.push(root)

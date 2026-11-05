@@ -43,23 +43,33 @@ export function validIndependentObservation(result) {
 }
 /** The host copies the report out only after the sandboxed process has stopped. */
 export async function sandboxOracleCommand(root, executable, args, cwd, log, timeoutMs = 300000, seedWorkspaceRoot) {
-  if (seedWorkspaceRoot && executable === corepack && JSON.stringify(args) === JSON.stringify(['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts'])) {
+  let corepackHome
+  if (seedWorkspaceRoot) {
     const { CodingCandidateWorkspace } = await import('../apps/desktop/electron/coding-candidate-workspace.ts')
     const { codingDependencyPlan } = await import('../apps/desktop/electron/coding-dependency-preparation.ts')
-    const { restoreCodingDependencySeed } = await import('../apps/desktop/electron/coding-dependency-seed.ts')
+    const { codingDependencySeedPublished, restoreCodingDependencySeed } = await import('../apps/desktop/electron/coding-dependency-seed.ts')
     const workspace = await CodingCandidateWorkspace.open(seedWorkspaceRoot)
-    const plan = await codingDependencyPlan(cwd, { kind: 'os_sandbox', network: 'enabled' }, workspace.identity.base.excludedPaths, { isolatedStore: true })
-    const restored = await restoreCodingDependencySeed({ workspace, directory: cwd, plan })
-    if (restored.status === 'restored') args = [...args, '--store-dir', plan.storeDirectory, '--verify-store-integrity']
-    await mkdir(root, { recursive: true })
-    await json(path.join(root, 'dependency-seed.json'), { baselineDigest: workspace.identity.base.digest, dependencyPlanDigest: plan.digest, ...restored }, true)
+    let plan = await codingDependencyPlan(cwd, { kind: 'os_sandbox', network: 'enabled' }, workspace.identity.base.excludedPaths, { isolatedStore: true, corepackCache: true })
+    // Old observations retain their original v1 seed. New runs also restore the
+    // pinned package manager; no credentials or candidate-written cache is used.
+    if (!await codingDependencySeedPublished({ workspace, plan })) {
+      const legacy = await codingDependencyPlan(cwd, { kind: 'os_sandbox', network: 'enabled' }, workspace.identity.base.excludedPaths, { isolatedStore: true })
+      if (await codingDependencySeedPublished({ workspace, plan: legacy })) plan = legacy
+    }
+    corepackHome = plan.plan?.corepackHome
+    if (executable === corepack && JSON.stringify(args) === JSON.stringify(['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts'])) {
+      const restored = await restoreCodingDependencySeed({ workspace, directory: cwd, plan })
+      if (restored.status === 'restored') args = [...args, '--store-dir', plan.storeDirectory, '--verify-store-integrity']
+      await mkdir(root, { recursive: true })
+      await json(path.join(root, 'dependency-seed.json'), { baselineDigest: workspace.identity.base.digest, dependencyPlanDigest: plan.digest, ...restored }, true)
+    }
   }
   const { CodingCommandRunner } = await import('../apps/desktop/electron/coding-command-runner.ts')
   const oracle = new CodingCommandRunner(root), outputIndex = args.indexOf('--outputFile'), rewritten = [...args]
   const report = path.join(cwd, '.devflow-reference-result.json'), id = path.basename(log)
   if (outputIndex >= 0) rewritten[outputIndex + 1] = report
   try {
-    await oracle.start(id, { executable, args: rewritten, timeoutMs, profile: { kind: 'os_sandbox', network: 'enabled' } }, cwd)
+    await oracle.start(id, { executable, args: rewritten, timeoutMs, profile: { kind: 'os_sandbox', network: 'enabled' }, ...(corepackHome ? { corepackHome } : {}) }, cwd)
     const receipt = await oracle.wait(id)
     let offset = 0, text = ''
     do {
@@ -76,7 +86,17 @@ async function assertCandidate(plan) {
   if (git(['status', '--porcelain']) || git(['rev-parse', 'HEAD']) !== plan.candidateCommit) throw new Error('Candidate differs from the frozen clean commit')
   for (const [name, hash] of Object.entries(plan.runnerDigests)) if (digest(await readFile(path.join(repository, 'scripts', name))) !== hash) throw new Error('Frozen runner changed')
 }
-export async function freezePhase2(output, source, maxCostUsd = 3) {
+export function phase2TestInputPolicy(value) {
+  if (value !== undefined && value !== 'approve_exact_content') throw new Error('Invalid explicit test-input policy')
+  return value
+}
+export function phase2FeedbackMode(value) {
+  if (value !== undefined && value !== 'fixed_feedback') throw new Error('Invalid explicit fixed-feedback mode')
+  return value
+}
+export async function freezePhase2(output, source, maxCostUsd = 3, testInputPolicy, feedbackMode) {
+  phase2TestInputPolicy(testInputPolicy)
+  phase2FeedbackMode(feedbackMode)
   if (git(['status', '--porcelain'])) throw new Error('Commit implementation and evaluation runner before freezing')
   const relative = path.relative(repository, output)
   if (!relative || !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) throw new Error('Use an output directory outside the source repository so sandboxed tooling cannot discover its parent workspace')
@@ -97,6 +117,25 @@ export async function freezePhase2(output, source, maxCostUsd = 3) {
     operatorPolicy: 'System sandbox only; explicitly enable IP network for frozen dependency preparation. Initial saved test/install plans are preapproved. Only the frozen direct-argv allow rules can run additional commands automatically. Reject other root/child permission cards; record each. Do not invent answers. Approve exact revisions only to permit product verification. Unknown requests retain full reservation and are not replayed. Stop on provider refusal or runner failure. No implicit retries or extensions.',
     evaluation: 'Keep original prompts, baselines, public plans and reference acceptance tests unchanged. Independent author sees only B and approved objective; reference tests remain outside all model/agent workspaces. External oracle restores protected baseline config/tests before overlaying exact reference tests, runs in its own OS sandbox, and never feeds failures to the implementer.',
     tasks }
+  if (testInputPolicy) {
+    plan.testInputPolicy = testInputPolicy
+    plan.operatorPolicy = plan.operatorPolicy.replace('Reject other root/child permission cards; record each.', 'Approve current exact-content test-input cards under the explicit isolated evaluation authorization. Reject other root/child permission cards; record each.')
+  }
+  if (feedbackMode) {
+    const { freezeApprovedCodingTests } = await import('../apps/desktop/electron/native-coding-approved-verification.ts')
+    const qualificationBytes = await readFile(path.join(repository, 'docs/evaluation/native-coding-v3-qualification-20261011.json'))
+    const qualification = JSON.parse(qualificationBytes.toString())
+    plan.feedbackMode = feedbackMode
+    plan.feedbackQualificationDigest = digest(qualificationBytes)
+    plan.approvedTests = Object.fromEntries(tasks.map(task => {
+      const evidence = qualification.results.find(row => row.taskId === task.id && row.baseSha === task.baseSha && row.referenceSha === task.referenceSha && row.qualified)
+      const reference = evidence?.observations.reference
+      if (!reference || reference.code !== 0 || reference.passed !== reference.total || reference.failed || reference.unhandledErrors) throw new Error('Missing qualified original fixed test count')
+      return [task.id, freezeApprovedCodingTests({ sourceRef: `fixed-acceptance:${task.id}@${task.referenceSha}`, expectedTests: reference.total,
+        files: task.acceptanceTests.map(file => ({ path: file, content: execFileSync('git', ['show', `${task.referenceSha}:${file}`], { cwd: repository, maxBuffer: 8 * 1024 * 1024 }).toString() })) })]
+    }))
+    plan.evaluation = 'User explicitly authorized fixed acceptance failure feedback on 2026-11-05. Keep the original ten prompts, baselines, public plans, exact reference test files, provider and limits. The host runs these frozen tests on an isolated copy of each proposed revision and returns concrete failures to V3 for repair. Final external D/C scoring remains independent and unchanged. Report this mode separately from blind evaluation.'
+  }
   await mkdir(path.dirname(output), { recursive: true }); await mkdir(output)
   await json(path.join(output, 'experiment.json'), plan, true)
   await json(path.join(output, 'historical-comparison.json'), observations.filter(row => row.engine === 'native-v3'), true)
@@ -105,7 +144,18 @@ export async function freezePhase2(output, source, maxCostUsd = 3) {
 async function runPhase2(output, keyFile) {
   if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('Do not mix a phase2 USD run with another guarded budget round')
   const plan = await readJson(path.join(output, 'experiment.json'))
+  const testInputPolicy = phase2TestInputPolicy(plan.testInputPolicy)
+  const feedbackMode = phase2FeedbackMode(plan.feedbackMode)
   await assertCandidate(plan)
+  if (feedbackMode) {
+    const { validateApprovedCodingTests } = await import('../apps/desktop/electron/native-coding-approved-verification.ts')
+    if (Object.keys(plan.approvedTests ?? {}).length !== plan.tasks.length) throw new Error('Incomplete fixed acceptance bundle')
+    for (const task of plan.tasks) {
+      const bundle = validateApprovedCodingTests(plan.approvedTests[task.id])
+      if (JSON.stringify(bundle.files.map(file => file.path).sort()) !== JSON.stringify([...task.acceptanceTests].sort())) throw new Error('Fixed acceptance paths changed')
+      for (const file of bundle.files) if (file.content !== execFileSync('git', ['show', `${task.referenceSha}:${file.path}`], { cwd: repository, maxBuffer: 8 * 1024 * 1024 }).toString()) throw new Error('Original fixed acceptance changed')
+    }
+  } else if (plan.approvedTests) throw new Error('Fixed tests require explicit feedback mode')
   if (plan.concurrency !== 1 || plan.totalBudget.maxCostUsd > 3 || plan.tasks.length !== 10) throw new Error('Invalid frozen phase2 envelope')
   const lock = path.join(output, '.run-lock'); await mkdir(lock)
   await json(path.join(lock, 'owner.json'), { pid: process.pid, at: new Date().toISOString() }, true)
@@ -137,7 +187,7 @@ async function runPhase2(output, keyFile) {
       if (cap === null) { await json(path.join(output, 'dispatch-stop.json'), { reason: 'budget', nextTask: task.id, accountedUsd: await accounted() }, true); break }
       const directory = path.join(output, task.id), executionOutput = path.join(directory, 'execution')
       const baseline = await prepare(task, directory)
-      const input = { ...plan.limits, id: task.id, engine: 'native-v3', repository: baseline, output: executionOutput, prompt: task.prompt, testCommand: task.testCommand, maxCostUsd: cap, execution: plan.execution, opencodeBinary: '' }
+      const input = { ...plan.limits, id: task.id, engine: 'native-v3', repository: baseline, output: executionOutput, prompt: task.prompt, testCommand: task.testCommand, maxCostUsd: cap, execution: plan.execution, opencodeBinary: '', ...(testInputPolicy ? { testInputPolicy } : {}), ...(feedbackMode ? { approvedTests: plan.approvedTests[task.id] } : {}) }
       const inputFile = path.join(directory, 'input.json'); await json(inputFile, input, true)
       console.log(JSON.stringify({ event: 'start', task: task.id, maxCostUsd: cap }))
       const execution = await runProcess(corepack, ['pnpm', 'exec', 'tsx', 'scripts/native-coding-trial-live.mts', inputFile, keyFile], repository, path.join(directory, 'execution.log'), plan.limits.maxActiveMilliseconds + 600000)
@@ -166,7 +216,7 @@ async function runPhase2(output, keyFile) {
         await json(path.join(candidateDirectory, 'result.json'), candidateIndependent, true)
         await removeDisposableDependencies(candidateDirectory)
       }
-      const row = { taskId: task.id, engine: 'native-v3', claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, qualityObservationValid,
+      const row = { taskId: task.id, engine: 'native-v3', ...(feedbackMode ? { feedbackMode } : {}), claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, qualityObservationValid,
         candidateIndependent, candidateObservationValid, costUsd: trial.costUsd, durationMs: trial.durationMs, metrics: trial.metrics, status: trial.status, failure: trial.failure ?? null, execution, independent }
       await json(path.join(directory, 'row.json'), row, true); rows.push(row)
       await json(path.join(output, 'runs.json'), rows); await json(path.join(output, 'score.json'), phase2Score(plan.tasks, rows))

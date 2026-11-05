@@ -190,6 +190,23 @@ it('corrects a received invalid author response in a bounded private draft loop 
   expect(JSON.stringify(session.transcript)).not.toContain('invalid-draft')
 })
 
+it.each([
+  { reason: 'invalid_tool_batch', cause: new Error('Invalid native call identity'), expected: '工具必须是已声明的工具' },
+  { reason: 'output_length', cause: undefined, expected: 'token output limit before completing a tool call' },
+])('preserves the fixed $reason category in private author correction without exposing it to the coder', async ({ reason, cause, expected }) => {
+  const author = vi.fn(async () => {
+    if (author.mock.calls.length === 1) throw new AgentProviderRequestError({ code: 'invalid_model_output', httpStatus: 200, deliveryState: 'response_received', billingState: 'confirmed', retryable: false, sanitizedCause: reason, cause })
+    return planReply()
+  })
+  const fixture = await codingHarnessFixture(async () => codingToolReply('review', 'propose_changeset', { summary: 'Review' }), undefined, {}, author); fixtures.push(fixture)
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  const session = (await fixture.store.getNativeCodingSession('native-coding'))!
+  expect(author).toHaveBeenCalledTimes(2)
+  expect(session.independentVerification?.drafts?.[0]?.feedback).toContain(expected)
+  expect(session.independentVerification?.plans).toHaveLength(1)
+  expect(JSON.stringify(session.transcript)).not.toContain(expected)
+})
+
 it('prevents the implementer from reading private acceptance command output after failure', async () => {
   let turn = 0
   const fixture = await codingHarnessFixture(async request => {

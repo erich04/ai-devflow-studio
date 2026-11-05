@@ -127,12 +127,17 @@ it('runs the real read tools together with their authorizations and receipts in 
   const fixture = await codingHarnessFixture(async () => ++replies === 1 ? batch(calls.map(([id, name, args]) => [id, name, args])) : batch([['freeze', 'propose_changeset', { summary: 'Surveyed; no change needed' }]]))
   const inspect = CodingCandidateWorkspace.prototype.inspectCached
   let inspecting = 0, peak = 0
+  let release!: () => void
+  const readersReady = new Promise<void>(resolve => { release = resolve })
   const spy = vi.spyOn(CodingCandidateWorkspace.prototype, 'inspectCached').mockImplementation(async function (this: CodingCandidateWorkspace, ...args: Parameters<typeof inspect>) {
     inspecting++; peak = Math.max(peak, inspecting)
-    try { await new Promise(resolve => setTimeout(resolve, 100)); return await inspect.apply(this, args) } finally { inspecting-- }
+    try { await readersReady; return await inspect.apply(this, args) } finally { inspecting-- }
   })
   try {
-    await fixture.authorize(); await fixture.executor.settled('coding')
+    await fixture.authorize()
+    await expect.poll(() => inspecting, { timeout: 5000 }).toBe(4)
+    release()
+    await fixture.executor.settled('coding')
     expect((await fixture.get()).snapshot.status).toBe('review')
     expect(peak).toBe(4)
     const saved = (await fixture.store.getNativeCodingSession('native-coding'))!
@@ -146,7 +151,7 @@ it('runs the real read tools together with their authorizations and receipts in 
     expect(results.directory.entries).toEqual(['package.json', 'value.ts'])
     expect(results.typescript.files.map((file: { path: string }) => file.path)).toEqual(['value.ts'])
     expect(results.status).toMatchObject({ changed: [], removed: [] })
-  } finally { spy.mockRestore(); await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
+  } finally { release(); spy.mockRestore(); await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
 })
 
 it.each(['steer', 'cancel'] as const)('does not dispatch queued reads after human %s', async action => {

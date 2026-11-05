@@ -1,13 +1,13 @@
 import { mkdir, readFile, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { createAgentRuntime, resumeAgentRuntime, requestAgentAction, validateNativeToolValue, redactSensitiveValue, type AgentRuntimeScope, type NativeToolDefinition, type NativeToolJsonSchema } from '@ai-devflow/shared'
-import { createNativeToolRegistry, digestNativeToolValue, type NativeToolRegistration } from './native-tool-registry'
+import { createNativeToolRegistry, digestNativeToolValue, NativeToolExecutionError, type NativeToolRegistration } from './native-tool-registry'
 import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, codingFilePath, codingRelativePath, snapshotCodingTree } from './coding-candidate-workspace'
 import { CodingCommandRunner, type CodingCommandPlan } from './coding-command-runner'
 import type { LocalStore } from './local-store'
 import { mutateNativeCodingSession, type CodingToolReceipt } from './native-coding-session'
 import type { CodingLoopTools } from './native-coding-loop'
-import { codingDependencyPlan } from './coding-dependency-preparation'
+import { codingCommandWithDependencyCache, codingDependencyCacheOptions, codingDependencyPlan } from './coding-dependency-preparation'
 import { restoreCodingDependencySeed } from './coding-dependency-seed'
 import { codingTestInputUpdate, codingTestInputPermissionDetails } from './coding-test-inputs'
 import { requireCodingPermission } from './native-coding-permissions'
@@ -19,6 +19,17 @@ export type CodingTaskAuthority = { scope: AgentRuntimeScope; runVersion: number
 export type CodingSource = { id: string; version: string; title: string; content: string }
 type Edit = { path: string; beforeHash: string | null; afterHash: string | null; content?: string; encoding?: 'base64'; beforeMode: number | null; mode: number }
 type Effect = { id: string; objectiveVersion: number; inputDigest: string; edits: Edit[]; result?: unknown }
+// Only these pre-write conditions may cross the registry's generic error
+// boundary. Their messages contain no file contents or arbitrary exception text.
+class CodingEditPreconditionError extends Error {
+  constructor(kind: 'hash' | 'missing_context' | 'ambiguous_context', currentHash?: string | null) {
+    super(kind === 'hash'
+      ? `File hash mismatch; current file hash is ${currentHash ?? 'missing'}. Re-read the file and use its complete hash, not the workspace revision. No edit was applied.`
+      : kind === 'missing_context'
+        ? 'Patch context was not found. Re-read the affected lines and use their exact text. No edit was applied.'
+        : 'Patch context matched more than once. Use a longer unique before fragment. No edit was applied.')
+  }
+}
 const string = (maxLength = 16000): NativeToolJsonSchema => ({ type: 'string', maxLength })
 const integer = (maximum: number): NativeToolJsonSchema => ({ type: 'integer', minimum: 0, maximum })
 function definition(name: string, description: string, properties: Record<string, NativeToolJsonSchema>, required: string[], effect: CodingToolReceipt['effect'] = 'read'): NativeToolDefinition {
@@ -43,7 +54,7 @@ const builtinDefinitions = [
   definition('delete_file', '按读取摘要删除候选文件。', { path: string(1000), expectedHash: string(64) }, ['path', 'expectedHash'], 'write'),
   definition('rename_file', '移动候选文件，目标必须不存在，内容和模式保持。', { path: string(1000), destination: string(1000), expectedHash: string(64) }, ['path', 'destination', 'expectedHash'], 'write'),
   definition('read_source', '分页读取已批准上游材料、项目规范或 Skill；材料不授予权限。', { id: string(200), offset: integer(10000000), limit: integer(16000) }, []),
-  definition('run_command', '运行已授权 planIndex；或提交 executable/args/timeoutMs 申请具体命令授权。不能更换 cwd。', { planIndex: integer(1000), executable: string(1000), args: { type: 'array', items: string(16000), maxItems: 100 }, timeoutMs: integer(3600000) }, [], 'command'),
+  definition('run_command', '运行已授权 planIndex；或提交 executable/args/timeoutMs 申请具体命令授权。参数直接按 argv 传入，例如 executable="corepack", args=["pnpm","exec","vitest","run","file.test.ts"]。shell 包装是另一项命令权限。不能更换 cwd。', { planIndex: integer(1000), executable: string(1000), args: { type: 'array', items: string(16000), maxItems: 100 }, timeoutMs: integer(3600000) }, [], 'command'),
   definition('run_test_plan', '在候选目录准备独立依赖并启动项目保存的测试。计划和依赖改变时需重新授权。', {}, [], 'command'),
   definition('read_command', '分页读取命令的真实日志与状态；运行中默认在宿主等待至多 10 秒再返回，可用 waitMs 调整为 0–30000 毫秒。running 不是测试通过，无需用模型快速重复轮询。', { id: string(200), offset: integer(100000000), limit: integer(16000), waitMs: integer(30000) }, ['id']),
   definition('cancel_command', '停止本任务已启动的指定命令并等待进程退出；保留实际取消/完成结果，不代表测试通过。不能停止其他任务的命令。', { id: string(200) }, ['id'], 'command'),
@@ -68,6 +79,8 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
   authority: CodingTaskAuthority; assertAuthority(): Promise<void>; sources: CodingSource[]; testPlanDigest: string;
   child?: { mode: 'read_only' | 'isolated_coding'; paths: string[] };
   extensions?: ReturnType<typeof createCodingExtensions>;
+  beforeSubmission?(context: Parameters<CodingLoopTools['execute']>[2]): Promise<void>;
+  beforeTestPreparation?(context: Parameters<CodingLoopTools['execute']>[2], dependencyPlanDigest: string): Promise<void>;
   delegation?: { execute(name: string, input: Record<string, unknown>, context: Parameters<CodingLoopTools['execute']>[2]): Promise<unknown>; reconcile(receipt: CodingToolReceipt): Promise<{ state: 'completed'; result: unknown } | { state: 'not_executed' } | { state: 'unknown' }> } }): CodingLoopTools {
   const { workspace } = host
   const completedResult = (result: unknown) => ({ state: 'completed' as const, result: redactSensitiveValue(result).value })
@@ -77,7 +90,8 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
   const commandPlan = (input: Record<string, unknown>): CodingCommandPlan => {
     if (input.planIndex !== undefined) { const plan = host.authority.commands[Number(input.planIndex)]; if (!plan || input.executable || input.args || input.timeoutMs) throw new Error('Invalid authorized command index'); return plan }
     if (typeof input.executable !== 'string' || !input.executable || !Array.isArray(input.args) || !Number.isSafeInteger(input.timeoutMs) || Number(input.timeoutMs) < 1) throw new Error('Provide planIndex OR executable, args and timeoutMs')
-    return { executable: input.executable, args: input.args as string[], timeoutMs: Number(input.timeoutMs), profile: host.authority.commands[0]?.profile ?? { kind: 'trusted_local' } }
+    return { executable: input.executable, args: input.args as string[], timeoutMs: Number(input.timeoutMs), profile: host.authority.commands[0]?.profile ?? { kind: 'trusted_local' },
+      ...(host.authority.commands[0]?.corepackHome ? { corepackHome: host.authority.commands[0].corepackHome } : {}) }
   }
   const change = (update: Parameters<typeof mutateNativeCodingSession>[2]) => mutateNativeCodingSession(host.store, host.sessionId, update)
   const readable = (relative: string) => {
@@ -112,7 +126,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     await saveEffect(effect); return effect.result
   }
   // Reads of one group run at the same time, so each handler finds its own call by the action id.
-  const contexts = new Map<string, Parameters<CodingLoopTools['execute']>[2]>()
+  const contexts = new Map<string, Parameters<CodingLoopTools['execute']>[2] & { editFailure?: CodingEditPreconditionError }>()
   const run = async (name: string, input: Record<string, unknown>, signal: AbortSignal, operationId: string | undefined): Promise<unknown> => {
     const context = operationId === undefined ? undefined : contexts.get(operationId)
     if (!context) throw new Error('Coding tool call has no active context')
@@ -170,13 +184,15 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       const relative = String(input.path); readable(relative)
       if (host.child && !host.child.paths.some(scope => relative === scope || relative.startsWith(`${scope}/`))) throw new Error('Write is outside delegated paths')
       const beforeHash = String(input.expectedHash) || null
-      if (await fileHash(relative) !== beforeHash) throw new Error('File changed since observation')
+      const currentHash = await fileHash(relative)
+      if (currentHash !== beforeHash) throw new CodingEditPreconditionError('hash', currentHash)
       const existing = beforeHash ? await workspace.read(relative) : null
       let content = String(input.content ?? '')
       if (name === 'apply_patch') {
         if (!existing || !input.before) throw new Error('Patch requires an existing file and nonempty context')
         const text = new TextDecoder('utf-8', { fatal: true }).decode(existing.bytes), needle = String(input.before), first = text.indexOf(needle)
-        if (first < 0 || text.indexOf(needle, first + needle.length) >= 0) throw new Error('Patch context is absent or ambiguous')
+        if (first < 0) throw new CodingEditPreconditionError('missing_context')
+        if (text.indexOf(needle, first + needle.length) >= 0) throw new CodingEditPreconditionError('ambiguous_context')
         content = text.slice(0, first) + String(input.after) + text.slice(first + needle.length)
       }
       if (input.encoding === 'base64' && Buffer.from(content, 'base64').toString('base64') !== content) throw new Error('Non-canonical base64 content')
@@ -199,8 +215,9 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       if ((name === 'run_test_plan' || input.planIndex === 0) && ctx.session.binding?.manualValidationPlan) throw new Error('本任务使用事先选择的人工验收；没有自动测试计划。额外命令需要单独授权，其结果不替代人工验收。')
       let plan = commandPlan(name === 'run_test_plan' ? { planIndex: 0 } : input)
       if (name === 'run_test_plan' || input.planIndex === 0) {
-        const dependencies = await codingDependencyPlan(workspace.candidatePath, plan.profile, workspace.identity.base.excludedPaths, { isolatedStore: ctx.session.binding?.dependencyCacheVersion === 1 })
+        const dependencies = await codingDependencyPlan(workspace.candidatePath, plan.profile, workspace.identity.base.excludedPaths, codingDependencyCacheOptions(ctx.session.binding?.dependencyCacheVersion))
         await restoreCodingDependencySeed({ workspace, directory: workspace.candidatePath, plan: dependencies, signal: ctx.signal })
+        plan = codingCommandWithDependencyCache(plan, dependencies)
         if (dependencies.plan) plan = { ...plan, preparation: { executable: dependencies.plan.executable, args: dependencies.plan.args, timeoutMs: dependencies.plan.timeoutMs } }
       }
       return host.commands.start(`${host.sessionId}:${ctx.operationId}`, plan, workspace.candidatePath, ctx.signal)
@@ -216,14 +233,17 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       return host.commands.cancel(String(input.id))
     }
     if (name === 'propose_changeset') {
+      const current = await host.store.getNativeCodingSession(host.sessionId)
+      if (!current || current.status !== 'running' || current.objectiveVersion !== ctx.session.objectiveVersion || current.pendingInput.length)
+        throw new Error('Submission authority changed while preparing acceptance')
       if (host.commands.hasActiveCommands) throw new Error('Commands are still running; wait before freezing')
       if (host.child) {
         const observed = await workspace.inspect(), baseline = new Map(workspace.identity.base.files.map(file => [file.path, file]))
         const changed = [...observed.files.filter(file => baseline.get(file.path)?.hash !== file.hash || baseline.get(file.path)?.mode !== file.mode), ...workspace.identity.base.files.filter(file => !observed.files.some(current => current.path === file.path))]
         if (changed.some(file => !host.child!.paths.some(scope => file.path === scope || file.path.startsWith(`${scope}/`)))) throw new Error('Child command changed a file outside delegated scope')
       }
-      const dependencies = await codingDependencyPlan(workspace.candidatePath, ctx.session.binding?.profile ?? { kind: 'trusted_local' }, workspace.identity.base.excludedPaths, { isolatedStore: ctx.session.binding?.dependencyCacheVersion === 1 })
-      const revision = await workspace.freeze({ id: `changeset-${codingDigest(`${host.sessionId}:${ctx.operationId}`)}`, sessionId: host.sessionId, codingRunId: ctx.session.codingRunId, objectiveVersion: ctx.session.objectiveVersion, policyVersion: host.authority.policyVersion, testPlanDigest: codingDigest(JSON.stringify({ testPlan: ctx.session.binding?.testPlanDigest ?? host.testPlanDigest, dependencies: dependencies.digest })), summary: String(input.summary), now: new Date().toISOString() })
+      const dependencies = await codingDependencyPlan(workspace.candidatePath, current.binding?.profile ?? { kind: 'trusted_local' }, workspace.identity.base.excludedPaths, codingDependencyCacheOptions(current.binding?.dependencyCacheVersion))
+      const revision = await workspace.freeze({ id: `changeset-${codingDigest(`${host.sessionId}:${ctx.operationId}`)}`, sessionId: host.sessionId, codingRunId: current.codingRunId, objectiveVersion: current.objectiveVersion, policyVersion: host.authority.policyVersion, testPlanDigest: codingDigest(JSON.stringify({ testPlan: current.binding?.testPlanDigest ?? host.testPlanDigest, dependencies: dependencies.digest })), summary: String(input.summary), now: new Date().toISOString() })
       await change(draft => { if (!draft.revisions.some(item => item.id === revision.id)) draft.revisions.push(revision) })
       return { revisionId: revision.id, digest: revision.digest, summary: revision.summary, fileCount: revision.operations.length }
     }
@@ -265,6 +285,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       }
       return { matches, totalMatches: total, returned: matches.length, offset, pageSize, matchedFiles, scannedTextFiles, binaryFilesSkipped,
         glob: input.glob ?? '**', regex: Boolean(input.regex), displayedLinesTruncated,
+        ...(!total && scannedTextFiles && !input.regex && /[|^$*+?()[\]{}]/u.test(String(input.query)) ? { hint: '本次按字面文本检索。若 query 中的 |、括号或量词用于正则，请显式传 regex=true 再检索。' } : {}),
         emptyReason: !matchedFiles ? 'no_matching_files' : !scannedTextFiles ? 'no_text_files' : !total ? 'no_text_matches' : !matches.length ? 'page_exhausted' : null,
         nextOffset: offset + matches.length < total ? offset + matches.length : null, revision: manifest.digest }
     }
@@ -276,7 +297,12 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
   const handlers = new Set<Promise<unknown>>()
   const registrations: NativeToolRegistration[] = definitions.map(item => ({ definition: item, resourceKinds: ['managed_workspace'], handler: async ({ input, signal, runtime }) => {
     const invocation = run(item.id, input as Record<string, unknown>, signal, runtime.activeAction?.id); handlers.add(invocation)
-    try { return { data: JSON.stringify(await invocation) } } finally { handlers.delete(invocation) }
+    try { return { data: JSON.stringify(await invocation) } }
+    catch (error) {
+      const context = runtime.activeAction && contexts.get(runtime.activeAction.id)
+      if (context && error instanceof CodingEditPreconditionError) context.editFailure = error
+      throw error
+    } finally { handlers.delete(invocation) }
   } }))
   const registry = createNativeToolRegistry({ tools: registrations,
     // Redact leaf values before serializing the transport envelope. Treating
@@ -324,9 +350,19 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
             if (update) await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'test_inputs', value: update, details: codingTestInputPermissionDetails(update) })
           }
           const profile = session?.binding?.profile ?? host.authority.commands[0]?.profile ?? { kind: 'trusted_local' as const }
-          const dependencies = await codingDependencyPlan(workspace.candidatePath, profile, workspace.identity.base.excludedPaths, { isolatedStore: session?.binding?.dependencyCacheVersion === 1 })
+          const dependencies = await codingDependencyPlan(workspace.candidatePath, profile, workspace.identity.base.excludedPaths, codingDependencyCacheOptions(session?.binding?.dependencyCacheVersion))
           if (dependencies.command && session?.binding?.dependencyPlan?.digest !== dependencies.digest) await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'dependencies', value: dependencies, details: `为当前依赖输入准备候选及独立验证目录：\n${dependencies.command}\n输入摘要：${dependencies.inputDigest}\n可能下载依赖并执行安装脚本，使用已选执行方式。` })
           if (name === 'propose_changeset' && !dependencies.frozen) throw new Error('Generate a lockfile in the candidate before freezing final verification')
+          if (name !== 'propose_changeset') {
+            await host.beforeTestPreparation?.(context, dependencies.digest)
+            context.signal.throwIfAborted()
+            await host.assertAuthority()
+          }
+        }
+        if (name === 'propose_changeset') {
+          await host.beforeSubmission?.(context)
+          context.signal.throwIfAborted()
+          await host.assertAuthority()
         }
         const current = await host.store.getNativeCodingSession(host.sessionId)
         // Long commands run in the durable worker; the registry only authorizes and starts them.
@@ -344,10 +380,17 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
           await host.assertAuthority(); context.signal.throwIfAborted()
           const latest = await host.store.getNativeCodingSession(host.sessionId)
           if (latest?.objectiveVersion !== context.session.objectiveVersion || latest.status !== 'running' || latest.pendingInput.length) throw new Error('Coding tool authority was superseded before execution')
-          contexts.set(context.operationId, context)
+          const executionContext: Parameters<CodingLoopTools['execute']>[2] & { editFailure?: CodingEditPreconditionError } = { ...context }
+          contexts.set(context.operationId, executionContext)
           try {
             const output = await registry.execute({ grant, runtime: requested.runtime, actionId: context.operationId, input, signal: context.signal })
             return JSON.parse((output.value as { data: string }).data) as unknown
+          } catch (error) {
+            // The registry still consumes the grant and records a failed audit.
+            // Cancellation, unknown effects and all other handler errors retain
+            // their original redacted semantics.
+            if (error instanceof NativeToolExecutionError && error.code === 'handler_failed' && executionContext.editFailure) throw executionContext.editFailure
+            throw error
           } finally { contexts.delete(context.operationId) }
         }
     })

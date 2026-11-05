@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createLocalStore } from './local-store'
-import { createNativeCodingSession, updateNativeCodingSession } from './native-coding-session'
+import { createNativeCodingSession, updateNativeCodingSession, mutateNativeCodingSession } from './native-coding-session'
 import { NativeCodingLoop } from './native-coding-loop'
 import { runtimeStateKey, runtimeStateMarker } from './native-coding-context'
 import { createFakeAgentProvider, createOpenAiCompatibleAgentProvider, type NativeToolCall } from '@ai-devflow/shared'
@@ -180,6 +180,48 @@ it('enters review when a revision durably froze but its result delivery failed',
     const saved = (await store.getNativeCodingSession('session'))!
     expect(saved.toolReceipts).toMatchObject([{ status: 'completed', result }])
     expect(saved.transcript.filter(message => message.role === 'tool')).toHaveLength(1)
+  } finally { await store.close() }
+})
+
+it.each(['interrupted', 'saved_error'] as const)('recovers a %s submission failure without entering review from its error receipt', async mode => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-submission-interruption-')); directories.push(directory)
+  const store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') }), now = new Date().toISOString()
+  try {
+    await store.upsertProject({ id: 'project', name: 'test', path: directory, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
+    const session = createNativeCodingSession({ id: 'session', localProjectId: 'project', codingRunId: 'run', workflowRunId: 'workflow', nodeId: 'build', objective: 'Submit the approved change', providerId: 'fake', model: 'test', now })
+    const reply = (id: string) => {
+      const toolCalls: NativeToolCall[] = [{ id, type: 'function', function: { name: 'propose_changeset', arguments: '{}' } }]
+      return { kind: 'tools' as const, toolCalls, assistantMessage: { role: 'assistant' as const, content: null, tool_calls: toolCalls } }
+    }
+    if (mode === 'saved_error') {
+      session.status = 'paused'
+      session.transcript.push(reply('interrupted-submit').assistantMessage)
+      session.toolReceipts.push({ id: 'interrupted-submit', name: 'propose_changeset', input: {}, inputDigest: 'a'.repeat(64), objectiveVersion: 1, effect: 'write', status: 'completed', result: { error: 'Private acceptance source is no longer current' } })
+    }
+    await store.saveNativeCodingSession(session, 0)
+    const provider = vi.fn(async () => reply(mode === 'saved_error' ? 'new-submit' : 'interrupted-submit'))
+    const execute = vi.fn(async () => {
+      if (mode === 'interrupted' && execute.mock.calls.length === 1) {
+        // The pause checkpoint is visible before its caller aborts the loop.
+        await mutateNativeCodingSession(store, session.id, draft => { draft.status = 'paused'; draft.pauseReason = 'user' })
+        throw new Error('Private acceptance source is no longer current')
+      }
+      return { revisionId: 'real-submission', digest: 'b'.repeat(64) }
+    })
+    const loop = new NativeCodingLoop({ store, provider: { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: input => JSON.stringify(input), completeNativeConversation: provider },
+      tools: { definitions: [{ type: 'function', function: { name: 'propose_changeset', description: '', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } } }],
+        effects: { propose_changeset: 'write' }, execute, reconcile: async () => ({ state: 'not_executed' }) } })
+    if (mode === 'interrupted') {
+      const interrupted = await loop.runBatch(session.id)
+      expect(interrupted.status).toBe('paused')
+      expect(interrupted.toolReceipts[0], JSON.stringify(interrupted)).toMatchObject({ status: 'started' })
+    }
+    await loop.resume(session.id)
+    const resumed = await loop.runBatch(session.id)
+    expect(resumed.status, JSON.stringify(resumed)).toBe('review')
+    expect(provider).toHaveBeenCalledTimes(1)
+    expect(execute).toHaveBeenCalledTimes(mode === 'interrupted' ? 2 : 1)
+    expect((await store.getNativeCodingSession(session.id))!.toolReceipts.at(-1)?.result).toMatchObject({ revisionId: 'real-submission' })
   } finally { await store.close() }
 })
 
