@@ -33,10 +33,16 @@ it('uses the frozen trial limits in the real harness before the first request, i
     const session = JSON.parse(await readFile(path.join(output, 'session.json'), 'utf8'))
     expect(session.limits).toMatchObject({ maxSteps: 2, maxActiveMilliseconds: 15000 })
     expect(requests).toHaveLength(2)
-    expect(session.steps).toBe(2)
+    const worker = JSON.parse(await readFile(path.join(output, 'private-acceptance', `${session.acceptanceWorkers[0].sessionId}.json`), 'utf8'))
+    expect(session.steps).toBe(1)
+    expect(worker.steps).toBe(1)
+    expect(session.rootStepAttempts).toHaveLength(2)
     const coder = requests.find(request => request.tools.some(tool => tool.function.name === 'list_directory'))!
     const state = JSON.parse(coder.messages.at(-1)!.content!.split('[DevFlow runtime state]\n').at(-1)!)
-    expect(state.steps).toMatchObject({ maximum: 2, remainingIncludingThisCall: 1 })
+    expect(state.steps.maximum).toBe(2)
+    // Both requests share the ceiling. Either worker may reserve first.
+    expect(state.steps.remainingIncludingThisCall).toBeGreaterThanOrEqual(1)
+    expect(state.steps.remainingIncludingThisCall).toBeLessThanOrEqual(2)
     expect(state.activeMilliseconds.remaining).toBeGreaterThan(0)
     expect(state.activeMilliseconds.remaining).toBeLessThanOrEqual(15000)
     expect(state.acceptanceSchedule.reservedMilliseconds).toBe(6000)
