@@ -35,9 +35,17 @@ async function storeManifest(root: string, signal?: AbortSignal): Promise<Coding
   const manifest = { schemaVersion: 1 as const, files, excludedPaths: [] }
   return { ...manifest, digest: codingDigest(JSON.stringify(manifest)) }
 }
-function seedIdentity({ workspace, plan }: SeedInput) {
+function seedIdentity({ workspace, plan }: Pick<SeedInput, 'workspace' | 'plan'>) {
   const identity = { version: 1, baselineDigest: workspace.identity.base.digest, dependencyPlanDigest: plan.digest, platform: process.platform, arch: process.arch, node: process.version }
   return { identity, key: codingDigest(JSON.stringify(identity)) }
+}
+/** Publication is only a scheduling signal. restoreCodingDependencySeed still
+ * validates the identity and every package byte before a consumer uses it. */
+export async function codingDependencySeedPublished(input: Pick<SeedInput, 'workspace' | 'plan'>): Promise<boolean> {
+  const { key } = seedIdentity(input)
+  try {
+    return (await lstat(await codingFilePath(input.workspace.root, `dependency-seeds/${key}/manifest.json`))).isFile()
+  } catch (error) { if (missing(error)) return false; throw error }
 }
 async function readSeed(input: SeedInput) {
   const { identity, key } = seedIdentity(input), root = path.join(input.workspace.root, 'dependency-seeds', key)

@@ -10,6 +10,7 @@ import { codingAcceptanceWorkers } from './native-coding-acceptance-worker'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
 import * as dependencies from './coding-dependency-preparation'
 import { restoreCodingDependencySeed } from './coding-dependency-seed'
+import { CodingCommandRunner } from './coding-command-runner'
 
 const fixtures: Awaited<ReturnType<typeof codingHarnessFixture>>[] = []
 afterEach(async () => {
@@ -33,7 +34,7 @@ const timebox = async (fixture: Awaited<ReturnType<typeof codingHarnessFixture>>
   })
 }
 
-it.each(['complete', 'pause'] as const)('overlaps baseline dependency preparation with authoring and coding, then drains it on %s', async (outcome) => {
+it.each(['complete', 'pause'] as const)('overlaps baseline preparation with authoring and coding, waits before candidate tests and drains on %s', async (outcome) => {
   let releaseDependencies!: () => void
   const gate = new Promise<void>(resolve => { releaseDependencies = resolve })
   const packageFile = '.cache/devflow-pnpm-store/v3/files/ab/package-content'
@@ -46,11 +47,23 @@ it.each(['complete', 'pause'] as const)('overlaps baseline dependency preparatio
     await writeFile(path.join(input.directory, packageFile), 'baseline-package')
     return { inputDigest: input.plan.inputDigest, logId: `${input.operationId}:prepared` }
   })
+  const startCommand = CodingCommandRunner.prototype.start
+  const started = vi.spyOn(CodingCommandRunner.prototype, 'start').mockImplementation(async function (this: CodingCommandRunner, id, command, directory, signal) {
+    expect(await readFile(path.join(directory, packageFile), 'utf8')).toBe('baseline-package')
+    // Package transport is doubled above. The approved Node test command and
+    // its process receipt still run through the real command runner.
+    const { preparation: _prepared, ...readyCommand } = command
+    return startCommand.call(this, id, readyCommand, directory, signal)
+  })
   let turn = 0
   const author = vi.fn(async () => plan())
-  const fixture = await codingHarnessFixture(async () => ++turn === 1
-    ? codingToolReply('edit', 'write_file', { path: 'value.ts', expectedHash: codingDigest(original), content: changed })
-    : codingToolReply('submit', 'propose_changeset', { summary: 'Review' }), undefined, {}, author, {
+  const fixture = await codingHarnessFixture(async () => {
+    turn++
+    if (turn === 1) return codingToolReply('edit', 'write_file', { path: 'value.ts', expectedHash: codingDigest(original), content: changed })
+    if (turn === 2) return codingToolReply('tests', 'run_test_plan', {})
+    if (turn === 3) return codingToolReply('test-result', 'read_command', { id: 'native-coding:tests', waitMs: 30000 })
+    return codingToolReply(`submit-${turn}`, 'propose_changeset', { summary: 'Review' })
+  }, undefined, {}, author, {
       baselineFiles: { 'package.json': '{"private":true,"packageManager":"pnpm@9.15.0"}', 'pnpm-lock.yaml': 'lockfileVersion: 9.0\n' },
     })
   fixtures.push(fixture)
@@ -61,8 +74,9 @@ it.each(['complete', 'pause'] as const)('overlaps baseline dependency preparatio
       expect(prepare).toHaveBeenCalledTimes(1)
       expect(author).toHaveBeenCalledTimes(1)
       const root = (await fixture.store.getNativeCodingSession('native-coding'))!
-      expect(root.toolReceipts.some(receipt => receipt.name === 'propose_changeset' && receipt.status === 'started')).toBe(true)
+      expect(root.toolReceipts.some(receipt => receipt.name === 'run_test_plan' && receipt.status === 'started')).toBe(true)
     })
+    expect(started).not.toHaveBeenCalled()
     const pending = await fixture.get()
     expect(pending.snapshot.status).toBe('running')
     const root = (await fixture.store.getNativeCodingSession('native-coding'))!
@@ -76,8 +90,9 @@ it.each(['complete', 'pause'] as const)('overlaps baseline dependency preparatio
       releaseDependencies()
       await fixture.executor.settled('coding')
       expect((await fixture.get()).snapshot.status).toBe('review')
+      expect(started).toHaveBeenCalledTimes(1)
       const dependencyPlan = await dependencies.codingDependencyPlan(workspace.candidatePath, root.binding!.profile, workspace.identity.base.excludedPaths, { isolatedStore: true })
-      expect((await restoreCodingDependencySeed({ workspace, directory: workspace.candidatePath, plan: dependencyPlan })).status).toBe('restored')
+      expect((await restoreCodingDependencySeed({ workspace, directory: workspace.candidatePath, plan: dependencyPlan })).status).toBe('already_present')
       expect(await readFile(path.join(workspace.candidatePath, packageFile), 'utf8')).toBe('baseline-package')
     }
     expect((await readdir(workspace.root)).some(name => name.startsWith('baseline-dependencies-'))).toBe(false)

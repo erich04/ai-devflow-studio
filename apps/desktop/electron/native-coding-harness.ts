@@ -1,6 +1,7 @@
 import { codingHarnessSnapshot, markCodingDeliveryConflict, currentCodingDeliveryDigest } from './native-coding-projection'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { parseCodingHarnessCommand, parseCodingCommandRules, decideCodingCommand, sanitizeCodingDiffArtifact, redactSensitiveText, type AgentProvider, type CodingAgentRun, type CodingHarnessCommand, type CodingHarnessSnapshot, type CodingHarnessPage, type TestEvidence, type ModelCostRecord } from '@ai-devflow/shared'
 import type { CodingExecutor, CodingExecutorHarnessResult, CodingExecutorStartInput } from './coding-executor'
 import type { LocalStore } from './local-store'
@@ -25,7 +26,7 @@ import { codingSandboxAvailability } from './coding-os-sandbox'
 import { currentIndependentChecks, independentCheckSourceDigest, runIndependentChecks } from './native-coding-independent-verification'
 import { codingAcceptanceWorkers, codingRootRunId, concurrentCodingAcceptance, mergeCodingAcceptancePlan, prepareCodingAcceptanceWorker } from './native-coding-acceptance-worker'
 import { preflightIndependentChecks, prepareIndependentDependencies } from './native-coding-check-preflight'
-import { restoreCodingDependencySeed } from './coding-dependency-seed'
+import { codingDependencySeedPublished, restoreCodingDependencySeed } from './coding-dependency-seed'
 import { assertCodingTestInputAuthority } from './coding-test-inputs'
 
 type Core = { loop: NativeCodingLoop; workspace: CodingCandidateWorkspace; commands: CodingCommandRunner }
@@ -157,6 +158,27 @@ function createHarnessService(host: HarnessHost): Harness {
       ? { definitions: [], effects: {}, execute: async () => { throw new Error('Private acceptance workers cannot execute candidate tools') } }
       : createNativeCodingTools({ store: host.store, sessionId: session.id, workspace, commands, assertAuthority: checkedAuthority, sources, testPlanDigest: binding.testPlanDigest,
       ...(concurrentCodingAcceptance(session) ? { beforeSubmission: context => waitForAcceptance(session.codingRunId, context.session.objectiveVersion, context.signal, checkedAuthority) } : {}),
+      ...(concurrentCodingAcceptance(session) && binding.dependencyCacheVersion === 1 && binding.dependencyPlan?.storeDirectory ? {
+        beforeTestPreparation: async (context: Parameters<CodingLoopTools['execute']>[2], dependencyPlanDigest: string) => {
+          // Changed dependency inputs use their own exact authorization and
+          // preparation. Only the original plan can reuse the B bootstrap.
+          if (dependencyPlanDigest !== binding.dependencyPlan!.digest) return
+          const worker = await startAcceptance(session.codingRunId, context.signal, checkedAuthority)
+          if (!worker) return
+          while (!await codingDependencySeedPublished({ workspace, plan: binding.dependencyPlan! })) {
+            context.signal.throwIfAborted()
+            const root = await read(session.codingRunId)
+            if (root.status !== 'running' || root.objectiveVersion !== context.session.objectiveVersion || root.pendingInput.length)
+              throw new Error('Dependency preparation authority changed')
+            const current = await read(worker.codingRunId)
+            // An empty package store has no seed to publish. Successful private
+            // completion also proves that its bootstrap has already drained.
+            if (current.status === 'completed') return
+            if (!['ready', 'running'].includes(current.status)) throw new Error('Private dependency preparation stopped')
+            await delay(100, undefined, { signal: context.signal })
+          }
+        },
+      } : {}),
       extensions: createCodingExtensions({ store: host.store, sessionId: session.id, workspace, commands, authority, ...(host.network ? { network: host.network } : {}), assertAuthority: checkedAuthority }),
       ...(session.parent ? { child: { mode: session.parent.mode, paths: session.parent.paths } } : { delegation: {
         execute: (name, input, context) => childOperation(name, input, context, workspace, assertAuthority),

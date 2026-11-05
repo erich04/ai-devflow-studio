@@ -69,6 +69,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
   child?: { mode: 'read_only' | 'isolated_coding'; paths: string[] };
   extensions?: ReturnType<typeof createCodingExtensions>;
   beforeSubmission?(context: Parameters<CodingLoopTools['execute']>[2]): Promise<void>;
+  beforeTestPreparation?(context: Parameters<CodingLoopTools['execute']>[2], dependencyPlanDigest: string): Promise<void>;
   delegation?: { execute(name: string, input: Record<string, unknown>, context: Parameters<CodingLoopTools['execute']>[2]): Promise<unknown>; reconcile(receipt: CodingToolReceipt): Promise<{ state: 'completed'; result: unknown } | { state: 'not_executed' } | { state: 'unknown' }> } }): CodingLoopTools {
   const { workspace } = host
   const completedResult = (result: unknown) => ({ state: 'completed' as const, result: redactSensitiveValue(result).value })
@@ -332,6 +333,11 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
           const dependencies = await codingDependencyPlan(workspace.candidatePath, profile, workspace.identity.base.excludedPaths, { isolatedStore: session?.binding?.dependencyCacheVersion === 1 })
           if (dependencies.command && session?.binding?.dependencyPlan?.digest !== dependencies.digest) await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'dependencies', value: dependencies, details: `为当前依赖输入准备候选及独立验证目录：\n${dependencies.command}\n输入摘要：${dependencies.inputDigest}\n可能下载依赖并执行安装脚本，使用已选执行方式。` })
           if (name === 'propose_changeset' && !dependencies.frozen) throw new Error('Generate a lockfile in the candidate before freezing final verification')
+          if (name !== 'propose_changeset') {
+            await host.beforeTestPreparation?.(context, dependencies.digest)
+            context.signal.throwIfAborted()
+            await host.assertAuthority()
+          }
         }
         if (name === 'propose_changeset') {
           await host.beforeSubmission?.(context)
