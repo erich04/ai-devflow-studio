@@ -7,6 +7,7 @@ import { codingDependencyPlan, prepareCodingDependencies } from './coding-depend
 import { restoreCodingDependencySeed } from './coding-dependency-seed'
 import type { CodingCommandPlan, CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import type { CodingVerificationResult } from './coding-evidence-v3'
+import { fixtureTemplate, type FixtureTemplate } from './native-coding-fixture-cases'
 
 export type ApprovedCodingTests = {
   version: 1
@@ -72,6 +73,28 @@ export function approvedCodingTestCommand(tests: ApprovedCodingTests, profile: C
     timeoutMs: 300000, profile }
 }
 
+function approvedFailureSource(fixture: FixtureTemplate | undefined, testName: string, messages: string[]): string {
+  if (!fixture) return ''
+  const diagnostic = messages.join('\n').replaceAll('\\', '/')
+  const marker = `${fixture.path}:`
+  const offset = diagnostic.indexOf(marker)
+  const lineMatch = offset >= 0 ? diagnostic.slice(offset + marker.length).match(/^(\d+):\d+/u) : null
+  const line = lineMatch ? Number(lineMatch[1]) - 1 : undefined
+  const starts = fixture.tree.getLineStarts()
+  const position = line === undefined ? undefined : starts[line]
+  const anchor = fixture.anchors.find(item => position !== undefined && item.start <= position && position <= item.end)
+    ?? fixture.anchors.find(item => testName.endsWith(item.title))
+  const lines = fixture.source.split('\n')
+  let first = anchor ? fixture.tree.getLineAndCharacterOfPosition(anchor.start).line : Math.max(0, (line ?? 0) - 24)
+  let last = anchor ? fixture.tree.getLineAndCharacterOfPosition(anchor.end).line : Math.min(lines.length - 1, (line ?? 0) + 24)
+  if (last - first > 80) {
+    first = Math.max(first, (line ?? first) - 48)
+    last = Math.min(last, first + 80)
+  }
+  const excerpt = lines.slice(first, last + 1).map((text, index) => `${first + index + 1} ${text}`).join('\n')
+  return redactSensitiveText(`Approved fixed acceptance source ${fixture.path}, SHA-256 ${fixture.hash}\n${excerpt}`).value.slice(0, 6000)
+}
+
 /** Executes the approved contract against an exact revision in its own copy.
  * Concrete failures are authorized feedback. The external scorer remains a
  * separate observation of the eventual delivery. */
@@ -124,10 +147,15 @@ export async function runApprovedCodingVerification(input: {
       return { ...suite, file: path.relative(canonicalDirectory, canonical).split(path.sep).join('/') }
     }))
     const observed = new Set(suites.map(suite => suite.file))
-    const failures = suites.flatMap(suite => {
-      const failed = (suite.assertionResults ?? []).filter(test => test.status !== 'passed')
-        .map(test => ({ file: suite.file, test: clean(test.fullName ?? ''), message: clean((test.failureMessages ?? []).join('\n') || `Test status ${test.status}`) }))
-      return failed.length ? failed : suite.status === 'failed' ? [{ file: suite.file, test: '', message: clean(suite.message ?? 'Test module failed') }] : []
+    const failures: Array<{ file: string; test: string; message: string; sourceExcerpt?: string }> = suites.flatMap(suite => {
+      const assertions = (suite.assertionResults ?? []).filter(test => test.status !== 'passed')
+      const source = tests.files.find(file => file.path === suite.file)
+      const fixture = source && (assertions.length || suite.status === 'failed') ? fixtureTemplate(source.path, source.content) : undefined
+      const failed = assertions.map(test => ({ file: suite.file, test: clean(test.fullName ?? ''),
+        message: clean((test.failureMessages ?? []).join('\n') || `Test status ${test.status}`),
+        sourceExcerpt: approvedFailureSource(fixture, test.fullName ?? '', test.failureMessages ?? []) }))
+      return failed.length ? failed : suite.status === 'failed' ? [{ file: suite.file, test: '', message: clean(suite.message ?? 'Test module failed'),
+        sourceExcerpt: approvedFailureSource(fixture, '', [suite.message ?? '']) }] : []
     }).slice(0, 12)
     const missing = tests.files.filter(file => !observed.has(file.path))
     for (const file of missing.slice(0, 12)) failures.push({ file: file.path, test: '', message: 'The approved test file was not present in the runner report.' })
@@ -148,7 +176,7 @@ export async function runApprovedCodingVerification(input: {
       independentVerification: { planDigest: tests.digest, status, checkedCriteria: tests.files.filter(file => observed.has(file.path)).map(file => file.path),
         failedCriteria: passed ? [] : [...new Set(failures.map(failure => failure.file || 'approved-contract'))],
         failedRequirements: failures.map((failure, index) => ({ id: `approved-failure-${index + 1}`, sourceRef: tests.sourceRef,
-          text: [failure.file, failure.test, failure.message].filter(Boolean).join('\n') })), approvedTests: evidence } }
+          text: [failure.file, failure.test, failure.message, failure.sourceExcerpt].filter(Boolean).join('\n') })), approvedTests: evidence } }
   } finally {
     // wait() and cancellation finish the owned process before its copy is removed.
     await runner.cancelAll()

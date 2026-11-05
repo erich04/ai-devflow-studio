@@ -49,10 +49,12 @@ it('repairs after more than three fixed failures and verifies the same contract 
   const author = vi.fn(async () => { throw new Error('A fixed contract needs no generated author') })
   const fixture = await codingHarnessFixture(async request => {
     turn++
-    expect(request.messages.some(message => String(message.content).includes(approvedTest))).toBe(false)
+    if (turn === 1) expect(request.messages.some(message => String(message.content).includes(approvedTest))).toBe(false)
     if (turn === 5) {
       expect(JSON.stringify(request.messages)).toContain('approved value must be two')
       expect(JSON.stringify(request.messages)).toContain('expected 1 to be 2')
+      expect(JSON.stringify(request.messages)).toContain('expect(value).toBe(2)')
+      expect(JSON.stringify(request.messages)).toContain('sourceExcerpt')
       return codingToolReply('repair', 'write_file', { path: 'value.ts', content: fixed, expectedHash: codingDigest(original) })
     }
     return codingToolReply(`submit-${turn}`, 'propose_changeset', { summary: 'Submit for fixed acceptance' })
@@ -111,6 +113,38 @@ it('recognizes the exact test file when its report uses a filesystem alias', asy
   await approve(fixture, 'alias-report')
   expect((await fixture.get()).snapshot.status).toBe('completed')
   expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(fixed)
+})
+
+it('includes the failing counter setup and assertion from the approved source in repair feedback', async () => {
+  provisionFramework()
+  const source = [
+    "import {it,expect} from 'vitest'",
+    "it('unrelated passed check', () => {",
+    "  expect('unrelated-passing-marker').toBeTruthy()",
+    '})',
+    "it('finishes structured recovery', () => {",
+    "  const executor = 'structured'",
+    '  const calls = 2',
+    '  expect(calls).toBe(4)',
+    '})',
+  ].join('\n')
+  const bundle = freezeApprovedCodingTests({ sourceRef: 'user-approved:counter', expectedTests: 2, files: [{ path: 'value.test.ts', content: source }] })
+  let turn = 0
+  const fixture = await codingHarnessFixture(async request => {
+    if (++turn === 1) return codingToolReply('submit', 'propose_changeset', { summary: 'Review' })
+    const feedback = JSON.stringify(request.messages)
+    expect(feedback).toContain("const executor = 'structured'")
+    expect(feedback).toContain('expect(calls).toBe(4)')
+    expect(feedback).not.toContain('unrelated-passing-marker')
+    return codingToolReply('stop', 'report_blocked', { reason: 'The authorized failure context was received.' })
+  }, undefined, {}, undefined, { baselineFiles, approvedTests: bundle })
+  fixtures.push(fixture)
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  await approve(fixture, 'counter-feedback')
+  expect((await fixture.get()).snapshot).toMatchObject({ status: 'paused', pauseReason: 'The authorized failure context was received.' })
+  const session = (await fixture.store.getNativeCodingSession('native-coding'))!
+  expect(session.deliveryEvidence[0]?.result?.independentVerification?.approvedTests).toMatchObject({ passedTests: 1, totalTests: 2,
+    failures: [{ sourceExcerpt: expect.stringContaining('const calls = 2') }] })
 })
 
 it.each([

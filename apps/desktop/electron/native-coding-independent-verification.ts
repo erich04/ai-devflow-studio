@@ -29,7 +29,7 @@ export type IndependentCheckResult = {
   checkedCriteria: string[]; failedCriteria: string[]
   invalidCriteria?: string[]
   failedRequirements?: Array<{ id: string; text: string; sourceRef: string }>
-  approvedTests?: { bundleDigest: string; sourceRef: string; revisionDigest: string; expectedTests: number; passedTests: number; totalTests: number; reportDigest: string | null; before: string; after: string; status: 'passed' | 'failed' | 'timed_out' | 'cancelled'; failures: Array<{ file: string; test: string; message: string }> }
+  approvedTests?: { bundleDigest: string; sourceRef: string; revisionDigest: string; expectedTests: number; passedTests: number; totalTests: number; reportDigest: string | null; before: string; after: string; status: 'passed' | 'failed' | 'timed_out' | 'cancelled'; failures: Array<{ file: string; test: string; message: string; sourceExcerpt?: string }> }
 }
 export type IndependentVerificationState = {
   plans: FrozenIndependentChecks[]
