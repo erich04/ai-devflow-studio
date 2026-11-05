@@ -233,15 +233,19 @@ export async function fixturePlanning(
   )
   const products: Array<{ path: string; source: string }> = []
   let productBytes = 2 * 1024 * 1024
-  if (fixtures.some((f) => /mock(?:Resolved|Return)Value/u.test(f.source)))
-    for (const fixture of fixtures) {
-      const name = fixture.path.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1')
-      const file = base.files.find((entry) => entry.path === name)
-      if (!file || file.size > 512 * 1024 || file.size > productBytes) continue
-      productBytes -= file.size
-      const bytes = await workspace.blob(file.hash)
-      if (!bytes.includes(0)) products.push({ path: name, source: bytes.toString('utf8') })
-    }
+  for (const fixture of fixtures) {
+    const name = fixture.path.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1')
+    const file = base.files.find((entry) => entry.path === name)
+    if (!file || file.size > 512 * 1024 || file.size > productBytes) continue
+    productBytes -= file.size
+    const bytes = await workspace.blob(file.hash)
+    if (!bytes.includes(0)) products.push({ path: name, source: bytes.toString('utf8') })
+  }
+  // Related public suites need their owning implementation just as the named
+  // suites do. Rank the full immutable source before clipping the author view.
+  const productEvidence = products.map((p) => ({
+    path: p.path, content: redactSensitiveText(p.source).value, truncated: false,
+  }))
   const ownedContracts = ownedFixtureContracts(fixtures, products)
   const matching = (history?.drafts ?? [])
     .filter((d) => d.sourceDigest === source.sourceDigest && d.objectiveVersion === source.objectiveVersion)
@@ -270,7 +274,9 @@ export async function fixturePlanning(
       ...(durableUnits.length && a.storeRoundTrip ? { storeRoundTrip: a.storeRoundTrip } : {}),
       ...(a.mockedPresentation ? { observes: 'rendered UI and mocked calls only' } : {}),
     })),
-    production: evidence.files.find((item) => item.path === f.path.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1')),
+    production: [...productEvidence, ...evidence.files].find(
+      (item) => item.path === f.path.replace(/\.(?:test|spec)(\.[^.]+)$/u, '$1'),
+    ),
   }))
   const previous = matching.find((d) => !d.selection)
   const rejected = !selection ? rejectedFixtureSelection(matching, fixtures) : undefined
@@ -354,7 +360,7 @@ export async function fixturePlanning(
                 ...f,
                 production: focusFixtureEvidence(
                   f.production,
-                  objective,
+                  [objective, ...f.anchors.flatMap((a) => a.behavior?.actions ?? [])].join('\n'),
                   Math.min(12000, Math.floor(84000 / indexed.length)),
                 ),
               })),

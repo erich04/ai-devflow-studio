@@ -333,3 +333,48 @@ it('gives a private selector the public route and actual stimulus behind a rejec
     await rm(root, { recursive: true, force: true })
   }
 })
+
+it('shows the owning implementation of an additional public fixture, including relevant middle-of-file logic', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const { default: path } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { CodingCandidateWorkspace } = await import('./coding-candidate-workspace')
+  const { fixturePlanning } = await import('./native-coding-fixture-planning')
+  const root = await mkdtemp(path.join(tmpdir(), 'private-owner-context-')),
+    delivery = path.join(root, 'project')
+  try {
+    await mkdir(delivery)
+    const files = {
+      'transport.test.ts': "import {it,expect} from 'vitest';it('connects',()=>{expect(1).toBe(1)})",
+      'framekit-adapter.ts':
+        '// Unrelated surrounding implementation\n'.repeat(700) +
+        'export function startAnalysis(){ return adapter.complete({phase:"analysis",maxOutputTokens:2048}) }\n' +
+        '// Other unrelated implementation\n'.repeat(700),
+      'framekit-adapter.test.ts':
+        "import {it,describe,expect} from 'vitest';import {startAnalysis} from './framekit-adapter';describe('FrameKit adapter',()=>{it('calls startAnalysis',()=>{expect(startAnalysis()).toBeDefined()})})",
+    }
+    for (const [file, body] of Object.entries(files)) await writeFile(path.join(delivery, file), body)
+    const workspace = await CodingCandidateWorkspace.create({
+      root: path.join(root, 'workspace'),
+      delivery,
+      baseCommitSha: 'a'.repeat(40),
+      excludedPaths: [],
+    })
+    const source = {
+      objectiveVersion: 1,
+      sourceDigest: 'd'.repeat(64),
+      baselineDigest: workspace.identity.base.digest,
+      criteria: [
+        { id: 'goal', sourceRef: 'approved', text: 'FrameKit analysis must use the correct output allowance.' },
+      ],
+      adapter: { kind: 'vitest' as const, directory: '.' },
+    }
+    const plan = (await fixturePlanning(source, workspace, ['transport.test.ts']))!
+    const data = JSON.parse(plan.request.messages[0]!.content as string)
+    const actual = data.fixtures.find((f: { path: string }) => f.path === 'framekit-adapter.test.ts')
+    expect(actual?.production?.path).toBe('framekit-adapter.ts')
+    expect(actual?.production?.content).toContain('maxOutputTokens:2048')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
