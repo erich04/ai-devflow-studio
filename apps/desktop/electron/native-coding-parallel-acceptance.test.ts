@@ -1,13 +1,15 @@
 // @vitest-environment node
-import { readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { AgentProviderRequestError, type NativeConversationRequest } from '@ai-devflow/shared'
 import { codingHarnessFixture, codingToolReply } from './native-coding-test-fixture'
-import { codingDigest } from './coding-candidate-workspace'
+import { CodingCandidateWorkspace, codingDigest } from './coding-candidate-workspace'
 import { mutateNativeCodingSession } from './native-coding-session'
 import { codingAcceptanceWorkers } from './native-coding-acceptance-worker'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
+import * as dependencies from './coding-dependency-preparation'
+import { restoreCodingDependencySeed } from './coding-dependency-seed'
 
 const fixtures: Awaited<ReturnType<typeof codingHarnessFixture>>[] = []
 afterEach(async () => {
@@ -16,6 +18,7 @@ afterEach(async () => {
     await fixture.store.close()
     await rm(fixture.root, { recursive: true, force: true })
   }
+  vi.restoreAllMocks()
 })
 const original = 'export const value = 1\n'
 const changed = 'export const value = 2\n'
@@ -29,6 +32,58 @@ const timebox = async (fixture: Awaited<ReturnType<typeof codingHarnessFixture>>
     session.limits.maxSteps = maxSteps
   })
 }
+
+it.each(['complete', 'pause'] as const)('overlaps baseline dependency preparation with authoring and coding, then drains it on %s', async (outcome) => {
+  let releaseDependencies!: () => void
+  const gate = new Promise<void>(resolve => { releaseDependencies = resolve })
+  const packageFile = '.cache/devflow-pnpm-store/v3/files/ab/package-content'
+  const prepare = vi.spyOn(dependencies, 'prepareCodingDependencies').mockImplementation(async input => {
+    input.signal!.addEventListener('abort', releaseDependencies, { once: true })
+    expect(await readFile(path.join(input.directory, 'value.ts'), 'utf8')).toBe(original)
+    await gate
+    input.signal!.throwIfAborted()
+    await mkdir(path.dirname(path.join(input.directory, packageFile)), { recursive: true })
+    await writeFile(path.join(input.directory, packageFile), 'baseline-package')
+    return { inputDigest: input.plan.inputDigest, logId: `${input.operationId}:prepared` }
+  })
+  let turn = 0
+  const author = vi.fn(async () => plan())
+  const fixture = await codingHarnessFixture(async () => ++turn === 1
+    ? codingToolReply('edit', 'write_file', { path: 'value.ts', expectedHash: codingDigest(original), content: changed })
+    : codingToolReply('submit', 'propose_changeset', { summary: 'Review' }), undefined, {}, author, {
+      baselineFiles: { 'package.json': '{"private":true,"packageManager":"pnpm@9.15.0"}', 'pnpm-lock.yaml': 'lockfileVersion: 9.0\n' },
+    })
+  fixtures.push(fixture)
+  await timebox(fixture)
+  try {
+    await fixture.authorize()
+    await vi.waitFor(async () => {
+      expect(prepare).toHaveBeenCalledTimes(1)
+      expect(author).toHaveBeenCalledTimes(1)
+      const root = (await fixture.store.getNativeCodingSession('native-coding'))!
+      expect(root.toolReceipts.some(receipt => receipt.name === 'propose_changeset' && receipt.status === 'started')).toBe(true)
+    })
+    const pending = await fixture.get()
+    expect(pending.snapshot.status).toBe('running')
+    const root = (await fixture.store.getNativeCodingSession('native-coding'))!
+    const workspace = await CodingCandidateWorkspace.open(root.binding!.workspaceRoot)
+    expect(await readFile(path.join(workspace.candidatePath, 'value.ts'), 'utf8')).toBe(changed)
+    if (outcome === 'pause') {
+      await fixture.executor.harness!.command({ protocolVersion: 2, type: 'pause', codingRunId: 'coding', commandId: 'pause', expectedVersion: pending.snapshot.version }, async () => {})
+      expect((await fixture.get()).snapshot.status).toBe('paused')
+      expect((await fixture.store.getNativeCodingSession('native-coding'))!.revisions).toHaveLength(0)
+    } else {
+      releaseDependencies()
+      await fixture.executor.settled('coding')
+      expect((await fixture.get()).snapshot.status).toBe('review')
+      const dependencyPlan = await dependencies.codingDependencyPlan(workspace.candidatePath, root.binding!.profile, workspace.identity.base.excludedPaths, { isolatedStore: true })
+      expect((await restoreCodingDependencySeed({ workspace, directory: workspace.candidatePath, plan: dependencyPlan })).status).toBe('restored')
+      expect(await readFile(path.join(workspace.candidatePath, packageFile), 'utf8')).toBe('baseline-package')
+    }
+    expect((await readdir(workspace.root)).some(name => name.startsWith('baseline-dependencies-'))).toBe(false)
+    expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(original)
+  } finally { releaseDependencies() }
+})
 
 it('codes against C while the private author sees B, then waits for its frozen plan before review and delivery', async () => {
   let releaseAuthor!: () => void

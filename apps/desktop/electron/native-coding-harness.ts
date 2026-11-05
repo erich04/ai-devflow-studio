@@ -24,7 +24,7 @@ import { inspectCodingInput } from './coding-input'
 import { codingSandboxAvailability } from './coding-os-sandbox'
 import { currentIndependentChecks, independentCheckSourceDigest, runIndependentChecks } from './native-coding-independent-verification'
 import { codingAcceptanceWorkers, codingRootRunId, concurrentCodingAcceptance, mergeCodingAcceptancePlan, prepareCodingAcceptanceWorker } from './native-coding-acceptance-worker'
-import { preflightIndependentChecks } from './native-coding-check-preflight'
+import { preflightIndependentChecks, prepareIndependentDependencies } from './native-coding-check-preflight'
 import { restoreCodingDependencySeed } from './coding-dependency-seed'
 import { assertCodingTestInputAuthority } from './coding-test-inputs'
 
@@ -178,6 +178,12 @@ function createHarnessService(host: HarnessHost): Harness {
       authority })
     const loop = new NativeCodingLoop({ store: host.store, provider: host.provider, tools, verificationWorkspace: workspace, changed: () => { host.changed?.(session.privateAcceptanceFor?.rootCodingRunId ?? session.codingRunId); if (session.parent) host.changed?.(session.parent.codingRunId) },
       ...(session.privateAcceptanceFor ? { stopAfterIndependentChecks: true as const } : {}),
+      ...(session.privateAcceptanceFor && binding.dependencyCacheVersion === 1 && binding.dependencyPlan?.storeDirectory ? {
+        prepareIndependentDependencies: async (operationId: string, signal: AbortSignal) => {
+          await checkedAuthority()
+          await prepareIndependentDependencies({ workspace, runner: commands, profile: binding.profile, operationId, signal, approvedPlanDigest: binding.dependencyPlan!.digest })
+        },
+      } : {}),
       ...(concurrentCodingAcceptance(session) ? { prepareIndependentChecksInBackground: (current: NativeCodingSession, signal: AbortSignal) => startAcceptance(current.codingRunId, signal, checkedAuthority).then(() => undefined) } : {}),
       preflightIndependentChecks: async (plan, operationId, signal) => {
         await checkedAuthority()

@@ -76,7 +76,12 @@ async function assertCandidate(plan) {
   if (git(['status', '--porcelain']) || git(['rev-parse', 'HEAD']) !== plan.candidateCommit) throw new Error('Candidate differs from the frozen clean commit')
   for (const [name, hash] of Object.entries(plan.runnerDigests)) if (digest(await readFile(path.join(repository, 'scripts', name))) !== hash) throw new Error('Frozen runner changed')
 }
-export async function freezePhase2(output, source, maxCostUsd = 3) {
+export function phase2TestInputPolicy(value) {
+  if (value !== undefined && value !== 'approve_exact_content') throw new Error('Invalid explicit test-input policy')
+  return value
+}
+export async function freezePhase2(output, source, maxCostUsd = 3, testInputPolicy) {
+  phase2TestInputPolicy(testInputPolicy)
   if (git(['status', '--porcelain'])) throw new Error('Commit implementation and evaluation runner before freezing')
   const relative = path.relative(repository, output)
   if (!relative || !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) throw new Error('Use an output directory outside the source repository so sandboxed tooling cannot discover its parent workspace')
@@ -97,6 +102,10 @@ export async function freezePhase2(output, source, maxCostUsd = 3) {
     operatorPolicy: 'System sandbox only; explicitly enable IP network for frozen dependency preparation. Initial saved test/install plans are preapproved. Only the frozen direct-argv allow rules can run additional commands automatically. Reject other root/child permission cards; record each. Do not invent answers. Approve exact revisions only to permit product verification. Unknown requests retain full reservation and are not replayed. Stop on provider refusal or runner failure. No implicit retries or extensions.',
     evaluation: 'Keep original prompts, baselines, public plans and reference acceptance tests unchanged. Independent author sees only B and approved objective; reference tests remain outside all model/agent workspaces. External oracle restores protected baseline config/tests before overlaying exact reference tests, runs in its own OS sandbox, and never feeds failures to the implementer.',
     tasks }
+  if (testInputPolicy) {
+    plan.testInputPolicy = testInputPolicy
+    plan.operatorPolicy = plan.operatorPolicy.replace('Reject other root/child permission cards; record each.', 'Approve current exact-content test-input cards under the explicit isolated evaluation authorization. Reject other root/child permission cards; record each.')
+  }
   await mkdir(path.dirname(output), { recursive: true }); await mkdir(output)
   await json(path.join(output, 'experiment.json'), plan, true)
   await json(path.join(output, 'historical-comparison.json'), observations.filter(row => row.engine === 'native-v3'), true)
@@ -105,6 +114,7 @@ export async function freezePhase2(output, source, maxCostUsd = 3) {
 async function runPhase2(output, keyFile) {
   if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('Do not mix a phase2 USD run with another guarded budget round')
   const plan = await readJson(path.join(output, 'experiment.json'))
+  const testInputPolicy = phase2TestInputPolicy(plan.testInputPolicy)
   await assertCandidate(plan)
   if (plan.concurrency !== 1 || plan.totalBudget.maxCostUsd > 3 || plan.tasks.length !== 10) throw new Error('Invalid frozen phase2 envelope')
   const lock = path.join(output, '.run-lock'); await mkdir(lock)
@@ -137,7 +147,7 @@ async function runPhase2(output, keyFile) {
       if (cap === null) { await json(path.join(output, 'dispatch-stop.json'), { reason: 'budget', nextTask: task.id, accountedUsd: await accounted() }, true); break }
       const directory = path.join(output, task.id), executionOutput = path.join(directory, 'execution')
       const baseline = await prepare(task, directory)
-      const input = { ...plan.limits, id: task.id, engine: 'native-v3', repository: baseline, output: executionOutput, prompt: task.prompt, testCommand: task.testCommand, maxCostUsd: cap, execution: plan.execution, opencodeBinary: '' }
+      const input = { ...plan.limits, id: task.id, engine: 'native-v3', repository: baseline, output: executionOutput, prompt: task.prompt, testCommand: task.testCommand, maxCostUsd: cap, execution: plan.execution, opencodeBinary: '', ...(testInputPolicy ? { testInputPolicy } : {}) }
       const inputFile = path.join(directory, 'input.json'); await json(inputFile, input, true)
       console.log(JSON.stringify({ event: 'start', task: task.id, maxCostUsd: cap }))
       const execution = await runProcess(corepack, ['pnpm', 'exec', 'tsx', 'scripts/native-coding-trial-live.mts', inputFile, keyFile], repository, path.join(directory, 'execution.log'), plan.limits.maxActiveMilliseconds + 600000)

@@ -13,6 +13,28 @@ export type IndependentPreflight = {
   retainedCaseIds?: string[]
 }
 
+/** Prepare the approved immutable baseline while its private checks are being
+ * authored. Only this pre-check baseline may publish a reusable package seed. */
+export async function prepareIndependentDependencies(input: {
+  workspace: CodingCandidateWorkspace; runner: CodingCommandRunner; profile: CodingExecutionProfile
+  operationId: string; approvedPlanDigest: string; signal: AbortSignal
+}): Promise<void> {
+  const { workspace, runner, profile, signal } = input
+  const base = workspace.identity.base
+  const directory = path.join(workspace.root, `baseline-dependencies-${codingDigest(input.operationId).slice(0, 20)}`)
+  signal.throwIfAborted()
+  try {
+    await workspace.materialize(base, directory)
+    const plan = await codingDependencyPlan(directory, profile, base.excludedPaths, { isolatedStore: true })
+    if (plan.digest !== input.approvedPlanDigest) throw new Error('Baseline dependency authorization changed')
+    const seed = await restoreCodingDependencySeed({ workspace, directory, plan, signal })
+    if (seed.status === 'restored') return
+    signal.throwIfAborted()
+    const prepared = await prepareCodingDependencies({ directory, profile, excludedPaths: base.excludedPaths, runner, operationId: input.operationId, plan, signal, final: true })
+    if (prepared.logId) await captureCodingDependencySeed({ workspace, directory, plan, preparationLogId: prepared.logId, signal })
+  } finally { await rm(directory, { recursive: true, force: true }) }
+}
+
 export function classifyIndependentPreflight(
   plan: FrozenIndependentChecks,
   result: IndependentCheckResult,

@@ -98,6 +98,7 @@ export class NativeCodingLoop {
   constructor(private readonly host: { store: LoopStore; provider: AgentProvider; tools: CodingLoopTools; now?: () => string; changed?: (session: NativeCodingSession) => void;
     verificationWorkspace?: CodingCandidateWorkspace;
     prepareIndependentChecksInBackground?(session: NativeCodingSession, signal: AbortSignal): Promise<void>;
+    prepareIndependentDependencies?(operationId: string, signal: AbortSignal): Promise<void>;
     stopAfterIndependentChecks?: true;
     preflightIndependentChecks?(plan: FrozenIndependentChecks, operationId: string, signal: AbortSignal): Promise<IndependentPreflight>;
     stopPreviousWorker?: (writer: NonNullable<NativeCodingSession['writer']>) => Promise<boolean>; reconcileWorkers?: () => Promise<boolean>;
@@ -202,6 +203,7 @@ export class NativeCodingLoop {
     const started = Date.now()
     const expectedWriter = JSON.stringify(session.writer), expectedEpoch = session.writerEpoch
     let activityId: string | undefined
+    let preparation: Promise<IndependentPreflight | undefined> | undefined
     try {
       session = await this.change(id, draft => {
         if (!['ready', 'running', 'reconciling'].includes(draft.status)) throw new Error('Coding session was interrupted before acquiring its writer')
@@ -213,6 +215,12 @@ export class NativeCodingLoop {
       await this.host.activity?.(activityId, true)
       if (session.attempts.some(attempt => attempt.status === 'started' || (attempt.status === 'unknown' && !attempt.acknowledgedBy))) {
         return await this.change(id, draft => { draft.status = 'reconciling'; draft.pauseReason = 'model_delivery_unknown' })
+      }
+      if (needsIndependentChecks(session) && this.host.prepareIndependentDependencies) {
+        preparation = this.host.prepareIndependentDependencies(`${session.id}:baseline-${epoch}`, controller.signal).then(
+          () => undefined,
+          () => ({ status: 'unavailable' as const, feedback: 'Baseline dependency preparation failed. Inspect the private command receipts before attempting acceptance.' }),
+        )
       }
       let waitedFor: string | undefined
       for (let count = 0; count < session.limits.batchSteps; count++) {
@@ -382,7 +390,8 @@ export class NativeCodingLoop {
               })
               continue
             }
-            const preflight = await this.host.preflightIndependentChecks?.(plan, `${session.id}:independent:preflight-${attemptId}`, controller.signal)
+            const dependencyFailure = await preparation
+            const preflight = dependencyFailure ?? await this.host.preflightIndependentChecks?.(plan, `${session.id}:independent:preflight-${attemptId}`, controller.signal)
             if (plan.adapter && !preflight) throw new Error('Independent framework preflight is required')
             session = await this.change(id, draft => {
               const attempt = draft.attempts.find(item => item.id === attemptId)!
@@ -484,6 +493,10 @@ export class NativeCodingLoop {
       session = await this.executePending(await this.read(id), controller.signal)
       return session.status === 'running' ? await this.change(id, draft => { draft.status = 'ready' }) : session
     } finally {
+      if (preparation) {
+        if (!['ready', 'completed'].includes((await this.read(id)).status)) controller.abort()
+        await preparation
+      }
       await this.host.tools.drain?.()
       this.active.delete(id)
       const current = await this.read(id)
