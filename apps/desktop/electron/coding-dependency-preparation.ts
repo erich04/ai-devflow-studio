@@ -24,12 +24,15 @@ export async function codingDependencyPlan(directory: string, profile: CodingExe
   const plan = command ? codingShellPlan(command, profile) : null
   return { digest: codingDigest(JSON.stringify({ inputDigest, plan, frozen })), inputDigest, command, frozen, plan, ...(storeDirectory ? { storeDirectory } : {}) }
 }
+export function codingDependencyCommandId(directory: string, operationId: string): string {
+  return `${operationId}:dependencies:${codingDigest(path.resolve(directory))}`
+}
 export async function prepareCodingDependencies(input: { directory: string; profile: CodingExecutionProfile; excludedPaths: string[]; runner: CodingCommandRunner; operationId: string; plan: CodingDependencyPlan; signal?: AbortSignal; final?: boolean }): Promise<{ logId?: string; inputDigest: string }> {
   const current = await codingDependencyPlan(input.directory, input.profile, input.excludedPaths, { isolatedStore: input.plan.storeDirectory === codingDependencyStoreDirectory })
   if (current.digest !== input.plan.digest) throw new Error('Dependency inputs changed after authorization')
   if (input.final && !current.frozen) throw new Error('Final verification requires a lockfile in the approved revision')
   if (!current.plan) return { inputDigest: current.inputDigest }
-  const logId = `${input.operationId}:dependencies:${codingDigest(path.resolve(input.directory))}`
+  const logId = codingDependencyCommandId(input.directory, input.operationId)
   await input.runner.start(logId, current.plan, input.directory, input.signal)
   const receipt = await input.runner.wait(logId)
   if (receipt.status !== 'passed') throw new Error(`Dependency preparation ${receipt.status}; inspect ${logId}`)

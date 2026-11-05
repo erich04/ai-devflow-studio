@@ -3,7 +3,7 @@ import path from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import { redactSensitiveText } from '@ai-devflow/shared'
 import { atomicCodingFile, codingDigest, codingFilePath, codingRelativePath, snapshotCodingTree, type CodingCandidateWorkspace, type CodingRevision } from './coding-candidate-workspace'
-import { codingDependencyPlan, prepareCodingDependencies } from './coding-dependency-preparation'
+import { codingDependencyCommandId, codingDependencyPlan, prepareCodingDependencies } from './coding-dependency-preparation'
 import { restoreCodingDependencySeed } from './coding-dependency-seed'
 import type { CodingCommandPlan, CodingCommandRunner, CodingExecutionProfile } from './coding-command-runner'
 import type { CodingVerificationResult } from './coding-evidence-v3'
@@ -178,8 +178,10 @@ export async function runApprovedCodingVerification(input: {
         failedRequirements: failures.map((failure, index) => ({ id: `approved-failure-${index + 1}`, sourceRef: tests.sourceRef,
           text: [failure.file, failure.test, failure.message, failure.sourceExcerpt].filter(Boolean).join('\n') })), approvedTests: evidence } }
   } finally {
-    // wait() and cancellation finish the owned process before its copy is removed.
-    await runner.cancelAll()
+    // Drain only this copy's commands. A public verification may still be running.
+    for (const id of [codingDependencyCommandId(directory, input.operationId), logId]) {
+      if (runner.isActive(id)) await runner.cancel(id)
+    }
     await rm(directory, { recursive: true, force: true })
   }
 }

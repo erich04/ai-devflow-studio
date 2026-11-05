@@ -10,7 +10,7 @@ import { NativeCodingLoop } from './native-coding-loop'
 import { createNativeCodingTools } from './native-coding-tools'
 import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, snapshotCodingTree, type CodingRevision, type CodingManifest } from './coding-candidate-workspace'
 import { CodingCommandRunner, type CodingCommandPlan, type CodingExecutionProfile } from './coding-command-runner'
-import { applyAndVerifyCodingRevision, recoverCodingDelivery } from './coding-evidence-v3'
+import { applyAndVerifyCodingRevision, recoverCodingDelivery, type CodingVerificationResult } from './coding-evidence-v3'
 import { codingDependencyPlan, codingShellPlan, prepareCodingDependencies } from './coding-dependency-preparation'
 import { pendingCodingPermission } from './native-coding-permissions'
 import { computeSourceTreeDigest } from './source-tree-digest'
@@ -696,26 +696,40 @@ function createHarnessService(host: HarnessHost): Harness {
           assertAuthority: assertVerification,
           verify: async directory => {
             await mutate(id, draft => { draft.status = 'verifying' })
-            const dependencies = await codingDependencyPlan(directory, session.binding!.profile, revision.base.excludedPaths, { isolatedStore: session.binding!.dependencyCacheVersion === 1 })
-            if (revision.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlanDigest, dependencies: dependencies.digest }))) throw new Error('Frozen verification plan changed')
-            await restoreCodingDependencySeed({ workspace: core.workspace, directory, plan: dependencies, signal: verificationController.signal })
-            await prepareCodingDependencies({ directory, profile: session.binding!.profile, excludedPaths: revision.base.excludedPaths, runner: core.commands, operationId: `${session.id}:verify:${command.commandId}`, plan: dependencies, signal: verificationController.signal, final: true })
-            const logId = `${session.id}:verify:${command.commandId}`
-            await core.commands.start(logId, session.binding!.testPlan, directory, verificationController.signal)
-            const tested = await core.commands.wait(logId)
+            const publicVerification = async (): Promise<CodingVerificationResult> => {
+              const dependencies = await codingDependencyPlan(directory, session.binding!.profile, revision.base.excludedPaths, { isolatedStore: session.binding!.dependencyCacheVersion === 1 })
+              if (revision.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlanDigest, dependencies: dependencies.digest }))) throw new Error('Frozen verification plan changed')
+              await restoreCodingDependencySeed({ workspace: core.workspace, directory, plan: dependencies, signal: verificationController.signal })
+              await prepareCodingDependencies({ directory, profile: session.binding!.profile, excludedPaths: revision.base.excludedPaths, runner: core.commands, operationId: `${session.id}:verify:${command.commandId}`, plan: dependencies, signal: verificationController.signal, final: true })
+              const logId = `${session.id}:verify:${command.commandId}`
+              await core.commands.start(logId, session.binding!.testPlan, directory, verificationController.signal)
+              const tested = await core.commands.wait(logId)
+              return { exitCode: tested.exitCode, status: tested.status === 'passed' ? 'passed' : tested.status === 'timed_out' ? 'timed_out' : tested.status === 'cancelled' ? 'cancelled' : 'failed', logId }
+            }
+            const approved = currentApprovedVerification(session)
+            if (approved && session.binding!.independentVerificationRequired) {
+              if (session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, approvedTests: approved.tests.digest }))) throw new Error('Frozen approved acceptance changed')
+              // Both read the same revision in independently owned copies. Drain
+              // both outcomes, including on failure, before deciding delivery.
+              const [publicResult, fixedResult] = await Promise.allSettled([
+                publicVerification(),
+                runApprovedCodingVerification({ approved, workspace: core.workspace, revision, runner: core.commands,
+                  profile: session.binding!.profile, operationId: `${session.id}:verify:${command.commandId}`, signal: verificationController.signal }),
+              ])
+              if (publicResult.status === 'rejected') throw publicResult.reason
+              if (fixedResult.status === 'rejected') throw fixedResult.reason
+              if (publicResult.value.status === 'passed') return fixedResult.value
+              const independentVerification = fixedResult.value.independentVerification
+              return { ...publicResult.value, ...(independentVerification ? { independentVerification } : {}) }
+            }
+            const tested = await publicVerification()
             if (tested.status === 'passed' && session.binding!.independentVerificationRequired) {
-              const approved = currentApprovedVerification(session)
-              if (approved) {
-                if (session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, approvedTests: approved.tests.digest }))) throw new Error('Frozen approved acceptance changed')
-                return runApprovedCodingVerification({ approved, workspace: core.workspace, revision, runner: core.commands,
-                  profile: session.binding!.profile, operationId: `${session.id}:verify:${command.commandId}`, signal: verificationController.signal })
-              }
               const plan = currentIndependentChecks(session)
               if (!plan || plan.baselineDigest !== revision.base.digest || session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, independentChecks: plan.digest }))) throw new Error('Frozen independent acceptance changed')
               const independentVerification = await runIndependentChecks({ plan, baseline: core.workspace, runner: core.commands, directory, profile: session.binding!.profile, operationId: `${session.id}:independent:${command.commandId}`, signal: verificationController.signal })
-              return { exitCode: independentVerification.status === 'passed' ? 0 : 1, status: independentVerification.status === 'invalid' ? 'failed' : independentVerification.status, logId, independentVerification }
+              return { ...tested, exitCode: independentVerification.status === 'passed' ? 0 : 1, status: independentVerification.status === 'invalid' ? 'failed' : independentVerification.status, independentVerification }
             }
-            return { exitCode: tested.exitCode, status: tested.status === 'passed' ? 'passed' : tested.status === 'timed_out' ? 'timed_out' : tested.status === 'cancelled' ? 'cancelled' : 'failed', logId }
+            return tested
           } }).catch(async error => { await mutate(id, draft => { if (draft.status === 'applying') { draft.status = 'paused'; draft.pauseReason = error instanceof Error ? error.message : 'Application did not start' } }); throw error }).finally(() => { verifications.delete(id) })
         await mutate(id, draft => {
           draft.deliveryEvidence.push(evidence)

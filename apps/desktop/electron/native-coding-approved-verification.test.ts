@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { codingHarnessFixture, codingToolReply } from './native-coding-test-fixture'
@@ -147,6 +147,74 @@ it('includes the failing counter setup and assertion from the approved source in
     failures: [{ sourceExcerpt: expect.stringContaining('const calls = 2') }] })
 })
 
+it.each([0, 1])('runs fixed acceptance alongside a public exit %i and requires both checks for delivery', async publicExit => {
+  provisionFramework()
+  const publicScript = [
+    "const fs = require('node:fs')",
+    "const file = '.cache/release-public'",
+    `const timer = setInterval(() => { if (fs.existsSync(file)) { fs.unlinkSync(file); clearInterval(timer); process.exit(${publicExit}) } }, 50)`,
+    'setTimeout(() => process.exit(99), 5000).unref()',
+  ].join('\n')
+  let turn = 0
+  const fixture = await codingHarnessFixture(async () => ++turn === 1
+    ? codingToolReply('fix', 'write_file', { path: 'value.ts', content: fixed, expectedHash: codingDigest(original) })
+    : codingToolReply(`submit-${turn}`, 'propose_changeset', { summary: 'Review' }),
+  'node public-check.cjs', {}, undefined, { baselineFiles: { ...baselineFiles, 'public-check.cjs': publicScript }, approvedTests: approvedTests() })
+  fixtures.push(fixture)
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  const publicId = 'native-coding:verify:parallel'
+  let publicDirectory = ''
+  const originalStart = CodingCommandRunner.prototype.start
+  const originalWait = CodingCommandRunner.prototype.wait
+  vi.spyOn(CodingCommandRunner.prototype, 'start').mockImplementation(async function (this: CodingCommandRunner, ...args) {
+    if (args[0] === publicId) {
+      publicDirectory = args[2]
+      await mkdir(path.join(publicDirectory, '.cache'), { recursive: true })
+    }
+    return originalStart.apply(this, args)
+  })
+  vi.spyOn(CodingCommandRunner.prototype, 'wait').mockImplementation(async function (this: CodingCommandRunner, ...args) {
+    const receipt = await originalWait.apply(this, args)
+    if (args[0].endsWith(':approved-tests')) {
+      expect(this.isActive(publicId)).toBe(true)
+      await writeFile(path.join(publicDirectory, '.cache/release-public'), '')
+    }
+    return receipt
+  })
+  await approve(fixture, 'parallel')
+  expect((await fixture.get()).snapshot.status).toBe(publicExit === 0 ? 'completed' : 'review')
+  const session = (await fixture.store.getNativeCodingSession('native-coding'))!
+  expect(session.deliveryEvidence[0]?.result?.independentVerification?.approvedTests).toMatchObject({ totalTests: 1, passedTests: 1, status: 'passed' })
+  expect(session.deliveryEvidence[0]?.result?.exitCode).toBe(publicExit)
+  expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(publicExit === 0 ? fixed : original)
+}, 20000)
+
+it('drains the fixed check before returning a concurrent public preparation error', async () => {
+  const prepare = provisionFramework()
+  let turn = 0
+  const fixture = await codingHarnessFixture(async () => ++turn === 1
+    ? codingToolReply('fix', 'write_file', { path: 'value.ts', content: fixed, expectedHash: codingDigest(original) })
+    : codingToolReply('submit', 'propose_changeset', { summary: 'Review' }),
+  undefined, {}, undefined, { baselineFiles, approvedTests: approvedTests() })
+  fixtures.push(fixture)
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  prepare.mockImplementation(async input => {
+    if (path.basename(input.directory).startsWith('verify-')) throw new Error('Public dependency preparation failed')
+    await symlink(path.resolve('node_modules'), path.join(input.directory, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+    return { inputDigest: input.plan.inputDigest }
+  })
+  await approve(fixture, 'preparation-error')
+  expect((await fixture.get()).snapshot.status).toBe('paused')
+  const session = (await fixture.store.getNativeCodingSession('native-coding'))!
+  expect(session.deliveryEvidence[0]).toMatchObject({ status: 'evidence_invalid', error: 'Public dependency preparation failed' })
+  const reports = path.join(session.binding!.workspaceRoot, 'approved-results')
+  const files = await readdir(reports)
+  expect(files).toHaveLength(1)
+  expect(JSON.parse(await readFile(path.join(reports, files[0]!), 'utf8'))).toMatchObject({ status: 'passed', totalTests: 1 })
+  expect((await readdir(session.binding!.workspaceRoot)).filter(file => file.startsWith('approved-check-'))).toHaveLength(0)
+  expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(original)
+})
+
 it.each([
   ['skipped test', approvedTest.replace("it('", "it.skip('"), 1, 'Test status skipped'],
   ['wrong count', publicTest, 2, 'expected 2'],
@@ -180,8 +248,14 @@ it('restores baseline configuration and exact approved tests over candidate edit
   const revision = await workspace.freeze({ sessionId: session.id, codingRunId: session.codingRunId, objectiveVersion: session.objectiveVersion,
     policyVersion: previous.policyVersion, testPlanDigest: previous.testPlanDigest, summary: 'Changed test inputs', now: new Date().toISOString() })
   const runner = new CodingCommandRunner(path.join(fixture.root, 'fixed-commands'))
+  await runner.start('unrelated-public', { executable: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'], timeoutMs: 10000, profile: { kind: 'trusted_local' } }, fixture.delivery)
   const result = await runApprovedCodingVerification({ approved: session.binding!.approvedVerification!, workspace, revision, runner,
     profile: { kind: 'trusted_local' }, operationId: 'candidate-config', signal: new AbortController().signal })
+    .finally(async () => {
+      const stillRunning = runner.isActive('unrelated-public')
+      await runner.cancelAll()
+      expect(stillRunning).toBe(true)
+    })
   expect(result).toMatchObject({ status: 'failed', independentVerification: { approvedTests: { totalTests: 1, passedTests: 0 } } })
   expect(JSON.stringify(result.independentVerification?.failedRequirements)).toContain('expected 1 to be 2')
   expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(original)
