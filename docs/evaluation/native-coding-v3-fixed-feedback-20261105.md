@@ -99,3 +99,5 @@ R13 的 05 在固定反馈返回后连续修改失败。原记录显示模型把
 使用 05 保存的原文件字节和原失败参数，在两个临时独立副本中分别运行冻结版本与修复版本：前者返回 `handler_failed`，后者返回确切的摘要不匹配；两边只纠正摘要都能成功应用同一补丁。原评测源码 SHA-256 前后不变、零模型调用，临时副本已删除。原版证明保存在评测工作区 `out/phase2-fixed/edit-conflict-original-replay.json`，新版证明在开发工作区 `out/phase2-fixed/edit-conflict-fixed-replay.json`。这项诊断不改变 R13 的 05 原成绩。
 
 随后本地 `corepack pnpm verify` 全部通过：5,778 项测试通过、22 项跳过，类型与跨平台检查通过；日志为 `out/phase2-fixed/verify-edit-conflict.log`。
+
+该提交的远端运行 `42067467397` 在 Linux 路径别名集成测试触及默认 5 秒上限（实际 5,141 毫秒），同组其余 285 项通过。该测试需要实际 Git、SQLite 和两个验证进程；为它单独设置与相邻集成测试一致的 30 秒等待，不改断言、产品限时或十题限额。随后本地重跑该文件的 17 项全部通过，别名测试耗时 4,131 毫秒。原 CI 失败日志保留在 `out/phase2-fixed/ci-50bf-linux.log`，定向重跑日志为 `out/phase2-fixed/alias-integration-bounded.log`；新提交的远端结果另行记录。

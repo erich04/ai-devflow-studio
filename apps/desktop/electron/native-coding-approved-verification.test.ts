@@ -113,7 +113,7 @@ it('recognizes the exact test file when its report uses a filesystem alias', asy
   await approve(fixture, 'alias-report')
   expect((await fixture.get()).snapshot.status).toBe('completed')
   expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe(fixed)
-})
+}, 30000)
 
 it('returns the public failure separately from passing fixed checks and gates the exact test update before delivery', async () => {
   provisionFramework()
