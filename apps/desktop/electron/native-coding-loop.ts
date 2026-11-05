@@ -571,6 +571,10 @@ export class NativeCodingLoop {
       let receipt = session.toolReceipts.find(item => item.id === call.id)
       if (receipt?.status === 'completed') {
         session = await this.change(session.id, draft => { draft.transcript.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(receipt!.result) }) })
+        if (receipt.error || receipt.result && typeof receipt.result === 'object' && 'error' in receipt.result) {
+          batchFailed = true
+          continue
+        }
         if (name === 'propose_changeset' || name === 'report_findings') return this.enterReview(session.id, signal)
         continue
       }
@@ -600,7 +604,7 @@ export class NativeCodingLoop {
       } catch (error) {
         if (signal.aborted) return this.read(session.id)
         const interrupted = await this.read(session.id)
-        if (interrupted.status === 'waiting_permission') return interrupted
+        if (interrupted.status !== 'running') return interrupted
         const reason = error instanceof Error ? error.message : 'Tool failed'
         // Only a tool with a durable receipt can establish that a failed write did not happen.
         if (receipt.effect !== 'read') {
