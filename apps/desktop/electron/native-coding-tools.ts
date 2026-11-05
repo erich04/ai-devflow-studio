@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { createAgentRuntime, resumeAgentRuntime, requestAgentAction, validateNativeToolValue, redactSensitiveValue, type AgentRuntimeScope, type NativeToolDefinition, type NativeToolJsonSchema } from '@ai-devflow/shared'
-import { createNativeToolRegistry, digestNativeToolValue, type NativeToolRegistration } from './native-tool-registry'
+import { createNativeToolRegistry, digestNativeToolValue, NativeToolExecutionError, type NativeToolRegistration } from './native-tool-registry'
 import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, codingFilePath, codingRelativePath, snapshotCodingTree } from './coding-candidate-workspace'
 import { CodingCommandRunner, type CodingCommandPlan } from './coding-command-runner'
 import type { LocalStore } from './local-store'
@@ -19,6 +19,17 @@ export type CodingTaskAuthority = { scope: AgentRuntimeScope; runVersion: number
 export type CodingSource = { id: string; version: string; title: string; content: string }
 type Edit = { path: string; beforeHash: string | null; afterHash: string | null; content?: string; encoding?: 'base64'; beforeMode: number | null; mode: number }
 type Effect = { id: string; objectiveVersion: number; inputDigest: string; edits: Edit[]; result?: unknown }
+// Only these pre-write conditions may cross the registry's generic error
+// boundary. Their messages contain no file contents or arbitrary exception text.
+class CodingEditPreconditionError extends Error {
+  constructor(kind: 'hash' | 'missing_context' | 'ambiguous_context', currentHash?: string | null) {
+    super(kind === 'hash'
+      ? `File hash mismatch; current file hash is ${currentHash ?? 'missing'}. Re-read the file and use its complete hash, not the workspace revision. No edit was applied.`
+      : kind === 'missing_context'
+        ? 'Patch context was not found. Re-read the affected lines and use their exact text. No edit was applied.'
+        : 'Patch context matched more than once. Use a longer unique before fragment. No edit was applied.')
+  }
+}
 const string = (maxLength = 16000): NativeToolJsonSchema => ({ type: 'string', maxLength })
 const integer = (maximum: number): NativeToolJsonSchema => ({ type: 'integer', minimum: 0, maximum })
 function definition(name: string, description: string, properties: Record<string, NativeToolJsonSchema>, required: string[], effect: CodingToolReceipt['effect'] = 'read'): NativeToolDefinition {
@@ -115,7 +126,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     await saveEffect(effect); return effect.result
   }
   // Reads of one group run at the same time, so each handler finds its own call by the action id.
-  const contexts = new Map<string, Parameters<CodingLoopTools['execute']>[2]>()
+  const contexts = new Map<string, Parameters<CodingLoopTools['execute']>[2] & { editFailure?: CodingEditPreconditionError }>()
   const run = async (name: string, input: Record<string, unknown>, signal: AbortSignal, operationId: string | undefined): Promise<unknown> => {
     const context = operationId === undefined ? undefined : contexts.get(operationId)
     if (!context) throw new Error('Coding tool call has no active context')
@@ -173,13 +184,15 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       const relative = String(input.path); readable(relative)
       if (host.child && !host.child.paths.some(scope => relative === scope || relative.startsWith(`${scope}/`))) throw new Error('Write is outside delegated paths')
       const beforeHash = String(input.expectedHash) || null
-      if (await fileHash(relative) !== beforeHash) throw new Error('File changed since observation')
+      const currentHash = await fileHash(relative)
+      if (currentHash !== beforeHash) throw new CodingEditPreconditionError('hash', currentHash)
       const existing = beforeHash ? await workspace.read(relative) : null
       let content = String(input.content ?? '')
       if (name === 'apply_patch') {
         if (!existing || !input.before) throw new Error('Patch requires an existing file and nonempty context')
         const text = new TextDecoder('utf-8', { fatal: true }).decode(existing.bytes), needle = String(input.before), first = text.indexOf(needle)
-        if (first < 0 || text.indexOf(needle, first + needle.length) >= 0) throw new Error('Patch context is absent or ambiguous')
+        if (first < 0) throw new CodingEditPreconditionError('missing_context')
+        if (text.indexOf(needle, first + needle.length) >= 0) throw new CodingEditPreconditionError('ambiguous_context')
         content = text.slice(0, first) + String(input.after) + text.slice(first + needle.length)
       }
       if (input.encoding === 'base64' && Buffer.from(content, 'base64').toString('base64') !== content) throw new Error('Non-canonical base64 content')
@@ -284,7 +297,12 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
   const handlers = new Set<Promise<unknown>>()
   const registrations: NativeToolRegistration[] = definitions.map(item => ({ definition: item, resourceKinds: ['managed_workspace'], handler: async ({ input, signal, runtime }) => {
     const invocation = run(item.id, input as Record<string, unknown>, signal, runtime.activeAction?.id); handlers.add(invocation)
-    try { return { data: JSON.stringify(await invocation) } } finally { handlers.delete(invocation) }
+    try { return { data: JSON.stringify(await invocation) } }
+    catch (error) {
+      const context = runtime.activeAction && contexts.get(runtime.activeAction.id)
+      if (context && error instanceof CodingEditPreconditionError) context.editFailure = error
+      throw error
+    } finally { handlers.delete(invocation) }
   } }))
   const registry = createNativeToolRegistry({ tools: registrations,
     // Redact leaf values before serializing the transport envelope. Treating
@@ -362,10 +380,17 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
           await host.assertAuthority(); context.signal.throwIfAborted()
           const latest = await host.store.getNativeCodingSession(host.sessionId)
           if (latest?.objectiveVersion !== context.session.objectiveVersion || latest.status !== 'running' || latest.pendingInput.length) throw new Error('Coding tool authority was superseded before execution')
-          contexts.set(context.operationId, context)
+          const executionContext: Parameters<CodingLoopTools['execute']>[2] & { editFailure?: CodingEditPreconditionError } = { ...context }
+          contexts.set(context.operationId, executionContext)
           try {
             const output = await registry.execute({ grant, runtime: requested.runtime, actionId: context.operationId, input, signal: context.signal })
             return JSON.parse((output.value as { data: string }).data) as unknown
+          } catch (error) {
+            // The registry still consumes the grant and records a failed audit.
+            // Cancellation, unknown effects and all other handler errors retain
+            // their original redacted semantics.
+            if (error instanceof NativeToolExecutionError && error.code === 'handler_failed' && executionContext.editFailure) throw executionContext.editFailure
+            throw error
           } finally { contexts.delete(context.operationId) }
         }
     })
