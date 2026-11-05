@@ -100,4 +100,4 @@ R13 的 05 在固定反馈返回后连续修改失败。原记录显示模型把
 
 随后本地 `corepack pnpm verify` 全部通过：5,778 项测试通过、22 项跳过，类型与跨平台检查通过；日志为 `out/phase2-fixed/verify-edit-conflict.log`。
 
-该提交的远端运行 `42067467397` 在 Linux 路径别名集成测试触及默认 5 秒上限（实际 5,141 毫秒），同组其余 285 项通过。该测试需要实际 Git、SQLite 和两个验证进程；为它单独设置与相邻集成测试一致的 30 秒等待，不改断言、产品限时或十题限额。随后本地重跑该文件的 17 项全部通过，别名测试耗时 4,131 毫秒。原 CI 失败日志保留在 `out/phase2-fixed/ci-50bf-linux.log`，定向重跑日志为 `out/phase2-fixed/alias-integration-bounded.log`；新提交的远端结果另行记录。
+该提交的远端运行 `42067467397` 在 Linux 路径别名集成测试触及默认 5 秒上限（实际 5,141 毫秒），同组其余 285 项通过，其余五项 CI 作业通过。该测试需要实际 Git、SQLite 和两个验证进程；为它单独设置与相邻集成测试一致的 30 秒等待，不改断言、产品限时或十题限额。随后本地重跑该文件的 17 项全部通过，别名测试耗时 4,131 毫秒。原 CI 失败日志保留在 `out/phase2-fixed/ci-50bf-linux.log`，定向重跑日志为 `out/phase2-fixed/alias-integration-bounded.log`。修复提交 `1a533e6` 的远端运行 `42070011115` 六项作业全部通过，包含 macOS、Windows、Linux、Postgres 及两项 Docker 检查。
