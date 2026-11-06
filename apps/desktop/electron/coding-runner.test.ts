@@ -98,6 +98,24 @@ describe('coding worktree manager', () => {
     expect(stdout.trim()).toBe(workspace.branchName)
   })
 
+  it('bounds real UUID worktree and ref paths while keeping same-prefix runs isolated', async () => {
+    const repo = await gitRepo(), worktreeRoot = await tempDir('devflow-worktrees-')
+    const runId = 'run-516ab561-3c06-410d-9912-8de948c4eda8'
+    const common = { project: project(repo), runId, nodeId: `${runId}-build`, worktreeRoot }
+    const first = await createManagedCodingWorkspace({ ...common, codingRunId: 'coding-run-d665162f-d27e-42d8-9c1d-f3d5a5b37977' })
+    const second = await createManagedCodingWorkspace({ ...common, codingRunId: 'coding-run-d665162f-d27e-42d8-9c1d-f3d5a5b37978' })
+    for (const workspace of [first, second]) {
+      expect(workspace.branchName.length).toBeLessThanOrEqual(72)
+      expect(path.basename(workspace.worktreePath).length).toBeLessThanOrEqual(64)
+      expect((await execFileAsync('git', ['-C', workspace.worktreePath, 'status', '--porcelain'])).stdout).toBe('')
+    }
+    expect(first.branchName).not.toBe(second.branchName)
+    expect(first.worktreePath).not.toBe(second.worktreePath)
+    await writeFile(path.join(first.worktreePath, 'isolated.txt'), 'first only')
+    await expect(readFile(path.join(second.worktreePath, 'isolated.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(path.join(repo, 'isolated.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('marks a managed worktree as deleted after removing it', async () => {
     const repo = await gitRepo()
     const worktreeRoot = await tempDir('devflow-worktrees-')

@@ -8,7 +8,7 @@
     "dev": "vite",
     "dev:electron": "node ../../scripts/dev-electron.mjs",
     "build": "vite build && corepack pnpm build:electron",
-    "build:electron": "vite build --config vite.electron.config.ts && vite build --config vite.preload.config.ts",
+    "build:electron": "vite build --config vite.electron.config.ts && vite build --config vite.preload.config.ts && node ../../scripts/build-coding-sandbox.mjs",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "electron": "electron ."

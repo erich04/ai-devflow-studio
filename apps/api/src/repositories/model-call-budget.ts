@@ -1,5 +1,5 @@
 import { validModelBudgetContinuation } from './model-budget-continuation'
-import { modelExecutionRollout, type ModelBudgetContinuation } from '@ai-devflow/shared'
+import { modelExecutionRollout, modelTaskBudgetBlock, type ModelBudgetContinuation } from '@ai-devflow/shared'
 import { verifiedModelCallBound, evaluateRuntimeBudgetGuard, projectedModelCallCost, settledModelCallCost, parseModelCallSettlement, isFinalModelCallSettlement, type ModelCallAttempt, type ModelCallQuote, type ModelCallSettlement, type ModelCallAdmission } from '@ai-devflow/shared'
 import type { TeamRepository, TeamRepositorySyncContext } from './team-repository'
 
@@ -19,6 +19,8 @@ export async function admitModelCall(repo: Pick<TeamRepository,'getTeamOverview'
   const used=attempts.filter((row)=>row.approvalId===quote.approvalId && row.projectId===quote.projectId && row.userId===context.userId).reduce((sum,row)=>sum+(effectiveCosts.has(row.id) ? effectiveCosts.get(row.id) ?? Infinity : row.state==='reserved'?row.projectedCostUsd??Infinity:row.costUsd??Infinity),0)
   const remainingApproval=approval ? {...approval,maxAdditionalCostUsd:Math.max(0,approval.maxAdditionalCostUsd-used)} : null
   const decision=evaluateRuntimeBudgetGuard({projectId:quote.projectId,providerId:quote.providerId,policy,currentSpendUsd:spend?.costUsd??0,projectedCostUsd:cost??0,projectedCostKnown:cost!==null,requestedBy:context.userId,now:new Date().toISOString(),approval:remainingApproval})
+  const taskBlock = modelTaskBudgetBlock(quote, attempts, context.userId, cost, effectiveCosts)
+  if (taskBlock) return { accepted: false, decision: { ...decision, status: 'unavailable', blocksRun: true, reason: taskBlock } }
   const pendingEnabled = modelExecutionRollout().pendingBudget
   const pendingCosts = overview.modelCostRecovery?.find(row => row.projectId === quote.projectId)?.records ?? []
   if (!pendingEnabled && policy?.enabled && (quote.continuationId || pendingCosts.some(row => row.affectsCurrentBudget && !row.isReservation && row.costUsd === null))) {

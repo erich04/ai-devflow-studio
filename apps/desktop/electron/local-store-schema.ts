@@ -2,7 +2,7 @@ import type { Database } from 'sql.js'
 import { createMemoryLearningTables } from './automatic-memory-store'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 42
+export const CURRENT_SCHEMA_VERSION = 43
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -3046,6 +3046,50 @@ export const schemaMigrations: readonly SchemaMigration[] = [
       check (json_extract(json, '$.changeSetDigest') = change_set_digest)
     );
     create index if not exists idx_coding_change_reviews_run on coding_change_reviews(change_set_id, created_at, id);
+      `)
+    },
+  },
+  {
+    version: 43,
+    migrate(db, hooks) {
+      // V3's earlier schema 42 persisted sessions; main's 42 added change-set revisions.
+      // Only replay main's table rebuild for databases that still have the old layout.
+      if (!db.exec("select 1 from pragma_table_info('coding_change_sets') where name = 'revision_index'").length) {
+        schemaMigrations.find(migration => migration.version === 42)!.migrate(db, hooks)
+      }
+      // Earlier draft versions also skipped the Hindsight or project-memory tables.
+      db.run(`
+        create table if not exists hindsight_configurations (
+          generation text primary key, project_id text not null, json text not null
+        );
+        create index if not exists hindsight_config_project on hindsight_configurations(project_id);
+        create table if not exists hindsight_projections (
+          id text primary key, project_id text not null, json text not null
+        );
+        create index if not exists hindsight_projection_project on hindsight_projections(project_id);
+        create table if not exists project_memory_configurations (
+          project_id text primary key references local_projects(id) on delete cascade,
+          json text not null
+        );
+        create table if not exists project_memory_documents (
+          id text primary key,
+          project_id text not null references local_projects(id) on delete cascade,
+          bank_id text not null,
+          document_id text not null,
+          json text not null,
+          unique (bank_id, document_id)
+        );
+        create index if not exists idx_project_memory_documents_project on project_memory_documents(project_id);
+        create table if not exists native_coding_sessions (
+          id text primary key,
+          local_project_id text not null references local_projects(id) on delete cascade,
+          coding_run_id text not null unique,
+          version integer not null check (version > 0),
+          status text not null,
+          updated_at text not null,
+          json text not null
+        );
+        create index if not exists native_coding_sessions_project on native_coding_sessions(local_project_id, updated_at);
       `)
     },
   },

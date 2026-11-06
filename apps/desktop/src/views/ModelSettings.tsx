@@ -122,6 +122,7 @@ export function ModelSettings({
 }) {
   const [codingConfiguration, setCodingConfiguration] = useState<CodingRuntimeConfiguration | null>(null)
   const [codingExecutor, setCodingExecutor] = useState<'native-model' | 'opencode-http'>('native-model')
+  const [nativeVersion, setNativeVersion] = useState<2 | 3>(3)
   const [codingProviderId, setCodingProviderId] = useState('')
   const [providerRemovalTarget, setProviderRemovalTarget] = useState<AgentProviderConfig | null>(null)
   const [newProviderThinking, setNewProviderThinking] = useState<ProviderThinkingConfiguration>({ mode: 'default' })
@@ -156,6 +157,7 @@ export function ModelSettings({
       opencodeDraftEdited.current = false
       setCodingConfiguration(configuration)
       setCodingExecutor(configuration?.executor ?? 'native-model')
+      setNativeVersion(configuration?.executor === 'native-model' ? configuration.nativeVersion ?? 2 : 3)
       setCodingProviderId(configuration?.providerId ?? selectedProviderId)
       if (configuration?.executor === 'opencode-http') {
         setOpencodeProviderId(configuration.providerId)
@@ -214,6 +216,7 @@ export function ModelSettings({
               projectId: localProjectId,
               executor: 'native-model',
               providerId: codingProviderId,
+              nativeVersion,
             }
           : {
               projectId: localProjectId,
@@ -378,8 +381,12 @@ export function ModelSettings({
               <strong>{codingExecutor === 'native-model' ? 'DevFlow Native（内置编码执行器）' : 'OpenCode'}</strong>
             </div>
             <p>只影响开发实现；需求澄清、方案设计和讨论栏在各自位置选择模型。</p>
-            {/* Version and former names are reference, not part of the choice (#227). */}
-            {codingExecutor === 'native-model' ? <details className="readiness-details"><summary>关于 DevFlow Native</summary><p className="empty-note">执行器版本：v2。旧称 Native Coding Agent / Native Executor，均指 DevFlow Native。</p></details> : null}
+            {codingExecutor === 'native-model' ? <label className="field-label">Native 版本
+              <select aria-label="Native 版本" value={nativeVersion} onChange={event => setNativeVersion(Number(event.target.value) as 2 | 3)}>
+                <option value={3}>v3 · 多轮调查、候选编辑与最终审查</option>
+                <option value={2}>v2 · 旧版有限修改流程</option>
+              </select>
+            </label> : null}
             <label>
               执行工具
               <select aria-label="执行工具" value={codingExecutor} onChange={(event) => setCodingExecutor(event.target.value as 'native-model' | 'opencode-http')}>

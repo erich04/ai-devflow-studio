@@ -4,6 +4,9 @@ import { defineConfig } from 'vite'
 const nodeExternals = builtinModules.flatMap((name) => [name, `node:${name}`])
 
 export default defineConfig({
+  // Bundled CommonJS dependencies (TypeScript's language service) still consult
+  // these globals. Electron's Node 24 main entry is ESM, including in packages.
+  define: { __filename: 'import.meta.filename', __dirname: 'import.meta.dirname' },
   build: {
     outDir: 'dist-electron',
     emptyOutDir: true,

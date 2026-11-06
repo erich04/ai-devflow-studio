@@ -304,3 +304,42 @@ function validatesValue(schema: NativeToolJsonSchema, value: unknown, depth: num
 export function validateNativeToolValue(schema: NativeToolJsonSchema, value: unknown): boolean {
   return isValidSchema(schema, 1) && validatesValue(schema, value, 1)
 }
+
+/** Explain the first failure using schema facts only; never echo supplied values. */
+export function nativeToolValueProblem(schema: NativeToolJsonSchema, value: unknown): string | undefined {
+  if (!isValidSchema(schema, 1)) return 'Tool schema is invalid'
+  const explain = (current: NativeToolJsonSchema, input: unknown, location: string, depth: number): string | undefined => {
+    if (validatesValue(current, input, depth)) return undefined
+    if (current.type === 'string') {
+      if (typeof input !== 'string') return `${location} must be a string`
+      if (input.length < (current.minLength ?? 0)) return `${location} must contain at least ${current.minLength} characters`
+      if (input.length > (current.maxLength ?? MAX_SCHEMA_STRING_LENGTH)) return `${location} must contain at most ${current.maxLength ?? MAX_SCHEMA_STRING_LENGTH} characters`
+      return `${location} must match one of the declared enum values`
+    }
+    if (current.type === 'integer' || current.type === 'number') {
+      if (!isFiniteNumber(input) || (current.type === 'integer' && !Number.isInteger(input))) return `${location} must be a finite ${current.type}`
+      if (current.minimum !== undefined && input < current.minimum) return `${location} must be >= ${current.minimum}`
+      return `${location} must be <= ${current.maximum}`
+    }
+    if (current.type === 'boolean') return `${location} must be a boolean`
+    if (current.type === 'array') {
+      if (!Array.isArray(input)) return `${location} must be an array`
+      if (input.length > current.maxItems) return `${location} must contain at most ${current.maxItems} items`
+      for (let index = 0; index < input.length; index++) {
+        const problem = explain(current.items, input[index], `${location}[${index}]`, depth + 1)
+        if (problem) return problem
+      }
+    }
+    if (current.type === 'object') {
+      if (!isPlainObject(input)) return `${location} must be a plain object`
+      for (const key of current.required) if (!Object.hasOwn(input, key)) return `${location}.${key} is required`
+      if (Object.keys(input).some(key => !Object.hasOwn(current.properties, key))) return `${location} contains undeclared properties; use only the declared schema fields`
+      for (const key of Object.keys(input)) {
+        const problem = explain(current.properties[key]!, input[key], `${location}.${key}`, depth + 1)
+        if (problem) return problem
+      }
+    }
+    return `${location} does not match the declared schema`
+  }
+  return explain(schema, value, '$', 1)
+}

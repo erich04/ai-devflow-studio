@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "scripts/native-coding-focused-live.mts",
+    "scripts/native-coding-closure-live.mts",
+    "scripts/native-coding-cache-probe.ts",
+    "scripts/native-coding-live-support.ts",
+    "scripts/native-coding-trial-live.mts",
+    "scripts/native-coding-endpoint-live.mts",
+    "scripts/native-coding-interactive-worker.mts",
+    "scripts/native-coding-deep-live.mts",
+    "scripts/native-coding-public-plans.mts"
+  ]
+}

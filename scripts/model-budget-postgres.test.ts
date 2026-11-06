@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { verifiedModelCallBound, type ModelCallQuote, type TeamSession } from '../packages/shared/src/index'
+import { requestInputTokenBound, verifiedModelCallBound, type ModelCallAttempt, type ModelCallQuote, type ModelTaskBudget, type TeamSession } from '../packages/shared/src/index'
 import { createPostgresPoolClient } from '../apps/api/src/db/postgres-client'
 import { readTeamMigrationCatalog, runTeamMigrations } from '../apps/api/src/db/migrate'
 import { seedDemoTeamData } from '../apps/api/src/db/seed-demo'
@@ -83,5 +83,47 @@ describe.skipIf(!databaseUrl)('per-call budget and continuation with real Postgr
     const rows = await db.query<{ json: { costUsd: number | null } }>('SELECT json FROM model_call_attempts WHERE id=$1', [legacy.id])
     expect(rows[0]!.json.costUsd).toBeNull()
     await expect(repo.confirmModelBudgetContinuation(command, actor)).rejects.toThrow(/费用记录已变化/)
+  }, 120_000)
+
+  it('atomically shares a root task cap across concurrent child reservations and durable restart', async () => {
+    let repo = createPostgresTeamRepository(db)
+    const now = new Date().toISOString()
+    await repo.saveRuntimeBudgetPolicy({ projectId: 'p-payments', enabled: false, monthlyLimitUsd: 100, warningThresholdUsd: 0, currency: 'USD', updatedAt: now }, actor)
+    const rootTask = { rootId: 'native-root', taskId: 'native-root', rootMaxTokens: 300, maxTokens: 300, rootMaxCostUsd: 10, maxCostUsd: 10 }
+    const quote = (id: string, task = rootTask): ModelCallQuote => ({ id, projectId: 'p-payments', providerId: 'deepseek', billingProvider: 'deepseek', model: 'deepseek-flash', inputTokens: 100, maxOutputTokens: 100, createdAt: now, task, operation: { id, version: 'c'.repeat(64), purpose: 'coding' } })
+    expect((await repo.reserveModelCall(quote('root-step'), actor)).accepted).toBe(true)
+    await repo.settleModelCall({ id: 'root-step', projectId: 'p-payments', state: 'completed', usage: { inputTokens: 20, outputTokens: 10, cacheReadTokens: 0, cacheMissTokens: 20, cacheStatus: 'complete', usageCompleteness: 'final' } }, actor)
+    const children = ['child-a', 'child-b'].map(id => quote(id, { ...rootTask, taskId: id, parentTaskId: rootTask.rootId, maxTokens: 200 } as typeof rootTask))
+    const results = await Promise.all(children.map(child => repo.reserveModelCall(child, actor)))
+    expect(results.filter(result => result.accepted)).toHaveLength(1)
+    await db.close(); db = createPostgresPoolClient(config(scopedUrl)); repo = createPostgresTeamRepository(db)
+    expect((await repo.reserveModelCall(quote('another-root-step'), actor)).accepted).toBe(false)
+    const admitted = children[results.findIndex(result => result.accepted)]!
+    await repo.settleModelCall({ id: admitted.id, projectId: 'p-payments', state: 'not_sent' }, actor)
+    expect((await repo.reserveModelCall(quote('released-capacity'), actor)).accepted).toBe(true)
+  }, 120_000)
+  it('sizes Native v3 reservations from the measured request and leaves cache hits out of the shared root token cap', async () => {
+    let repo = createPostgresTeamRepository(db)
+    const now = new Date().toISOString()
+    await repo.saveRuntimeBudgetPolicy({ projectId: 'p-payments', enabled: false, monthlyLimitUsd: 100, warningThresholdUsd: 0, currency: 'USD', updatedAt: now }, actor)
+    // USD 0.38168931 is what r8 task 10 had left; the full-context bound does not fit it, the measured one does.
+    const rootTask: ModelTaskBudget = { rootId: 'measured-root', taskId: 'measured-root', rootMaxTokens: 140_000, maxTokens: 140_000, rootMaxCostUsd: 0.38168931, maxCostUsd: 0.38168931 }
+    const quote = (id: string, task = rootTask): ModelCallQuote => ({ id, projectId: 'p-payments', providerId: 'deepseek', billingProvider: 'deepseek', model: 'deepseek-flash',
+      boundBasis: 'deepseek-request-bytes-v1', inputTokens: requestInputTokenBound('x'.repeat(60_000)), maxOutputTokens: 65536, createdAt: now, task, operation: { id, version: 'd'.repeat(64), purpose: 'coding' } })
+    expect((await repo.reserveModelCall({ ...quote('full-context-step'), boundBasis: 'deepseek-context-v1', inputTokens: 1048576 }, actor)).accepted).toBe(false)
+    // Each 60,000-byte step reserves 68,192 input and 65,536 output tokens.
+    expect((await repo.reserveModelCall(quote('measured-step'), actor)).accepted).toBe(true)
+    await repo.settleModelCall({ id: 'measured-step', projectId: 'p-payments', state: 'completed', usage: { inputTokens: 16_000, cacheReadTokens: 15_500, cacheMissTokens: 500, outputTokens: 400, cacheStatus: 'complete', usageCompleteness: 'final' } }, actor)
+    // 900 counted tokens leave room for one child reservation; counting the 15,500 hits would leave none.
+    const children = ['measured-child-a', 'measured-child-b'].map(id => quote(id, { ...rootTask, taskId: id, parentTaskId: rootTask.rootId }))
+    const results = await Promise.all(children.map(child => repo.reserveModelCall(child, actor)))
+    expect(results.filter(result => result.accepted)).toHaveLength(1)
+    await db.close(); db = createPostgresPoolClient(config(scopedUrl)); repo = createPostgresTeamRepository(db)
+    const admitted = children[results.findIndex(result => result.accepted)]!
+    const [row] = await db.query<{ json: ModelCallAttempt }>('SELECT json FROM model_call_attempts WHERE id=$1', [admitted.id])
+    expect(row!.json.verifiedBound).toMatchObject({ basis: 'deepseek-request-bytes-v1', inputTokenBound: 68_192, maxOutputTokens: 65536 })
+    expect((await repo.reserveModelCall(quote('measured-step-2'), actor)).accepted).toBe(false)
+    await repo.settleModelCall({ id: admitted.id, projectId: 'p-payments', state: 'not_sent' }, actor)
+    expect((await repo.reserveModelCall(quote('measured-step-3'), actor)).accepted).toBe(true)
   }, 120_000)
 })

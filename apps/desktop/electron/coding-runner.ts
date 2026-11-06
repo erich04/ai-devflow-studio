@@ -124,10 +124,15 @@ export async function createManagedCodingWorkspace(
 
   const baseBranch = await currentBranch(input.project.path)
   const baseCommitSha = await currentCommit(input.project.path)
-  const branchName = safeBranchName(`devflow/${input.runId}-${input.nodeId}-${input.codingRunId}`)
+  // UUID-rich workflow/node IDs otherwise exceed Windows Git ref and cwd
+  // limits. Persisted workspaces keep their original paths; only new names use
+  // a short readable prefix plus a digest of the full, untruncated identity.
+  const identity = createHash('sha256').update(JSON.stringify([input.project.id, input.runId, input.nodeId, input.codingRunId])).digest('hex').slice(0, 32)
+  const segment = `${safePathSegment(`${input.runId}-${input.nodeId}`).slice(0, 24)}-${identity}`
+  const branchName = safeBranchName(`devflow/${segment}`)
   const root = input.worktreeRoot ?? path.join(os.tmpdir(), 'devflow-coding-worktrees')
   const workspaceId = `workspace-${input.codingRunId}`
-  const worktreePath = path.join(root, safePathSegment(`${input.runId}-${input.nodeId}-${input.codingRunId}`))
+  const worktreePath = path.join(root, segment)
 
   await mkdir(root, { recursive: true })
   await execGit(input.project.path, ['worktree', 'add', '-b', branchName, worktreePath, 'HEAD'])

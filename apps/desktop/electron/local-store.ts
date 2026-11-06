@@ -1,5 +1,6 @@
 import type { CodingChangeReview } from '@ai-devflow/shared'
 import { ConversationContentStore } from './conversation-content-store.js'
+import { parseNativeCodingSession, type NativeCodingSession } from './native-coding-session.js'
 import type { ModelCallSettlement, ModelCallAccountingScope, ModelCallSettlementReceipt, StoredModelCallSettlement } from '@ai-devflow/shared'
 import { storedModelCallSettlement } from './model-cost-recovery'
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
@@ -463,6 +464,9 @@ export type CodingAgentMutation = {
   permissionDecisions?: readonly CodingPermissionDecision[]
   events?: readonly CodingAgentEvent[]
   diffArtifacts?: readonly CodingDiffArtifact[]
+  testEvidence?: readonly TestEvidence[]
+  artifacts?: readonly Artifact[]
+  workflowEvents?: readonly AgentEvent[]
   changeSets?: readonly CodingChangeSet[]
 }
 
@@ -831,6 +835,9 @@ export type LocalProjectMemoryPrincipalResult =
   | { status: 'ambiguous' | 'project_not_found' }
 
 export type LocalStore = {
+  getNativeCodingSession(id: string): Promise<NativeCodingSession | undefined>
+  listNativeCodingSessions(projectId: string): Promise<NativeCodingSession[]>
+  saveNativeCodingSession(session: NativeCodingSession, expectedVersion: number): Promise<boolean>
   resolveLocalProjectMemoryPrincipal(projectId: string): Promise<LocalProjectMemoryPrincipalResult>
   getHindsightConfiguration(projectId: string): Promise<HindsightConfiguration | null>
   getProjectMemoryConfiguration(projectId: string): Promise<ProjectMemoryConfiguration | null>
@@ -4694,6 +4701,30 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   private get conversationContent() { return new ConversationContentStore(`${this.dbPath}.contents`) }
+
+  async getNativeCodingSession(id: string): Promise<NativeCodingSession | undefined> {
+    const row = selectJson<unknown>(this.db, 'select json from native_coding_sessions where id = ?', [id])[0]
+    return row === undefined ? undefined : parseNativeCodingSession(await this.conversationContent.decode<NativeCodingSession>(row))
+  }
+
+  async listNativeCodingSessions(projectId: string): Promise<NativeCodingSession[]> {
+    const rows = selectJson<unknown>(this.db, 'select json from native_coding_sessions where local_project_id = ? order by updated_at desc, id', [projectId])
+    return Promise.all(rows.map(async row => parseNativeCodingSession(await this.conversationContent.decode<NativeCodingSession>(row))))
+  }
+
+  async saveNativeCodingSession(session: NativeCodingSession, expectedVersion: number): Promise<boolean> {
+    const previous = await this.getNativeCodingSession(session.id)
+    if ((previous?.version ?? 0) !== expectedVersion) return false
+    parseNativeCodingSession(session, previous)
+    if (session.version !== expectedVersion + 1) throw new Error('Invalid coding session revision')
+    if (!selectJson<LocalProject>(this.db, 'select json from local_projects where id = ?', [session.localProjectId]).length) throw new Error('Coding session project not found')
+    const stored = await this.conversationContent.encode(session.id, session)
+    this.db.run(`insert into native_coding_sessions (id, local_project_id, coding_run_id, version, status, updated_at, json) values (?, ?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set version = excluded.version, status = excluded.status, updated_at = excluded.updated_at, json = excluded.json`,
+    [session.id, session.localProjectId, session.codingRunId, session.version, session.status, session.updatedAt, JSON.stringify(stored)])
+    await this.persist()
+    return true
+  }
 
   async appendWorkbenchResponseChunk(conversationId: string, requestId: string, channel: 'content' | 'reasoning', text: string): Promise<void> {
     await this.conversationContent.appendStream(conversationId, requestId, channel, text)
@@ -13197,7 +13228,7 @@ class SqlJsLocalStore implements LocalStore {
     const providerValid =
       Boolean(configuration.providerId.trim()) &&
       configuration.providerId === configuration.providerId.trim()
-    const executorValid = configuration.executor === 'native-model' || (
+    const executorValid = (configuration.executor === 'native-model' && [undefined, 2, 3].includes(configuration.nativeVersion)) || (
       configuration.executor === 'opencode-http' &&
       path.isAbsolute(configuration.binaryPath) &&
       configuration.binaryPath === configuration.binaryPath.trim() &&
@@ -13541,6 +13572,10 @@ class SqlJsLocalStore implements LocalStore {
       }
     }
 
+    for (const record of [...(mutation.testEvidence ?? []), ...(mutation.artifacts ?? []), ...(mutation.workflowEvents ?? [])]) {
+      if (record.runId !== currentRun.runId || record.nodeId !== currentRun.nodeId || ('projectId' in record && record.projectId !== currentRun.projectId)) throw new Error('Coding completion evidence belongs to another scope')
+    }
+
     if ((mutation.changeSets?.length ?? 0) > 1) throw new Error('Only one change revision may be committed')
     for (const change of mutation.changeSets ?? []) {
       if (change.codingRunId !== currentRun.id || change.projectId !== currentRun.projectId || change.workspaceId !== currentRun.managedWorkspaceId || nextRun.changeSetId !== change.id ||
@@ -13572,6 +13607,12 @@ class SqlJsLocalStore implements LocalStore {
       for (const artifact of mutation.diffArtifacts ?? []) {
         writeCodingDiffArtifact(this.db, artifact)
       }
+      for (const evidence of mutation.testEvidence ?? []) {
+        writeTestEvidence(this.db, evidence)
+        this.enqueueCanonicalRemoteSyncOperation({ kind: 'test-evidence-summary', localProjectId: evidence.projectId, runId: evidence.runId, entityId: evidence.id, createdAt: evidence.createdAt })
+      }
+      for (const artifact of mutation.artifacts ?? []) { assertImmutableWorkflowArtifactWrite(this.db, artifact); writeArtifact(this.db, artifact) }
+      for (const event of mutation.workflowEvents ?? []) writeAgentEvent(this.db, event)
       this.db.run('commit')
     } catch (error) {
       this.db.run('rollback')
@@ -14405,6 +14446,9 @@ class SqlJsLocalStore implements LocalStore {
 // Direct methods access state or handle in-memory authority/lifecycle; Memory retrieval is
 // durable because it also records expiry and retrieval audit state.
 const LOCAL_STORE_METHOD_EXECUTION = {
+  getNativeCodingSession: 'direct',
+  listNativeCodingSessions: 'direct',
+  saveNativeCodingSession: 'durable',
 
   resolveLocalProjectMemoryPrincipal: 'durable',
   getHindsightConfiguration: 'direct',
@@ -14642,8 +14686,11 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
       : new SQL.Database()
 
     const hasSchema = db.exec("select name from sqlite_master where type = 'table' and name = 'schema_meta'")[0]?.values.length
-    if (existsSync(options.dbPath) && hasSchema && readLocalStoreSchemaVersion(db) < 42) {
-      try { await copyFile(options.dbPath, `${options.dbPath}.v41.bak`, constants.COPYFILE_EXCL) }
+    const originalVersion = hasSchema ? readLocalStoreSchemaVersion(db) : undefined
+    if (originalVersion !== undefined && originalVersion <= 42) {
+      // Older installs already use .v41.bak; preserve it when upgrading either schema 42.
+      const backup = originalVersion === 42 ? 'v42.bak' : 'v41.bak'
+      try { await copyFile(options.dbPath, `${options.dbPath}.${backup}`, constants.COPYFILE_EXCL) }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     }
     migrateLocalStoreSchema(db, {

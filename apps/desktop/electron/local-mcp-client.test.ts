@@ -16,6 +16,7 @@ import {
 } from './local-mcp-client.js'
 import type { LocalMcpInstallation } from './local-mcp-installation.js'
 import { createNativeToolRegistry, digestNativeToolValue } from './native-tool-registry.js'
+import { CodingCommandRunner } from './coding-command-runner.js'
 
 const tempDirs: string[] = []
 const platformEnvironmentNames = [
@@ -238,6 +239,18 @@ function runtimeWaitingForMcpTool(capabilitySetDigest: string, message = 'hello'
 }
 
 describe('main-owned local stdio MCP client', () => {
+  it('runs the real MCP handshake and tool protocol through the durable coding worker', async () => {
+    const { installation, localProjectPath } = await fixtureInstallation()
+    const runner = new CodingCommandRunner(path.join(localProjectPath, 'coding-command-receipts'))
+    const client = await createLocalMcpClient({ installation, localProjectPath, environment: {}, authorizeCall: authorizeFixtureCall,
+      spawnProcess: (executable, args, options) => runner.startStdio('mcp-protocol', executable, args, options.cwd, options.env) })
+    try {
+      expect(await client.callTool({ toolName: 'fixture.echo', input: { message: 'managed protocol' } })).toMatchObject({ echoed: 'managed protocol' })
+    } finally { await client.shutdown(); await runner.wait('mcp-protocol') }
+    expect(client.closed).toBe(true)
+    expect(runner.hasActiveCommands).toBe(false)
+    expect((await runner.get('mcp-protocol'))!.completedAt).toBeTruthy()
+  })
   it('rechecks installation authority immediately before spawn and creates no process on denial', async () => {
     const { installation, localProjectPath } = await fixtureInstallation()
     const markerPath = path.join(localProjectPath, 'spawned.marker')

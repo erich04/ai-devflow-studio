@@ -1,7 +1,7 @@
 const randomUUID = () => globalThis.crypto.randomUUID()
 import { AgentProviderRequestError, reviewProviderCapabilities, type AgentProvider } from './agent-review'
 import type { AgentProviderUsage } from './domain'
-import type { ModelCallQuote, ModelCallSettlement, ModelCallAdmission } from './model-call-budget'
+import { requestInputTokenBound, type ModelCallQuote, type ModelCallSettlement, type ModelCallAdmission } from './model-call-budget'
 
 export type ModelCallGovernance = {
   reserve(input: ModelCallQuote, signal?: AbortSignal): Promise<ModelCallAdmission>
@@ -18,6 +18,8 @@ export async function governedModelCall<T extends CallResult>(input: {
   prompt: string; maxOutputTokens?: number; signal?: AbortSignal; approvalId?: string
   boundBasis?: ModelCallQuote['boundBasis']
   operation?: ModelCallQuote['operation']
+  attemptId?: string
+  taskBudget?: ModelCallQuote['task']
   action: (observe: (usage: AgentProviderUsage) => Promise<void>) => Promise<T>
 }): Promise<T> {
   const { governance: g, provider: p } = input
@@ -26,10 +28,13 @@ export async function governedModelCall<T extends CallResult>(input: {
     try { await g.settle(settlement) } catch { /* Keep the durable result; atomic admission still counts its reservation. */ }
   }
   input.signal?.throwIfAborted()
-  const id = `model-call-${randomUUID()}`
+  const id = input.attemptId ?? `model-call-${randomUUID()}`
+  if (!/^[a-zA-Z0-9_.:-]{1,200}$/u.test(id) || activeAttempts.has(id)) throw new Error('Invalid or active model attempt')
   const quote: ModelCallQuote = { id, projectId: input.projectId, providerId: p.id, model: p.model, createdAt: new Date().toISOString(),
-    inputTokens: input.boundBasis === 'deepseek-context-v1' ? 1_048_576 : Math.ceil(new TextEncoder().encode(input.prompt).length / 4) + 1024, maxOutputTokens: input.maxOutputTokens ?? p.defaultReviewOutputTokens ?? null,
+    inputTokens: input.boundBasis === 'deepseek-context-v1' ? 1_048_576 : input.boundBasis === 'deepseek-request-bytes-v1' ? requestInputTokenBound(input.prompt)
+      : Math.ceil(new TextEncoder().encode(input.prompt).length / 4) + 1024, maxOutputTokens: input.maxOutputTokens ?? p.defaultReviewOutputTokens ?? null,
     ...(input.boundBasis ? { boundBasis: input.boundBasis } : {}), ...(input.operation ? { operation: input.operation } : {}),
+    ...(input.taskBudget ? { task: input.taskBudget } : {}),
     billingProvider: p.billingProvider ?? 'openai_compatible', ...(input.approvalId ? { approvalId: input.approvalId } : {}) }
   const admission = await g.reserve(quote, input.signal)
   if (!admission.accepted || admission.decision.blocksRun) {
@@ -93,9 +98,11 @@ export function governAgentProvider(provider: AgentProvider, projectId: string, 
       ...(input.signal ? { signal: input.signal } : {}), action: observe => provider.generateWorkflowArtifact!({ ...input, onUsage: async usage => { await observe(usage); await input.onUsage?.(usage) } }) }) } : {}),
     ...(provider.completeNativeConversation ? { completeNativeConversation: async (input: Parameters<NonNullable<AgentProvider['completeNativeConversation']>>[0]) => {
       provider.validateNativeRequest?.(input)
-      const prompt = JSON.stringify({ system: input.systemPrompt, messages: input.messages, tools: input.tools })
       const maxOutputTokens = provider.resolveRequestPolicy?.(input).maxOutputTokens ?? input.maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192
-      return governedModelCall({ ...base, operation: await operationFor(prompt, input.purpose ?? 'conversation', input.operationKey, input.operationKey !== undefined), prompt, maxOutputTokens,
+      const prompt = provider.serializeNativeRequest?.({ ...input, maxOutputTokens }) ?? JSON.stringify({ system: input.systemPrompt, messages: input.messages, tools: input.tools })
+      // Coding task steps reserve from the exact wire request; other conversations keep the full-context bound.
+      const measured = boundBasis && input.taskBudget && provider.serializeNativeRequest ? { boundBasis: 'deepseek-request-bytes-v1' as const } : {}
+      return governedModelCall({ ...base, ...measured, ...(input.taskBudget ? { taskBudget: input.taskBudget } : {}), ...(input.budgetAttemptId ? { attemptId: input.budgetAttemptId } : {}), operation: input.nativeOperation ?? await operationFor(prompt, input.purpose ?? 'conversation', input.operationKey, input.operationKey !== undefined), prompt, maxOutputTokens,
         ...(input.signal ? { signal: input.signal } : {}), action: observe => provider.completeNativeConversation!({ ...input, maxOutputTokens,
           onUsage: async usage => { await observe(usage); await input.onUsage?.(usage) } }) })
     } } : {}),

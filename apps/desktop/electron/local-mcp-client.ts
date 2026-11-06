@@ -303,6 +303,7 @@ export async function createLocalMcpClient(input: {
   localProjectPath: string
   environment: Readonly<Record<string, string | undefined>>
   authorizeCall: (installation: LocalMcpInstallation) => Promise<void>
+  spawnProcess?: (executable: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => Promise<ChildProcessWithoutNullStreams>
 }): Promise<LocalMcpClient> {
   const installation = parseLocalMcpInstallation(input.installation)
   if (!installation.enabled) throw safeError('local_mcp_disabled')
@@ -318,7 +319,7 @@ export async function createLocalMcpClient(input: {
   } catch {
     throw safeError('local_mcp_installation_stale')
   }
-  const child = spawn(executablePath, installation.args, {
+  const child = input.spawnProcess ? await input.spawnProcess(executablePath, installation.args, { cwd: canonicalProjectPath, env: environment }) : spawn(executablePath, installation.args, {
     cwd: canonicalProjectPath,
     env: environment,
     shell: false,

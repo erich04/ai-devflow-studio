@@ -61,7 +61,10 @@ const repositoryId = '98765'
 const desktopToken = 'desktop-v15-gate-token'
 const ephemeralToken = 'ghs_deterministic_v15_token_123456'
 const rawProviderFailure = '/private/provider/output TOKEN_SHOULD_NOT_PERSIST'
-const FULL_DELIVERY_GATE_TIMEOUT_MS = 15_000
+// The full Git/API/SQLite crash-recovery fixtures exceeded 15 s on hosted Windows.
+// Keep assertion coverage and production deadlines; only these full-flow tests
+// get the platform allowance, rather than raising the global Vitest timeout.
+const FULL_DELIVERY_GATE_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 15_000
 
 const ownerPrincipal = {
   session: {

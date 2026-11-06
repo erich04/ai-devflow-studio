@@ -1,0 +1,1050 @@
+{
+  "schemaVersion": 1,
+  "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+  "taskCount": 35,
+  "selected": 35,
+  "qualified": 31,
+  "results": [
+    {
+      "taskId": "devflow-history-01",
+      "baseSha": "d2190170337b904b88b3df5f7cbbedc7f1897c0b",
+      "referenceSha": "7978b92d35163e111b7f57ad53112529ea63c465",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": false,
+      "observations": {
+        "baseline": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "ccd99c395c935d9fafa1b0d54bbade40746876338e3ae28ad21de6a7fec8f5a8",
+          "passed": 3,
+          "failed": 0,
+          "total": 3,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "c7eb5a1b3cd606b1d0b65adcafccdebeb7f7dce72acb5ef4b7ea28d055d40486",
+          "passed": 3,
+          "failed": 0,
+          "total": 3,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T18:57:28.588Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-02",
+      "baseSha": "d8e25fcc085c840f812c2616cd8779c10eadbc6c",
+      "referenceSha": "d2190170337b904b88b3df5f7cbbedc7f1897c0b",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "8f20c50a6e430b63aa713b42f67e0e9c35cdb9c530b37d9156578770cba89ac5",
+          "passed": 80,
+          "failed": 1,
+          "total": 81,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "56761eb55087a6407b0016a794939c5efd6b99306385f51b66ff9a9cfb0aa40b",
+          "passed": 81,
+          "failed": 0,
+          "total": 81,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T18:58:07.021Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-03",
+      "baseSha": "a8c5e3b4830e7ceb27c9e5c04869a6b0a0ed550e",
+      "referenceSha": "ed26bc9aeee11fd79a774789ec654aec2927b295",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "c66fb07d9c6c2fe7a6e5ac4b27ab1abb564d4047126962c007828cb72fac1f30",
+          "passed": 323,
+          "failed": 16,
+          "total": 339,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "8e68224ca81f8642c910e3b6865279be40404f5ff2802c2da3c45247d06fcca6",
+          "passed": 339,
+          "failed": 0,
+          "total": 339,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:01:04.429Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-04",
+      "baseSha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "referenceSha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "300582046eda7a8b3c10ed233736ccacd9e1dc79976cba6a2f5108ef2edae45a",
+          "passed": 102,
+          "failed": 9,
+          "total": 111,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "714772d74a6d7b754bc55d136e19f780bd01384761dfbaa99942550f717dbd47",
+          "passed": 111,
+          "failed": 0,
+          "total": 111,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:01:37.171Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-05",
+      "baseSha": "cb9cb27c4399ccf910aa3bbde7ec640e82f2b7f5",
+      "referenceSha": "953ddf61dcf7a8469b189dbed8c1989a40efcb76",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "4f082d5c099547391f37028817c32019ba66bd293546b7e594281d8b7e117843",
+          "passed": 41,
+          "failed": 5,
+          "total": 46,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "6a696789a50138391e84fab0642f832d7903a346527f42c9110eb8f6f264008c",
+          "passed": 46,
+          "failed": 0,
+          "total": 46,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:01:55.665Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-06",
+      "baseSha": "722659d18017fa9864d7e85e513c8b8f768c561a",
+      "referenceSha": "5bd602bb61691daaec26e0d8a5b7c0e20d118cbe",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "04e31165b40db11a4758c5f91a9e275f33ceebe651c62056a3828aff12d14c1a",
+          "passed": 202,
+          "failed": 13,
+          "total": 215,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "4d15a59992b21a6bd7602c0eeba4f4c12b2c7bae6277ac181f63f1e80e91318c",
+          "passed": 215,
+          "failed": 0,
+          "total": 215,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:02:29.259Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-07",
+      "baseSha": "db05117881cc80bc636afe7e572b03e52eef4fdf",
+      "referenceSha": "5f5b1b0864fcce39047e607f2a0a7eadd1ff561c",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "054093816091e0b8b298e71dfeac2a4c350e1bbbb59bd05b6e70bc945011b051",
+          "passed": 0,
+          "failed": 3,
+          "total": 3,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "14a345b1e707176c55d07569a2bf74a16a59ce4676044a689866ed9ff6b6b65d",
+          "passed": 3,
+          "failed": 0,
+          "total": 3,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:02:42.303Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-08",
+      "baseSha": "393bf1b5900b5b67cf70e46942d555c7c125d5b1",
+      "referenceSha": "b1ceec3d05b614e7fbbdbfb2dabc5fe94af09dfc",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "1a743f2311055f62d9af474dc746697870c92d3d03aa8d613a1ef066f9a06982",
+          "passed": 41,
+          "failed": 10,
+          "total": 51,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "c96c95d2904ca8654a33f366bfb5d8a9953a5df30815b92407053946d5f3fc92",
+          "passed": 51,
+          "failed": 0,
+          "total": 51,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:03:00.027Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-09",
+      "baseSha": "aae4abffd9254f719e6c2fe642d6deb1e764c8ea",
+      "referenceSha": "3cbbbc491cbedebaa91126912e11c56c30721342",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "4f3a014d57d1362efbd7e480d5de9ffa4a9c8df25355cca27375d8e07818c40d",
+          "passed": 319,
+          "failed": 1,
+          "total": 320,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "9b4dc3dc2e376dab5963a860099c29af849933a2cfd72235854ce9e9a373d8b6",
+          "passed": 320,
+          "failed": 0,
+          "total": 320,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:03:47.117Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-10",
+      "baseSha": "e042a4e414c68d019b46bc885eefe4eb8d895d51",
+      "referenceSha": "c186d041fcaf2e6aba9ea936075f590a91c69785",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "91d77a6ede3353aabe367cdbc63bc27bc89b7646bfd37bf3a3e30c826eae8952",
+          "passed": 6,
+          "failed": 1,
+          "total": 7,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "a59c2527282de59b640b76514fcc830bc2dd06231e7ea330c470da7811567b32",
+          "passed": 7,
+          "failed": 0,
+          "total": 7,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:04:01.429Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-11",
+      "baseSha": "a61fc28f04c3bfb5b83ef79405b1e70028e35da2",
+      "referenceSha": "76daea176c2dc924510e5d45bc3e5d03a81f8aae",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "f8b2ffd4f224a74e5410071b2a1fa616b99827ca4a5ee949906033f29e07034a",
+          "passed": 16,
+          "failed": 1,
+          "total": 17,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "be24d4d8aa47fbf5e9f18785692af2ce815b29cc3b4ce2c2413d450a2f64d42b",
+          "passed": 17,
+          "failed": 0,
+          "total": 17,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:04:26.447Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-12",
+      "baseSha": "0ac5122d55f10068c13cbfdc35b5428ba795c547",
+      "referenceSha": "20091e665001a76ad6465e4d2344c5678db432f0",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "56d19dd40046570051197b9e7b1337b27ac1b161eebb34cb96a656bee2e1bf13",
+          "passed": 166,
+          "failed": 4,
+          "total": 170,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "e53e65e006a8ed211db4a44c5e96066df8207d3e9fbf31d8a737f0dca40a00a0",
+          "passed": 186,
+          "failed": 0,
+          "total": 186,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:04:53.372Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-13",
+      "baseSha": "e9ce1f5171a9bd4c244131ce42fd4edc30afc25e",
+      "referenceSha": "95929ec1717d78b368b9d20eed8feedc9ffdc8b4",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "93e1a0fde5c12e21d5d586e5e3de79b0f5db598c7bc0524b82e5ed137570b746",
+          "passed": 12,
+          "failed": 2,
+          "total": 14,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "8ca75497da6024c95cceb499e4b695d6f1e11544937c26053740397a2612b359",
+          "passed": 14,
+          "failed": 0,
+          "total": 14,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:05:18.377Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-14",
+      "baseSha": "33634af4b2eb0cbaa20226f212ae18d795937952",
+      "referenceSha": "77451d361eadebee6a1696ff3a3a1bb9002f29bc",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "00edccb858475aee6442da16f93db250ab15d1bb406835c2fd35cf72f0a25107",
+          "passed": 115,
+          "failed": 7,
+          "total": 122,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "389ee5a982132f94f41f0e9e2fb58b1ea88b341759afdfe2b12a49235b1f91c6",
+          "passed": 122,
+          "failed": 0,
+          "total": 122,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:05:48.758Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-15",
+      "baseSha": "de1bd78f5683c288cedb03e9e549486a01345231",
+      "referenceSha": "d1daabfc32f4d0af6fdebac58c5b96625b99af1d",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "48a8f90fe2388b0767e71bd5a78af82e1fcc72a1089dab21530b2cd2de82663b",
+          "passed": 90,
+          "failed": 2,
+          "total": 92,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "60d1035d5627dad73a6e5c7e3d908e3bbb2e5df4f7ce37717a58228bb739bf1f",
+          "passed": 92,
+          "failed": 0,
+          "total": 92,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:06:02.491Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-16",
+      "baseSha": "3b04aa0c2fc6d25e950ab93dbd00564f69f5176e",
+      "referenceSha": "fc35b1531eaa95f42043b47bebed12896d25bdbc",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": false,
+      "observations": {
+        "error": "This task also requires Playwright acceptance; Vitest alone cannot qualify it"
+      },
+      "createdAt": "2026-10-11T19:06:02.492Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-17",
+      "baseSha": "b863e9de9f4c9e66e68ecc0ff961b3b4c5eef7c2",
+      "referenceSha": "4e0e59454ab87c723408de3d51c50d80d1dafab5",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "2a0ad0e6fe1dbc542d41e90e6e94841e2be09a9892ed2a21056c70dec46c40bc",
+          "passed": 43,
+          "failed": 2,
+          "total": 45,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "7988569b181a037151578cc2c2b284cf6bffa49772c443cdc1509a6bad0f2109",
+          "passed": 45,
+          "failed": 0,
+          "total": 45,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:06:16.593Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-18",
+      "baseSha": "8ab21bf5141f9356713f755084fcb17d43c2e2f8",
+      "referenceSha": "7e003dc4af1c7c1bc39ebe8b04cdc03eec5c7d61",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": false,
+      "observations": {
+        "error": "This task also requires Playwright acceptance; Vitest alone cannot qualify it"
+      },
+      "createdAt": "2026-10-11T19:06:16.594Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-19",
+      "baseSha": "87ae041c96c68dc26e318656a931a7406de62bd6",
+      "referenceSha": "aa9367bf413a8fa9536cbd6f8637a979c10b08a6",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "7f668b96bcb4f5a0cdc4d6a69161a90f0962efd9c9bff1d494dfa17dd28521d3",
+          "passed": 199,
+          "failed": 2,
+          "total": 201,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "1f940b91d316ed056b2cd2d8b174a453e0fd0eaf1cb206b16c5225da5cc30ca6",
+          "passed": 201,
+          "failed": 0,
+          "total": 201,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:06:54.542Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-20",
+      "baseSha": "edc35046398ef8cd70c323ff6d36f9dac3e87870",
+      "referenceSha": "87ae041c96c68dc26e318656a931a7406de62bd6",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "85b7da173a1f2d8e1800bdf42ac02a131c800c4801ce2715e5cd7b888c5cbd22",
+          "passed": 4,
+          "failed": 4,
+          "total": 8,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "050ceb97f1f0393d9f81d75716ec87205f82ab12f6bb3793b453d0a7be05c399",
+          "passed": 8,
+          "failed": 0,
+          "total": 8,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:07:10.397Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-21",
+      "baseSha": "35f9981f5198e8874e51657489187080ad6adc6c",
+      "referenceSha": "6884d09f14512d1fc3f80796d5a883a9db674507",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "3d8609e79f601ef5438674e98a411ddcfc3b7283e80d80f7974bace7059c2d8e",
+          "passed": 161,
+          "failed": 3,
+          "total": 164,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "97194ade4b2190bf9806672e6e662514db9b08c22d125e543a47b5ec8ecb53b2",
+          "passed": 164,
+          "failed": 0,
+          "total": 164,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:07:46.808Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-22",
+      "baseSha": "075e711b8591bcbdf41260ac6578d8b37209126b",
+      "referenceSha": "a876dd83c57890a449237ecf55465e921ee3bab0",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "e2de89494d8c9ba79cdfba0a889274f5cefdc3226933b4c39ff8bec5d5a01c57",
+          "passed": 2,
+          "failed": 5,
+          "total": 7,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "0f6408ca90f72aa6d26769e534871b23a9d516ecebe6ea103270c002f9e36e1d",
+          "passed": 7,
+          "failed": 0,
+          "total": 7,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:07:59.190Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-23",
+      "baseSha": "c7b4f525330a047f4a25475590a764ae96fc0960",
+      "referenceSha": "7d12bfaa537382a2aec5c411ed666f2629327610",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "1a5b12a7e5515c81ebc319ec1601e392b4727fa9f3df1eb0f0aa556b10cfeb2a",
+          "passed": 8,
+          "failed": 6,
+          "total": 14,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "496a70bf0ace2ae59076a0a95cb48d257e16d1072059219dbd1944d465b8b13b",
+          "passed": 14,
+          "failed": 0,
+          "total": 14,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:08:13.365Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-24",
+      "baseSha": "bbf61be20dccadd1ef9b5ab812e75e4133bd8033",
+      "referenceSha": "9cd1281fd2f1b4877759ac1d3878aceeb652937f",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "bebc75894c86077d2594cdf0192cebf6eb3a43a746a1a37fb82060a9e8cf08ae",
+          "passed": 333,
+          "failed": 11,
+          "total": 344,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "4e921f67a950cb16dde1ec40412f09914c626ade4ae0adcc0c52fe7b6cbade46",
+          "passed": 344,
+          "failed": 0,
+          "total": 344,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:08:49.583Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-25",
+      "baseSha": "8c4387ee472bd0ed0364dc03ade9e885d955c1d8",
+      "referenceSha": "e62c79ad872e9e306be2938d3d09dd506a4c868a",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "2d636056b650477301e6d311b81726a7416b166be8b6ef4eecc48533ecd33809",
+          "passed": 21,
+          "failed": 2,
+          "total": 23,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "ea598a65ac62221a8519198753f71b6c2dbece42ae3022234fe71128ce412030",
+          "passed": 23,
+          "failed": 0,
+          "total": 23,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:09:04.399Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-26",
+      "baseSha": "000d4b39cca4f17cb7265a34628100f167a36783",
+      "referenceSha": "8c4387ee472bd0ed0364dc03ade9e885d955c1d8",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "a4068e83b63147015cd54f9212a867439fa46dbbee4a1a9c3be97e6457ef0e79",
+          "passed": 4,
+          "failed": 6,
+          "total": 10,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "69762899c09fdc961afad6128a7f8ad7e222385006b2ded460b3fbe68bba16a1",
+          "passed": 10,
+          "failed": 0,
+          "total": 10,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:09:20.571Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-27",
+      "baseSha": "72d4fa093e262a13e19f69036c37c4b9df28bdb0",
+      "referenceSha": "000d4b39cca4f17cb7265a34628100f167a36783",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "0126f6f0d0df31d50e1e5bc24caeed0ba2a3364ea93788fd1f1dbb68e323bef3",
+          "passed": 31,
+          "failed": 3,
+          "total": 34,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "645f038e782c77edcec8a3cd6358c3c46bcb671a1f94ed48c5290cc0ff1397ee",
+          "passed": 34,
+          "failed": 0,
+          "total": 34,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:09:31.834Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-28",
+      "baseSha": "b30b4f59bd25f380e3e5eda488eee6f0bd7f389f",
+      "referenceSha": "72d4fa093e262a13e19f69036c37c4b9df28bdb0",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "aedb4310ef4e33c2c6259dfe22cd2c60b179188502a208cfcd6d26b2fc54c058",
+          "passed": 20,
+          "failed": 4,
+          "total": 24,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "59042c9cccfdfdd93893afa4198c94d93d54275fc8a7495537207472a4979135",
+          "passed": 24,
+          "failed": 0,
+          "total": 24,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:09:43.094Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-29",
+      "baseSha": "a2adf1bbb45091f58030d9ec03f9d92be394778b",
+      "referenceSha": "f11246c1c6b2be94ee7f12e8a91ae48f69a00d2d",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "01c1980f03c0ee800647fd781a26f785abc1d556e7df3fd8e24e780675ce0e34",
+          "passed": 12,
+          "failed": 2,
+          "total": 14,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "40fee058ff99f12dc022fc576854ad6f23b3bef1f494c8d776646be8a6b29cdb",
+          "passed": 14,
+          "failed": 0,
+          "total": 14,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:10:03.103Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-30",
+      "baseSha": "b0ca895d544124e766c9b810b3ac7ae78373a412",
+      "referenceSha": "386e95f5967e24a08c6b8996844ca4bfc1127d55",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "6c80afc74431ee147623ad334d757ae598d501fb64c5dd6026849c5dbf1adb99",
+          "passed": 58,
+          "failed": 2,
+          "total": 60,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "24c21fc775b4ebde5aa602e3a0b6672e9c32a723fc713a83ae4d6a5f1357c59f",
+          "passed": 60,
+          "failed": 0,
+          "total": 60,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:10:16.317Z",
+      "platform": "darwin",
+      "sourceManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+      "reuseReason": "Identical pinned task, prompt and acceptance paths; retained original observations and raw artifacts."
+    },
+    {
+      "taskId": "devflow-history-31",
+      "baseSha": "b326f77ad5d9ad1363c1840d365caae7ac3048fb",
+      "referenceSha": "1c6c32ac94428a06ebd3b7efbe922ce1f0baaa06",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "25951567d71a35a6d134dbfc50050dc218959b9d8098a3c67b1f320f143db8b8",
+          "passed": 39,
+          "failed": 3,
+          "total": 42,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "be32a063b34503e856a5fb5638f9fa9fd730e4a5c7ac66de9cad5109ac251bc5",
+          "passed": 42,
+          "failed": 0,
+          "total": 42,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:13:11.252Z",
+      "platform": "darwin"
+    },
+    {
+      "taskId": "devflow-history-32",
+      "baseSha": "a8e1a777c7e0f8c60489ffa3207701af291b810f",
+      "referenceSha": "425de5b36aed37d2b59de59ae5d7352a64e32dae",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "717be20a872322ab12192c2ae96780dad2a9c81289c728792b051b83e146a24c",
+          "passed": 13,
+          "failed": 1,
+          "total": 14,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "a57aac9e7aa3cbc8efa0d2a1085266b0308c5266e4fd5fb3218d76749bd6e6b2",
+          "passed": 14,
+          "failed": 0,
+          "total": 14,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:13:24.653Z",
+      "platform": "darwin"
+    },
+    {
+      "taskId": "devflow-history-33",
+      "baseSha": "b48de51f003ae16d234cd4d68da65ee31a87270d",
+      "referenceSha": "d53dd2940e69696933d3042eb48a916cfad6152b",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": false,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "252e41ede5a887922281d21c0f6a16191bc018c97077d905598fc8ba1f25e9d5",
+          "passed": 171,
+          "failed": 7,
+          "total": 178,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "2e4dddda6c3ca2dd1ee9a5855b26ae70f4d5522573ba4119d1d0ecc68f28a290",
+          "passed": 177,
+          "failed": 1,
+          "total": 178,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:13:49.569Z",
+      "platform": "darwin"
+    },
+    {
+      "taskId": "devflow-history-34",
+      "baseSha": "d743ea3c2279482db10d05c4db32354c569b3156",
+      "referenceSha": "ba53ceb986df5807dfd86dfb4e01d9aa88130f18",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "33ec284adc600d29813d1b9404692ffb0cd233b10c25d0f16c8b8ea55bd09004",
+          "passed": 140,
+          "failed": 4,
+          "total": 144,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "736c74f5367b5647e060c17c97c594160cd76c068987d50734c2a75be3a1ea9b",
+          "passed": 144,
+          "failed": 0,
+          "total": 144,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:14:35.255Z",
+      "platform": "darwin"
+    },
+    {
+      "taskId": "devflow-history-35",
+      "baseSha": "540657703d49e603042fd27fd6d0db08d9f76361",
+      "referenceSha": "9f66a51817f95134fb46ccdfdbfdb8e18718f348",
+      "manifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+      "qualified": true,
+      "observations": {
+        "baseline": {
+          "code": 1,
+          "timedOut": false,
+          "reportDigest": "bea35ca80d996233e93194e3b68bc9b320802dbadfef764507d38d11ed534ae7",
+          "passed": 54,
+          "failed": 3,
+          "total": 57,
+          "unhandledErrors": 0
+        },
+        "reference": {
+          "code": 0,
+          "timedOut": false,
+          "reportDigest": "f64cd2c160b3d244468228101d4137d6ea521b123c55ab1e2ea691904a85c806",
+          "passed": 57,
+          "failed": 0,
+          "total": 57,
+          "unhandledErrors": 0
+        }
+      },
+      "createdAt": "2026-10-11T19:14:47.760Z",
+      "platform": "darwin"
+    }
+  ]
+}

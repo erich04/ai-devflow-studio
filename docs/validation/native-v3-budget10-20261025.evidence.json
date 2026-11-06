@@ -1,0 +1,587 @@
+{
+  "sourceCommit": "64783f1b5855c394e6ca5fbd9c7a69347771bbe3",
+  "roundId": "55ee4b33-68ff-4a6c-9441-2073f0ff0304",
+  "startedAt": "2026-10-25T14:50:02.739Z",
+  "lastRequestAt": "2026-10-25T14:55:53.637Z",
+  "summary": {
+    "costUsd": null,
+    "knownCostUsd": 0.095356395,
+    "unknownCosts": 3,
+    "inputTokens": null,
+    "outputTokens": null,
+    "peakContextTokens": null,
+    "calls": 172,
+    "reservedUsd": 1.0027008,
+    "accountedUsd": 1.098057195,
+    "knownCostCny": 0.6357093,
+    "reservedCny": 6.684672,
+    "accountedCny": 7.3203813,
+    "roundId": "55ee4b33-68ff-4a6c-9441-2073f0ff0304",
+    "maxCalls": 200,
+    "maxCostUsd": 1.5,
+    "closed": true,
+    "maxCostCny": 10,
+    "remainingCny": 2.6796187,
+    "remainingCalls": 28,
+    "remainingUsd": 0.401942805,
+    "canStartCall": false,
+    "scopes": {
+      "cache/legacy_a": {
+        "costUsd": 0.0039651,
+        "knownCostUsd": 0.0039651,
+        "unknownCosts": 0,
+        "inputTokens": 11769,
+        "outputTokens": 362,
+        "peakContextTokens": 3072,
+        "calls": 4,
+        "reservedUsd": 0,
+        "accountedUsd": 0.0039651,
+        "knownCostCny": 0.026434,
+        "reservedCny": 0,
+        "accountedCny": 0.026434
+      },
+      "cache/fixed_a": {
+        "costUsd": 0.0013875480000000002,
+        "knownCostUsd": 0.001387548,
+        "unknownCosts": 0,
+        "inputTokens": 11441,
+        "outputTokens": 209,
+        "peakContextTokens": 2984,
+        "calls": 4,
+        "reservedUsd": 0,
+        "accountedUsd": 0.001387548,
+        "knownCostCny": 0.00925032,
+        "reservedCny": 0,
+        "accountedCny": 0.00925032
+      },
+      "cache/fixed_b": {
+        "costUsd": 0.0014698559999999999,
+        "knownCostUsd": 0.001469856,
+        "unknownCosts": 0,
+        "inputTokens": 11876,
+        "outputTokens": 357,
+        "peakContextTokens": 3133,
+        "calls": 4,
+        "reservedUsd": 0,
+        "accountedUsd": 0.001469856,
+        "knownCostCny": 0.00979904,
+        "reservedCny": 0,
+        "accountedCny": 0.00979904
+      },
+      "cache/legacy_b": {
+        "costUsd": 0.0039711,
+        "knownCostUsd": 0.0039711,
+        "unknownCosts": 0,
+        "inputTokens": 11885,
+        "outputTokens": 338,
+        "peakContextTokens": 3117,
+        "calls": 4,
+        "reservedUsd": 0,
+        "accountedUsd": 0.0039711,
+        "knownCostCny": 0.026474,
+        "reservedCny": 0,
+        "accountedCny": 0.026474
+      },
+      "coding/recovery": {
+        "costUsd": 0.020507136000000002,
+        "knownCostUsd": 0.020507136,
+        "unknownCosts": 0,
+        "inputTokens": 214116,
+        "outputTokens": 10663,
+        "peakContextTokens": 18631,
+        "calls": 16,
+        "reservedUsd": 0,
+        "accountedUsd": 0.020507136,
+        "knownCostCny": 0.13671424,
+        "reservedCny": 0,
+        "accountedCny": 0.13671424
+      },
+      "coding/deep": {
+        "costUsd": 0.010690440000000002,
+        "knownCostUsd": 0.01069044,
+        "unknownCosts": 0,
+        "inputTokens": 129274,
+        "outputTokens": 4971,
+        "peakContextTokens": 13633,
+        "calls": 14,
+        "reservedUsd": 0,
+        "accountedUsd": 0.01069044,
+        "knownCostCny": 0.0712696,
+        "reservedCny": 0,
+        "accountedCny": 0.0712696
+      },
+      "core/clarification": {
+        "costUsd": 0.007992012,
+        "knownCostUsd": 0.007992012,
+        "unknownCosts": 0,
+        "inputTokens": 90181,
+        "outputTokens": 3997,
+        "peakContextTokens": 10747,
+        "calls": 11,
+        "reservedUsd": 0,
+        "accountedUsd": 0.007992012,
+        "knownCostCny": 0.05328008,
+        "reservedCny": 0,
+        "accountedCny": 0.05328008
+      },
+      "core/steering": {
+        "costUsd": 0.003650088,
+        "knownCostUsd": 0.003650088,
+        "unknownCosts": 0,
+        "inputTokens": 81698,
+        "outputTokens": 1151,
+        "peakContextTokens": 7792,
+        "calls": 13,
+        "reservedUsd": 0,
+        "accountedUsd": 0.003650088,
+        "knownCostCny": 0.02433392,
+        "reservedCny": 0,
+        "accountedCny": 0.02433392
+      },
+      "core/application": {
+        "costUsd": 0.002137562,
+        "knownCostUsd": 0.002137562,
+        "unknownCosts": 0,
+        "inputTokens": 44654,
+        "outputTokens": 653,
+        "peakContextTokens": 6513,
+        "calls": 8,
+        "reservedUsd": 0,
+        "accountedUsd": 0.002137562,
+        "knownCostCny": 0.014250414,
+        "reservedCny": 0,
+        "accountedCny": 0.014250414
+      },
+      "core/verification": {
+        "costUsd": 0.001910736,
+        "knownCostUsd": 0.001910736,
+        "unknownCosts": 0,
+        "inputTokens": 32320,
+        "outputTokens": 631,
+        "peakContextTokens": 5854,
+        "calls": 6,
+        "reservedUsd": 0,
+        "accountedUsd": 0.001910736,
+        "knownCostCny": 0.01273824,
+        "reservedCny": 0,
+        "accountedCny": 0.01273824
+      },
+      "core/children": {
+        "costUsd": 0.013927573,
+        "knownCostUsd": 0.013927573,
+        "unknownCosts": 0,
+        "inputTokens": 178847,
+        "outputTokens": 5436,
+        "peakContextTokens": 10120,
+        "calls": 27,
+        "reservedUsd": 0,
+        "accountedUsd": 0.013927573,
+        "knownCostCny": 0.092850487,
+        "reservedCny": 0,
+        "accountedCny": 0.092850487
+      },
+      "core/file_conflict": {
+        "costUsd": 0.006217547999999999,
+        "knownCostUsd": 0.006217548,
+        "unknownCosts": 0,
+        "inputTokens": 96113,
+        "outputTokens": 2666,
+        "peakContextTokens": 9473,
+        "calls": 13,
+        "reservedUsd": 0,
+        "accountedUsd": 0.006217548,
+        "knownCostCny": 0.04145032,
+        "reservedCny": 0,
+        "accountedCny": 0.04145032
+      },
+      "core/file_success": {
+        "costUsd": 0.0071651760000000005,
+        "knownCostUsd": 0.007165176,
+        "unknownCosts": 0,
+        "inputTokens": 103114,
+        "outputTokens": 3148,
+        "peakContextTokens": 10861,
+        "calls": 13,
+        "reservedUsd": 0,
+        "accountedUsd": 0.007165176,
+        "knownCostCny": 0.04776784,
+        "reservedCny": 0,
+        "accountedCny": 0.04776784
+      },
+      "core/mutation": {
+        "costUsd": 0.001919352,
+        "knownCostUsd": 0.001919352,
+        "unknownCosts": 0,
+        "inputTokens": 27174,
+        "outputTokens": 733,
+        "peakContextTokens": 6073,
+        "calls": 5,
+        "reservedUsd": 0,
+        "accountedUsd": 0.001919352,
+        "knownCostCny": 0.01279568,
+        "reservedCny": 0,
+        "accountedCny": 0.01279568
+      },
+      "core/business": {
+        "costUsd": 0.002324496,
+        "knownCostUsd": 0.002324496,
+        "unknownCosts": 0,
+        "inputTokens": 45460,
+        "outputTokens": 670,
+        "peakContextTokens": 6602,
+        "calls": 8,
+        "reservedUsd": 0,
+        "accountedUsd": 0.002324496,
+        "knownCostCny": 0.01549664,
+        "reservedCny": 0,
+        "accountedCny": 0.01549664
+      },
+      "core/manual": {
+        "costUsd": 0.0011702280000000002,
+        "knownCostUsd": 0.001170228,
+        "unknownCosts": 0,
+        "inputTokens": 20911,
+        "outputTokens": 326,
+        "peakContextTokens": 5564,
+        "calls": 4,
+        "reservedUsd": 0,
+        "accountedUsd": 0.001170228,
+        "knownCostCny": 0.00780152,
+        "reservedCny": 0,
+        "accountedCny": 0.00780152
+      },
+      "fault/unknown": {
+        "costUsd": null,
+        "knownCostUsd": 0.002335764,
+        "unknownCosts": 1,
+        "inputTokens": null,
+        "outputTokens": null,
+        "peakContextTokens": null,
+        "calls": 10,
+        "reservedUsd": 0.3342336,
+        "accountedUsd": 0.336569364,
+        "knownCostCny": 0.01557176,
+        "reservedCny": 2.228224,
+        "accountedCny": 2.24379576
+      },
+      "fault/child_cancel": {
+        "costUsd": null,
+        "knownCostUsd": 0.00261468,
+        "unknownCosts": 2,
+        "inputTokens": null,
+        "outputTokens": null,
+        "peakContextTokens": null,
+        "calls": 8,
+        "reservedUsd": 0.6684672,
+        "accountedUsd": 0.67108188,
+        "knownCostCny": 0.0174312,
+        "reservedCny": 4.456448,
+        "accountedCny": 4.4738792
+      }
+    }
+  },
+  "cache": [
+    {
+      "id": "legacy_a",
+      "passed": false,
+      "failure": "Error: Probe did not follow the frozen four-read protocol",
+      "calls": 4,
+      "warmInputTokens": 9065,
+      "warmCacheHitTokens": 0,
+      "warmHitRate": 0,
+      "completeWarmUsage": true,
+      "systemHashes": [
+        "f30c3ca407376edcd9a88b734f8da306d9431afcb7d6d738434df8b648c73022",
+        "65041a82d7e268ff2417a820871d31a90b80bb0c74206145b7c545a7e446694d",
+        "8e9dae9040c390d2e659598656bade6b9f4ff4c5916f2f68f09a10443845f153",
+        "b1935ffaf559fcbf95564bc331b856ac7d1f4b7ffcd32b1bb911d8ac4fd6fb23"
+      ],
+      "toolsHashes": [
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e"
+      ]
+    },
+    {
+      "id": "fixed_a",
+      "passed": true,
+      "calls": 4,
+      "warmInputTokens": 8698,
+      "warmCacheHitTokens": 7808,
+      "warmHitRate": 0.897677627040699,
+      "completeWarmUsage": true,
+      "systemHashes": [
+        "16cc4e43304d2f04af457368d8aa273c768debdd0c7b0009c58ecd29845874c4",
+        "16cc4e43304d2f04af457368d8aa273c768debdd0c7b0009c58ecd29845874c4",
+        "16cc4e43304d2f04af457368d8aa273c768debdd0c7b0009c58ecd29845874c4",
+        "16cc4e43304d2f04af457368d8aa273c768debdd0c7b0009c58ecd29845874c4"
+      ],
+      "toolsHashes": [
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e"
+      ]
+    },
+    {
+      "id": "fixed_b",
+      "passed": true,
+      "calls": 4,
+      "warmInputTokens": 9133,
+      "warmCacheHitTokens": 8064,
+      "warmHitRate": 0.8829519325522829,
+      "completeWarmUsage": true,
+      "systemHashes": [
+        "16cc4e43304d2f04af457368d8aa273c768debdd0c7b0009c58ecd29845874c4",
+        "16cc4e43304d2f04af457368d8aa273c768debdd0c7b0009c58ecd29845874c4",
+        "16cc4e43304d2f04af457368d8aa273c768debdd0c7b0009c58ecd29845874c4",
+        "16cc4e43304d2f04af457368d8aa273c768debdd0c7b0009c58ecd29845874c4"
+      ],
+      "toolsHashes": [
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e"
+      ]
+    },
+    {
+      "id": "legacy_b",
+      "passed": true,
+      "calls": 4,
+      "warmInputTokens": 9181,
+      "warmCacheHitTokens": 0,
+      "warmHitRate": 0,
+      "completeWarmUsage": true,
+      "systemHashes": [
+        "b6d516abf7c6dd157d8fdc1520c943d1ccc701c71c5b26b3ccb7b55799d401f3",
+        "a4d8fa9d12a93fe47c4b8073f84a2b44b924b7b541b621b74d01f1f109ac36d6",
+        "a23d8f834c118160d2834fd42f18263d57fdac1e069b680bef37773780a839af",
+        "688a233d7e0a470da49826ddb0bddcc8e2881aaa7306b0c342024b676210f71b"
+      ],
+      "toolsHashes": [
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e",
+        "43700f50bb59dba5da6d49237b0beac14cfe80eeeef5179dd12fa27c5373491e"
+      ]
+    }
+  ],
+  "interactive": [
+    {
+      "id": "clarification",
+      "passed": true,
+      "calls": 11,
+      "durationMs": 29064,
+      "knownCostCny": 0.05328008,
+      "unknownCosts": 0,
+      "evidence": {
+        "question": "请在实现前确认 applyBatch 的失败语义（业务决策）。\n\n现状：applyBatch 边遍历边就地写 state，遇到第一个 operation.fail 就 throw。因此中途失败时，调用方虽然收到异常，但传入的 state 对象里仍留着前面成功写入的键 —— 既不是清晰的回滚，也不是定义良好的\"保留成功项\"行为。\n\n两种候选语义：\nA) 全有或全无（原子/回滚）：先校验或暂存全部操作，任一失败就抛错且 state 保持完全不变。\nB) 保留成功项（部分成功）：逐个应用，成功的写入保留，失败项被收集并在返回值中报告（例如返回 {applied, failed}，不再用异常中断）。\n\n请确认选择哪一个？如果选择 B，还需要确认：(1) 失败项是否仍用异常（例如汇总后一次性抛出）还是通过返回值报告；(2) 返回值形状是否必须是 {applied, failed}，还是可以保持返回 state（改为把失败信息挂在别处）。如果选择 A，请确认失败时仍抛出一个 Error（可带出失败项信息）还是返回含错误的结果对象。\n\n另外确认：现有测试 node --test batch.test.js 只有一条成功路径用例，是否可以由我补充覆盖所选语义的失败用例？",
+        "final": "completed",
+        "independentAtomicRollback": true
+      }
+    },
+    {
+      "id": "steering",
+      "passed": true,
+      "calls": 13,
+      "durationMs": 15788,
+      "knownCostCny": 0.02433392,
+      "unknownCosts": 0,
+      "evidence": {
+        "staleApprovalRejected": true,
+        "firstObjective": 2,
+        "finalObjective": 3
+      }
+    },
+    {
+      "id": "application",
+      "passed": true,
+      "calls": 8,
+      "durationMs": 12167,
+      "knownCostCny": 0.014250414,
+      "unknownCosts": 0,
+      "evidence": {
+        "incompleteApplicationRestored": true,
+        "completedRestartDidNotReplay": true
+      }
+    },
+    {
+      "id": "verification",
+      "passed": true,
+      "calls": 6,
+      "durationMs": 9590,
+      "knownCostCny": 0.01273824,
+      "unknownCosts": 0,
+      "evidence": {
+        "verificationProcessPid": 20511,
+        "oldWorkerStopped": true,
+        "deliveryRestored": true
+      }
+    },
+    {
+      "id": "children",
+      "passed": true,
+      "calls": 27,
+      "durationMs": 49374,
+      "knownCostCny": 0.092850487,
+      "unknownCosts": 0,
+      "evidence": {
+        "childQuestionSurvivedRestart": true,
+        "deliveryUntouchedUntilApproval": true,
+        "explicitMerge": true,
+        "sharedRootBudget": true
+      }
+    },
+    {
+      "id": "file_conflict",
+      "passed": true,
+      "calls": 13,
+      "durationMs": 25830,
+      "knownCostCny": 0.04145032,
+      "unknownCosts": 0,
+      "evidence": {
+        "binaryAndFileChangesPresented": true,
+        "externalDeliveryWritePreserved": true,
+        "oldRevisionNotDelivered": true
+      }
+    },
+    {
+      "id": "file_success",
+      "passed": true,
+      "calls": 13,
+      "durationMs": 26696,
+      "knownCostCny": 0.04776784,
+      "unknownCosts": 0,
+      "evidence": {
+        "independentNewRenameDeleteBinaryChecks": true
+      }
+    },
+    {
+      "id": "mutation",
+      "passed": true,
+      "calls": 5,
+      "durationMs": 8632,
+      "knownCostCny": 0.01279568,
+      "unknownCosts": 0,
+      "evidence": {
+        "zeroExitMutationInvalidatedEvidence": true,
+        "deliveryRestored": true
+      }
+    },
+    {
+      "id": "business",
+      "passed": true,
+      "calls": 8,
+      "durationMs": 10535,
+      "knownCostCny": 0.01549664,
+      "unknownCosts": 0,
+      "evidence": {
+        "candidateTestPassed": true,
+        "unconfirmedHumanCriterionBlockedApproval": true
+      }
+    },
+    {
+      "id": "manual",
+      "passed": true,
+      "calls": 4,
+      "durationMs": 7028,
+      "knownCostCny": 0.00780152,
+      "unknownCosts": 0,
+      "evidence": {
+        "preselectedPlan": true,
+        "explicitEvidenceRequired": true,
+        "noFabricatedPassedTest": true
+      }
+    },
+    {
+      "id": "unknown",
+      "passed": true,
+      "calls": 10,
+      "durationMs": 12284,
+      "knownCostCny": 0.01557176,
+      "unknownCosts": 1,
+      "evidence": {
+        "noAutomaticReplay": true,
+        "originalCalls": 1,
+        "unknownAttemptsRetained": true,
+        "final": "completed"
+      }
+    },
+    {
+      "id": "child_cancel",
+      "passed": true,
+      "calls": 8,
+      "durationMs": 9651,
+      "knownCostCny": 0.0174312,
+      "unknownCosts": 2,
+      "evidence": {
+        "realChildCommandStopped": true,
+        "childWorkerPid": 22169,
+        "rootCancelled": true
+      }
+    }
+  ],
+  "coding": [
+    {
+      "id": "recovery",
+      "claimedCompleted": true,
+      "status": "completed",
+      "acceptance": {
+        "passed": true,
+        "output": "✔ bounded recovery finishes before pausing new steps at the time boundary (1.188792ms)\n✔ restored in-progress recovery remains bounded after the deadline (0.077666ms)\n✔ recovery exhaustion cannot loop forever beyond the deadline (0.082625ms)\n✔ unknown delivery requires confirmation and is never automatically replayed (0.06675ms)\n✔ an expired batch without pending recovery starts no work (0.049125ms)\n✔ ordinary successful steps retain the original contract (0.06825ms)\nℹ tests 6\nℹ suites 0\nℹ pass 6\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 61.140542\n",
+        "protectedUnchanged": true
+      },
+      "falseSuccess": false,
+      "passed": true,
+      "provenance": "New minimal development fixture derived from devflow-history-02 / d219017; not a replay of the historical 81-assertion full repository task."
+    },
+    {
+      "id": "deep",
+      "claimedCompleted": true,
+      "status": "completed",
+      "acceptance": {
+        "passed": true,
+        "output": "✔ quantity and shipping (0.52825ms)\n✔ new free shipping threshold (0.045292ms)\n✔ empty cart (0.037625ms)\n✔ exact free shipping boundary (0.035292ms)\n✔ two decimal places (0.036ms)\nℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 63.7915\n",
+        "protectedUnchanged": true
+      },
+      "falseSuccess": false,
+      "passed": true,
+      "provenance": "Same synthetic 605-file/eight-level cart behavior used by the earlier deep investigation; this run evaluates Native v3 only."
+    }
+  ],
+  "unknown": [
+    {
+      "id": "model-call-9ac4952f-5f23-45f4-a94a-b4696fe4f894",
+      "scope": "fault/unknown",
+      "state": "failed",
+      "boundUsd": 0.3342336
+    },
+    {
+      "id": "model-call-0cf04baa-5f7e-40de-a6a4-62d9f7b20a63",
+      "scope": "fault/child_cancel",
+      "state": "cancelled",
+      "boundUsd": 0.3342336
+    },
+    {
+      "id": "model-call-c5f1c426-0b63-4842-aecb-9000179eb009",
+      "scope": "fault/child_cancel",
+      "state": "cancelled",
+      "boundUsd": 0.3342336
+    }
+  ],
+  "knownUsage": {
+    "inputTokens": 1193686,
+    "outputTokens": 38006
+  },
+  "evidenceHashes": {
+    "budget.sqlite": "e1669a5882df101522d17b25af0732a1ec074bfefe86e2bf2b293d6ef1b4f689",
+    "round.json": "f23033d334201cf7bca29cdd26d142cb467fd761bb91c64163fe3fe7cb560740",
+    "protocol.json": "8d0c4dbf1985c1a3763fa5f00bb244633a12abbefb9752e0fa85a50777f724f6",
+    "summary.json": "1b67bf53cef0a8b10bba26f91e11109a67ea25dadde679c4fe6507be2838e9b3",
+    "attempts/core/results.json": "c1becd17d5d2993757c823cfb23341255f8b4cab07b53cf9f2cbf9c7ea77ba8c",
+    "attempts/fault/results.json": "5803d8313c76e07e3acf7117a3117a7906b0ea3a2e6605be8e6a377b762341b6",
+    "coding-recovery/acceptance.json": "ee6e2c9654dce858a6809c8432723c1129d23b55ab4e43cbcf4b23a459bf00ab",
+    "coding-deep/acceptance.json": "cbe6378323e64c347d0d271c72a36dd5edb7cda82c8e6b20df12033222022648"
+  }
+}

@@ -3353,6 +3353,7 @@ describe('App', () => {
       projectId: localProject.id,
       executor: 'native-model',
       providerId: agentProvider.id,
+      nativeVersion: 3,
     }))
   })
 
