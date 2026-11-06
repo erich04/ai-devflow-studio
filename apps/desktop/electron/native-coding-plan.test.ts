@@ -1,10 +1,12 @@
 // @vitest-environment node
-import { mkdtemp, rm } from 'node:fs/promises'
+import { copyFile, mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { expect, it } from 'vitest'
 import { createFakeAgentProvider, type AgentProvider, type NativeToolCall } from '@ai-devflow/shared'
 import { createLocalStore } from './local-store'
+import { createNativeCodingExecutorV3 } from './native-coding-harness'
+import { codingHarnessFixture, codingToolReply } from './native-coding-test-fixture'
 import { NativeCodingLoop } from './native-coding-loop'
 import { codingPlanContext, currentCodingPlan, unfinishedPlanWork, updateCodingPlan } from './native-coding-plan'
 import { createNativeCodingSession, parseNativeCodingSession, updateNativeCodingSession, type CodingToolReceipt, type NativeCodingSession } from './native-coding-session'
@@ -126,4 +128,43 @@ it('saves updates with the tool response, blocks premature proposals, and reopen
     expect(restored.planHistory).toEqual(result.planHistory)
     expect(currentCodingPlan(restored)?.nodes.map(node => node.status)).toEqual(['dropped', 'pending'])
   } finally { await store.close(); await rm(directory, { recursive: true, force: true }) }
+})
+
+it('recovers host verification exactly once when delivery succeeds before the SQLite checkpoint is saved', async () => {
+  const fixture = await codingHarnessFixture(async request => {
+    if (!request.messages.some(message => message.role === 'tool'))
+      return codingToolReply('plan', 'update_plan', { objectiveVersion: 1, expectedVersion: 0, id: 'inspect', ...investigate, status: 'dropped', dropReason: 'Read-only fixture' })
+    return codingToolReply('freeze', 'propose_changeset', { summary: 'Confirm the unchanged revision' })
+  })
+  const restartDb = path.join(fixture.root, 'crash-checkpoint.sqlite')
+  try {
+    await fixture.authorize()
+    await fixture.executor.settled('coding')
+    const review = (await fixture.get()).snapshot
+    expect(review.status).toBe('review')
+    let captured = false
+    const approved = await fixture.executor.harness!.command({ protocolVersion: 2, type: 'approve', codingRunId: 'coding', commandId: 'approve',
+      expectedVersion: review.version, objectiveVersion: review.objectiveVersion, revisionDigest: review.revision!.digest }, async () => {
+      // Restart with the real approval checkpoint and the on-disk delivery transaction, as after a lost final DB write.
+      if (captured) return
+      const checkpoint = await fixture.store.getNativeCodingSession('native-coding')
+      if (checkpoint?.status === 'applying' || checkpoint?.status === 'verifying') {
+        await copyFile(path.join(fixture.root, 'local.sqlite'), restartDb)
+        captured = true
+      }
+    })
+    expect(captured).toBe(true)
+    expect(approved.snapshot.status).toBe('completed')
+    await fixture.executor.shutdown()
+    const store = await createLocalStore({ dbPath: restartDb })
+    const restarted = createNativeCodingExecutorV3({ store, root: path.join(fixture.root, 'harness'), configVersion: 1, provider: fixture.provider })
+    try {
+      expect(currentCodingPlan((await store.getNativeCodingSession('native-coding'))!)?.nodes.at(-1)?.status).toBe('pending')
+      const run = (await store.listCodingAgentRuns())[0]!
+      const recovered = await restarted.harness!.recover(run, async () => {})
+      expect(recovered?.snapshot.status).toBe('completed')
+      expect(recovered?.snapshot.plan?.nodes.at(-1)).toMatchObject({ owner: 'host', status: 'done', evidenceRefs: [approved.snapshot.evidence.at(-1)!.id] })
+      expect((await restarted.harness!.recover(run, async () => {}))?.snapshot.plan).toEqual(recovered?.snapshot.plan)
+    } finally { await restarted.shutdown(); await store.close() }
+  } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
 })

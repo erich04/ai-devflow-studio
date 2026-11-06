@@ -1,6 +1,6 @@
 # Native Coding v3 harness 路线图
 
-日期：2026-11-01；进度更新：2026-11-05。阶段 1 已由 #291、#292 合入 V3，第 7—9 条工程实现亦已合入。第二阶段后续修复见 [#307](https://github.com/erich04/ai-devflow-studio/pull/307)；用户选择固定失败反馈后，[R14](../evaluation/native-coding-v3-phase2-r14-20261105.md)在同一冻结版本完成原十题实际交付 **10/10、零误报**，六项 CI 全部通过。生成式盲测与固定反馈分别记分，历史失败记录保留。详见[实施记录](native-coding-harness-phase2.zh-CN.md)。阶段 3 未开始，#238 继续保持草稿。
+日期：2026-11-01；进度更新：2026-11-06。阶段 1 已由 #291、#292 合入 V3，第 7—9 条工程实现亦已合入。第二阶段后续修复见 [#307](https://github.com/erich04/ai-devflow-studio/pull/307)；用户选择固定失败反馈后，[R14](../evaluation/native-coding-v3-phase2-r14-20261105.md)在同一冻结版本完成原十题实际交付 **10/10、零误报**，六项 CI 全部通过。生成式盲测与固定反馈分别记分，历史失败记录保留。详见[实施记录](native-coding-harness-phase2.zh-CN.md)。阶段 3 已开始。[任务计划 #310](https://github.com/erich04/ai-devflow-studio/pull/310) 实现第 10 条，接下来是将委派挂到计划节点。#238 继续保持草稿。
 
 ## 背景
 
@@ -122,7 +122,7 @@ Native Coding v3 是 DevFlow 自己写的编码 Agent harness，没有使用 Ope
 | 7 | 独立验证者 | [#293](https://github.com/erich04/ai-devflow-studio/pull/293)、[#297](https://github.com/erich04/ai-devflow-studio/pull/297)、[#307](https://github.com/erich04/ai-devflow-studio/pull/307) | 初版已合入；补充修复六项 CI 通过，R14 固定反馈十题 10/10、零误报；盲测另计 |
 | 8 | 系统沙箱设为默认 | [#294](https://github.com/erich04/ai-devflow-studio/pull/294) | 已合入 V3，macOS/Linux 实测与六项 CI 通过 |
 | 9 | 权限规则 | [#295](https://github.com/erich04/ai-devflow-studio/pull/295) | 已合入 V3，真实授权回归、完整 verify 与六项 CI 通过 |
-| 10 | 计划和任务图 | — | 未开始 |
+| 10 | 计划和任务图 | [#310](https://github.com/erich04/ai-devflow-studio/pull/310) | 宿主保存并校验计划，桌面显示进度。Electron 已验证刷新恢复以及自动、人工两种验收路径 |
 | 11 | 委派挂到计划节点上 | — | 未开始 |
 | 12 | 后台命令完成后主动唤醒模型 | — | 未开始 |
 | 13 | 多 Agent 编排扩到整个任务 | — | 未开始 |
