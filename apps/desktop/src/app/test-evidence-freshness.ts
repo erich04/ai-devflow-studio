@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { TestEvidence, TestEvidenceFreshness } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
 import { formatLocalTime } from './desktop-view-model'
@@ -31,9 +31,13 @@ export function useTestEvidenceFreshness(
   runId: string | undefined,
   evidence: readonly Pick<TestEvidence, 'id' | 'createdAt' | 'runId'>[],
   refreshKey = '',
-): TestEvidenceFreshnessMap {
-  const [freshness, setFreshness] = useState<TestEvidenceFreshnessMap>(empty)
+  poll = false,
+): { status: 'loading' | 'loaded' | 'failed'; states: TestEvidenceFreshnessMap; retry(): void } {
+  const [freshness, setFreshness] = useState<{ runId: string | undefined; states: TestEvidenceFreshnessMap }>({ runId, states: empty })
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'failed'>('loading')
   const [focusCount, setFocusCount] = useState(0)
+  const retry = useCallback(() => setFocusCount(count => count + 1), [])
+  useEffect(() => { if (!poll) return; const timer = window.setInterval(retry, 10_000); return () => window.clearInterval(timer) }, [poll, retry])
   const evidenceKey = evidence.filter((item) => item.runId === runId).map((item) => `${item.id}@${item.createdAt}`).join('|')
   useEffect(() => {
     const onFocus = () => setFocusCount((count) => count + 1)
@@ -43,23 +47,24 @@ export function useTestEvidenceFreshness(
   const read = api?.getTestEvidenceFreshness
   useEffect(() => {
     // Keep the same object when already empty so an unchanged answer never re-renders.
-    const clear = () => setFreshness((current) => (Object.keys(current).length === 0 ? current : empty))
+    const clear = () => setFreshness(current => current.runId === runId && Object.keys(current.states).length === 0 ? current : { runId, states: empty })
     if (!read || !runId || !evidenceKey) {
-      clear()
+      clear(); setStatus('loaded')
       return
     }
     let active = true
+    setStatus('loading')
     Promise.resolve()
       .then(() => read({ runId }))
       .then((items) => {
-        if (active) setFreshness(Object.fromEntries(items.map((item) => [item.evidenceId, item.state])))
+        if (active) { setFreshness({ runId, states: Object.fromEntries(items.map((item) => [item.evidenceId, item.state])) }); setStatus('loaded') }
       })
       .catch(() => {
         // Unknown freshness is shown as "适用性无法核实", never as current.
-        if (active) clear()
+        if (active) { clear(); setStatus('failed') }
       })
     return () => { active = false }
   }, [read, runId, evidenceKey, refreshKey, focusCount])
-  return freshness
+  return { status, states: freshness.runId === runId ? freshness.states : empty, retry }
 }
 

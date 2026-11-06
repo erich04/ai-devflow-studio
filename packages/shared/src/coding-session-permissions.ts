@@ -2,7 +2,7 @@ import type { CodingPermissionRequest, CodingSessionGrant } from './domain.js'
 
 /** A grant description; executor policy and exact-request validation still run on every use. */
 export function codingSessionPermissionRule(request: CodingPermissionRequest): CodingSessionGrant['rule'] | undefined {
-  if (request.status !== 'pending' || request.risk === 'blocked' ||
+  if (request.changeSetId || request.status !== 'pending' || request.risk === 'blocked' ||
       (request.origin && request.origin !== 'coding_executor')) return undefined
   if (request.permission === 'bash') {
     const command = request.command

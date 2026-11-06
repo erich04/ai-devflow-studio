@@ -273,6 +273,7 @@
 /* Always-visible summaries, with details outside clipping scroll containers. */
 .detail-popover { position: fixed; z-index: 1100; width: min(420px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; box-sizing: border-box; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
 .detail-popover header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.detail-popover header.detail-popover-header--bare { justify-content: flex-end; }
 .detail-popover h3 { font-size: var(--font-size-xs); margin-top: 18px; }
 .detail-popover .stat { display: block; white-space: normal; border: 0; padding: 0; }
 .detail-popover .remote-sync-operation { display: flex; flex-wrap: wrap; margin: 12px 0; }

@@ -120,6 +120,17 @@ describe('redactCodingAgentEventForStorage', () => {
 })
 
 describe('redactLocalAbsolutePaths', () => {
+  it.each(['/*', '/**'])('preserves the standalone block comment opener %s', opener => {
+    const source = `${opener}\n * Returns the newly completed count.\n */`
+    expect(redactLocalAbsolutePaths(source)).toMatchObject({ value: source, redacted: false })
+  })
+
+  it('still redacts paths inside comments and paths starting with a wildcard', () => {
+    const result = redactLocalAbsolutePaths('/** /private/project.txt */\n/**/private/project.txt')
+    expect(result.value).toBe('/** [REDACTED:local_absolute_path] */\n[REDACTED:local_absolute_path]')
+    expect(result.replacementCount).toBe(2)
+  })
+
   it('redacts a POSIX path immediately following a diagnostic label', () => {
     const result = redactLocalAbsolutePaths('error:/Users/alice/private/report.txt')
 

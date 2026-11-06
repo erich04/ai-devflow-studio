@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createWorkflowRunFromRequest } from '@ai-devflow/shared'
 import { DiscussionToggle, WorkbenchWorkspace } from './WorkbenchWorkspace'
 import type { ConversationCommand, WorkbenchConversation } from '../electron/workbench-conversation-contract'
+import type { DiscussionReference } from './app/discussion-reference'
 
 const run = createWorkflowRunFromRequest({ runId: 'run-ui', title: '清理任务', request: '实现清理', projectId: 'local-1', creatorId: 'user-1', branchName: 'ai/clear', now: '2026-09-16T10:00:00Z' }).run
 function fixture() {
@@ -71,7 +72,7 @@ describe('split document reader', () => {
     expect(screen.getByLabelText('对话内容')).toBe(input)
     expect(input).toHaveValue('尚未发送的补充')
     expect(messages.scrollTop).toBe(160)
-    expect(within(screen.getByRole('complementary', { name: '独立对话' })).queryByRole('button', { name: '节点详情' })).not.toBeInTheDocument()
+    expect(within(screen.getByRole('complementary', { name: '答疑' })).queryByRole('button', { name: '节点详情' })).not.toBeInTheDocument()
     expect(screen.getByRole('tablist', { name: '独立会话' })).toBeVisible()
     expect(input).toHaveValue('尚未发送的补充')
     expect(f.commands.filter((command) => command.type === 'send')).toHaveLength(1)
@@ -86,7 +87,7 @@ describe('split document reader', () => {
     const empty = await screen.findByRole('region', { name: '对话空状态' })
     expect(empty).toHaveTextContent('新建对话')
     expect(empty).not.toHaveAttribute('aria-labelledby')
-    expect(within(screen.getByRole('complementary', { name: '独立对话' })).queryByTestId('preserved-inspector')).not.toBeInTheDocument()
+    expect(within(screen.getByRole('complementary', { name: '答疑' })).queryByTestId('preserved-inspector')).not.toBeInTheDocument()
     expect(screen.getByTestId('preserved-inspector')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: '会话历史' }))
     fireEvent.click(within(screen.getByLabelText('会话历史记录')).getByRole('button', { name: /保留的会话/ }))
@@ -103,11 +104,12 @@ describe('discussion pane (plan L3, §5.4)', () => {
     const pane = screen.getByTestId('workbench-workspace')
     expect(pane).not.toBeVisible()
     expect(document.querySelector('.workspace-split')).toHaveClass('is-discussion-collapsed')
-    const toggle = screen.getByRole('button', { name: '讨论' })
+    const toggle = screen.getByRole('button', { name: '答疑' })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(toggle)
     expect(pane).toBeVisible()
-    expect(toggle).toHaveAccessibleName('收起讨论')
+    expect(toggle).toHaveAccessibleName('收起答疑')
+    expect(screen.getByRole('heading', { name: '答疑' })).toBeVisible()
     expect(await screen.findByRole('region', { name: '对话空状态' })).toHaveTextContent('新建对话')
     expect(localStorage.getItem(`devflow-workbench-discussion:${run.projectId}`)).toBe('open')
     fireEvent.click(toggle)
@@ -123,16 +125,16 @@ describe('discussion pane (plan L3, §5.4)', () => {
     expect(screen.getByTestId('workbench-workspace')).toBeVisible()
     fireEvent.change(input, { target: { value: '还没发送的草稿' } })
     // The title row toggle and the pane's own collapse button do the same thing.
-    expect(screen.getAllByRole('button', { name: '收起讨论' })).toHaveLength(2)
-    fireEvent.click(within(screen.getByRole('region', { name: '当前查看的节点详情' })).getByRole('button', { name: '收起讨论' }))
+    expect(screen.getAllByRole('button', { name: '收起答疑' })).toHaveLength(2)
+    fireEvent.click(within(screen.getByRole('region', { name: '当前查看的节点详情' })).getByRole('button', { name: '收起答疑' }))
     expect(screen.getByTestId('workbench-workspace')).not.toBeVisible()
     const inspectorInput = screen.getByLabelText('节点原有表单')
     inspectorInput.focus()
     f.sessions[0]!.status = 'awaiting_answer'; f.sessions[0]!.version++
     await act(async () => { f.push() })
     expect(inspectorInput).toHaveFocus()
-    await waitFor(() => expect(screen.getByRole('button', { name: /讨论/ })).toHaveAccessibleName('讨论 有待回答的讨论'))
-    fireEvent.click(screen.getByRole('button', { name: /讨论/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /^答疑/ })).toHaveAccessibleName('答疑 有待回答的讨论'))
+    fireEvent.click(screen.getByRole('button', { name: /^答疑/ }))
     expect(screen.getByLabelText('对话内容')).toBe(input)
     expect(input).toHaveValue('还没发送的草稿')
   })
@@ -591,8 +593,9 @@ describe('discussion references and proposal preview (plan W7, W8)', () => {
     await screen.findByRole('textbox', { name: '对话内容' })
     rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 1, type: 'reference', reference }} />)
     const card = await screen.findByTestId('conversation-reference-card')
-    expect(card).toHaveTextContent('需求澄清 · 需求 v2')
-    expect(card).toHaveTextContent(`任务清单 · ${run.title} · 需求澄清 · 需求确认 Gate · 读取于`)
+    // One line; project, task, step and read time move to the title.
+    expect(card).toHaveTextContent(/^引用：需求澄清（需求 v2）$/u)
+    expect(card.getAttribute('title')).toContain(`任务清单 · ${run.title} · 需求澄清 · 需求确认 Gate · 读取于`)
     // Adding a reference never sends a message or calls a model.
     expect(f.commands.filter((command) => command.type === 'send')).toHaveLength(0)
     // Browsing another node does not replace the card.
@@ -607,18 +610,23 @@ describe('discussion references and proposal preview (plan W7, W8)', () => {
     const text = (sent as Extract<ConversationCommand, { type: 'send' }>).text
     expect(text.startsWith('【引用材料】需求澄清（需求 v2）')).toBe(true)
     expect(text.endsWith('这一版的验收标准够吗？')).toBe(true)
+    expect(sent).toMatchObject({ display: { text: '这一版的验收标准够吗？', references: ['需求澄清（需求 v2）'] } })
     await waitFor(() => expect(screen.queryByTestId('conversation-reference-card')).not.toBeInTheDocument())
   })
 
-  it('opens the new-conversation dialog first when no conversation exists, then attaches the reference', async () => {
+  it('shows a pending composer instead of the new-conversation dialog when no conversation exists (AC42)', async () => {
     const f = fixture()
     const { rerender } = render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    await waitFor(() => expect(f.commands.some((command) => command.type === 'list')).toBe(true))
     rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 1, type: 'reference', reference }} />)
-    const dialog = await screen.findByRole('dialog')
-    expect(f.commands.filter((command) => command.type === 'create')).toHaveLength(0)
-    fireEvent.click(within(dialog).getAllByRole('button').find((button) => /开始|创建|新建/.test(button.textContent ?? ''))!)
-    await screen.findByTestId('conversation-reference-card')
-    expect(f.commands.filter((command) => command.type === 'send')).toHaveLength(0)
+    const composer = await screen.findByTestId('pending-composer')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(within(composer).getByTestId('conversation-reference-card')).toHaveTextContent('引用：需求澄清（需求 v2）')
+    expect(composer).toHaveTextContent('模型：DeepSeek')
+    expect(composer).toHaveTextContent('发送后才会创建对话并调用模型。')
+    expect(within(composer).getByRole('combobox', { name: '新对话执行方式' })).toHaveValue('direct-provider')
+    expect(screen.getByRole('button', { name: '新建对话' })).toBeDisabled()
+    expect(f.commands.filter((command) => command.type === 'create' || command.type === 'send')).toHaveLength(0)
   })
 
   it('removes a reference card on request', async () => {
@@ -627,7 +635,7 @@ describe('discussion references and proposal preview (plan W7, W8)', () => {
     const { rerender } = render(<WorkbenchWorkspace {...f.props} splitDetails />)
     await screen.findByRole('textbox', { name: '对话内容' })
     rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 1, type: 'reference', reference }} />)
-    fireEvent.click(await screen.findByRole('button', { name: '移除引用：需求澄清' }))
+    fireEvent.click(await screen.findByRole('button', { name: '移除引用：需求澄清（需求 v2）' }))
     expect(screen.queryByTestId('conversation-reference-card')).not.toBeInTheDocument()
   })
 
@@ -686,4 +694,184 @@ it('keeps the selected conversation and unsent draft when reading diagnostics wi
   expect(screen.getByRole('textbox', { name: '对话内容' })).toBe(input)
   expect(input).toHaveValue('保留未发送草稿')
   expect(f.commands.filter(command => command.type === 'send')).toHaveLength(0)
+})
+
+describe('pending composer and display text (design §5.10, amendment 34)', () => {
+  afterEach(() => { vi.useRealTimers() })
+  const reference = {
+    id: 'artifact-1#review-r1-1:需求 v1:12', materialId: 'artifact-1#review-r1-1', materialTitle: '需求澄清结果 · 意见 2 · 重要', version: '需求 v1', label: '需求 v1 · 意见 2 · 重要',
+    excerpt: '意见：缺少验收口径', projectName: '任务清单', runTitle: run.title, stageLabel: '需求澄清', stepTitle: '需求确认 Gate', readAt: '2026-10-30T02:00:00.000Z',
+  }
+  const question = { ...reference, id: 'artifact-1#question-1:需求 v1:8', materialId: 'artifact-1#question-1', materialTitle: '需求澄清结果 · 问题 1', label: '需求 v1 · 问题 1', excerpt: '问题：是否需要撤销？' }
+  /** Mimics main for `send`: stores `display` on the user message and takes the title from it; `send` can be held or rejected. */
+  function pendingFixture(options: { hold?: boolean; fail?: boolean } = {}) {
+    const f = fixture()
+    const original = f.api.workbenchConversation.getMockImplementation()!
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    f.api.workbenchConversation.mockImplementation(async (input: ConversationCommand) => {
+      if (input.type !== 'send') return original(input)
+      if (options.hold) await held
+      if (options.fail) { f.commands.push(input); throw new Error('模型服务暂时不可用，请稍后重试。') }
+      await original(input)
+      const session = f.sessions.find((item) => item.id === input.conversationId)!
+      const user = session.messages.filter((message) => message.role === 'user').at(-1)!
+      if (input.display) user.display = input.display
+      if (/^对话 \d+$/u.test(session.title)) session.title = (input.display?.text ?? input.text).trim().slice(0, 28)
+      return { conversations: structuredClone(f.sessions) }
+    })
+    return { ...f, release: () => release() }
+  }
+  async function openPending(f: ReturnType<typeof pendingFixture>, ref: DiscussionReference = reference) {
+    const view = render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    await waitFor(() => expect(f.commands.some((command) => command.type === 'list')).toBe(true))
+    view.rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 1, type: 'reference', reference: ref }} />)
+    await screen.findByTestId('pending-composer')
+    return view
+  }
+  const typeAndSend = (text: string) => {
+    fireEvent.change(screen.getByRole('textbox', { name: '待发送的对话内容' }), { target: { value: text } })
+    fireEvent.click(within(screen.getByTestId('pending-composer')).getByRole('button', { name: '发送消息' }))
+  }
+
+  it('creates the conversation with the typed draft, sends display text and opens it empty without a chip', async () => {
+    const f = pendingFixture()
+    await openPending(f)
+    typeAndSend('这个意见要怎么改？')
+    const input = await screen.findByRole('textbox', { name: '对话内容' })
+    expect(input).toHaveValue('')
+    expect(f.commands.find((command) => command.type === 'create')).toMatchObject({ type: 'create', inputDraft: '这个意见要怎么改？', executor: 'direct-provider' })
+    expect(f.commands.filter((command) => command.type === 'update' && command.inputDraft === '这个意见要怎么改？')).toHaveLength(0)
+    const sent = f.commands.find((command) => command.type === 'send') as Extract<ConversationCommand, { type: 'send' }>
+    expect(sent.text.startsWith('【引用材料】需求澄清结果 · 意见 2 · 重要（需求 v1）')).toBe(true)
+    expect(sent.display).toEqual({ text: '这个意见要怎么改？', references: ['需求 v1 · 意见 2 · 重要'] })
+    expect(screen.queryByTestId('pending-composer')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('conversation-reference-card')).not.toBeInTheDocument()
+    // The title comes from the typed text.
+    expect(screen.getByRole('tab', { name: /这个意见要怎么改？/u })).toBeInTheDocument()
+    // The bubble shows the chip line and the typed text; the full content only after opening the disclosure (AC43).
+    const bubble = screen.getByText('这个意见要怎么改？', { selector: '.message-plain' }).closest('article')!
+    expect(bubble).toHaveTextContent('引用：需求 v1 · 意见 2 · 重要')
+    expect(bubble.textContent).not.toContain('【引用材料】')
+    expect(bubble.textContent).not.toContain('读取时间')
+    fireEvent.click(within(bubble).getByRole('button', { name: '发送给助手的完整内容' }))
+    expect(bubble.textContent).toContain('【引用材料】需求澄清结果 · 意见 2 · 重要（需求 v1）')
+    // The next message carries no reference block.
+    fireEvent.change(input, { target: { value: '再问一句' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(f.commands.filter((command) => command.type === 'send')).toHaveLength(2))
+    const second = f.commands.filter((command) => command.type === 'send')[1] as Extract<ConversationCommand, { type: 'send' }>
+    expect(second.text).toBe('再问一句')
+    expect(second.display).toBeUndefined()
+  })
+
+  it('keeps the pending composer disabled and no conversation open while send is held, and saves no draft afterwards (finding 24)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const f = pendingFixture({ hold: true })
+    await openPending(f)
+    typeAndSend('这个意见要怎么改？')
+    await waitFor(() => expect(f.commands.some((command) => command.type === 'create')).toBe(true))
+    await act(async () => { f.push() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+    const composer = screen.getByTestId('pending-composer')
+    expect(composer).toHaveTextContent('正在发送…')
+    expect(within(composer).getByRole('textbox', { name: '待发送的对话内容' })).toBeDisabled()
+    expect(within(composer).getByRole('button', { name: '发送消息' })).toBeDisabled()
+    expect(screen.queryByRole('textbox', { name: '对话内容' })).not.toBeInTheDocument()
+    expect(screen.queryByText('正在创建独立对话…')).not.toBeInTheDocument()
+    await act(async () => { f.release() })
+    const input = await screen.findByRole('textbox', { name: '对话内容' })
+    expect(input).toHaveValue('')
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(f.commands.filter((command) => command.type === 'update' && command.inputDraft === '这个意见要怎么改？')).toHaveLength(0)
+  })
+
+  it('opens the new conversation with the typed draft and the chip after a failed send', async () => {
+    const f = pendingFixture({ fail: true })
+    await openPending(f)
+    typeAndSend('这个意见要怎么改？')
+    const input = await screen.findByRole('textbox', { name: '对话内容' })
+    expect(input).toHaveValue('这个意见要怎么改？')
+    expect(screen.getByTestId('conversation-reference-card')).toHaveTextContent('引用：需求 v1 · 意见 2 · 重要')
+    expect(screen.getByRole('alert')).toHaveTextContent('模型服务暂时不可用')
+  })
+
+  it('cuts a long title without label to a 120-character chip while the model still gets the full title (finding 25)', async () => {
+    const f = pendingFixture()
+    const title = '长'.repeat(200)
+    const { label: _label, ...unlabelled } = reference
+    await openPending(f, { ...unlabelled, materialTitle: title })
+    const chip = screen.getByTestId('conversation-reference-card')
+    expect(chip.textContent!.replace(/^引用：/u, '')).toHaveLength(120)
+    typeAndSend('问一下')
+    await screen.findByRole('textbox', { name: '对话内容' })
+    const sent = f.commands.find((command) => command.type === 'send') as Extract<ConversationCommand, { type: 'send' }>
+    expect(sent.display!.references[0]).toHaveLength(120)
+    expect(sent.display!.references[0]!.endsWith('…')).toBe(true)
+    expect(sent.text).toContain(`【引用材料】${title}（需求 v1）`)
+  })
+
+  it('adds a second reference to the pending composer and keeps the typed text (amendment 34)', async () => {
+    const f = pendingFixture()
+    const { rerender } = await openPending(f)
+    fireEvent.change(screen.getByRole('textbox', { name: '待发送的对话内容' }), { target: { value: '两条一起看' } })
+    fireEvent.change(screen.getByRole('combobox', { name: '新对话执行方式' }), { target: { value: 'opencode' } })
+    rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 2, type: 'reference', reference: question }} />)
+    await waitFor(() => expect(screen.getAllByTestId('conversation-reference-card')).toHaveLength(2))
+    expect(screen.getAllByTestId('conversation-reference-card').map((chip) => chip.textContent)).toEqual(['引用：需求 v1 · 意见 2 · 重要', '引用：需求 v1 · 问题 1'])
+    expect(screen.getByRole('textbox', { name: '待发送的对话内容' })).toHaveValue('两条一起看')
+    expect(screen.getByRole('combobox', { name: '新对话执行方式' })).toHaveValue('opencode')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(f.commands.filter((command) => command.type === 'create' || command.type === 'send')).toHaveLength(0)
+  })
+
+  it('queues a reference that arrives while the first send is in flight and attaches only it afterwards (amendment 34)', async () => {
+    const f = pendingFixture({ hold: true })
+    const { rerender } = await openPending(f)
+    typeAndSend('这个意见要怎么改？')
+    await waitFor(() => expect(f.commands.some((command) => command.type === 'create')).toBe(true))
+    rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 2, type: 'reference', reference: question }} />)
+    await act(async () => { f.push() })
+    expect(screen.queryByRole('textbox', { name: '对话内容' })).not.toBeInTheDocument()
+    expect(f.commands.filter((command) => command.type === 'update')).toHaveLength(0)
+    await act(async () => { f.release() })
+    const input = await screen.findByRole('textbox', { name: '对话内容' })
+    expect(input).toHaveValue('')
+    expect(screen.getAllByTestId('conversation-reference-card').map((chip) => chip.textContent)).toEqual(['引用：需求 v1 · 问题 1'])
+  })
+
+  it('cancels the pending composer without creating anything, and offers no 「取消」 while sending (review finding 10)', async () => {
+    const f = pendingFixture({ hold: true })
+    await openPending(f)
+    expect(screen.getByRole('button', { name: '新建对话' })).toBeDisabled()
+    fireEvent.change(screen.getByRole('textbox', { name: '待发送的对话内容' }), { target: { value: '不问了' } })
+    fireEvent.click(within(screen.getByTestId('pending-composer')).getByRole('button', { name: '取消' }))
+    expect(screen.queryByTestId('pending-composer')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '新建对话' })).toBeEnabled()
+    expect(f.commands.filter((command) => command.type === 'create' || command.type === 'send')).toHaveLength(0)
+  })
+
+  it('hides 「取消」 while the pending message is being sent', async () => {
+    const f = pendingFixture({ hold: true })
+    await openPending(f)
+    typeAndSend('这个意见要怎么改？')
+    await waitFor(() => expect(f.commands.some((command) => command.type === 'create')).toBe(true))
+    expect(within(screen.getByTestId('pending-composer')).queryByRole('button', { name: '取消' })).not.toBeInTheDocument()
+    await act(async () => { f.release() })
+  })
+
+  it('opens and flashes the message behind a 来自答疑 item, or says it is not on this machine', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '旧答疑' })
+    await f.api.workbenchConversation({ type: 'send', projectId: run.projectId, conversationId: 'chat-1', providerId: 'provider', text: '问一下' })
+    await f.api.workbenchConversation({ type: 'update', projectId: run.projectId, conversationId: 'chat-1', isOpen: false })
+    const messageId = f.sessions[0]!.messages[1]!.id
+    const { rerender } = render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    await waitFor(() => expect(f.commands.some((command) => command.type === 'list')).toBe(true))
+    rerender(<WorkbenchWorkspace {...f.props} splitDetails focusMessage={{ serial: 1, messageId }} />)
+    await waitFor(() => expect(document.getElementById(`message-${messageId}`)).toHaveClass('is-flashing'))
+    expect(f.commands).toContainEqual({ type: 'update', projectId: run.projectId, conversationId: 'chat-1', isOpen: true })
+    rerender(<WorkbenchWorkspace {...f.props} splitDetails focusMessage={{ serial: 2, messageId: 'missing' }} />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('这条答疑记录不在本机的对话里。')
+  })
 })

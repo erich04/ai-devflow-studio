@@ -114,24 +114,23 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
       await page.getByTestId(`flow-node-${run.currentNodeId}`).click()
     }
     await openTask()
-    const panel = page.getByTestId('coding-question-panel')
+    const panel = page.locator('.build-test-workspace')
     await expect(panel).toBeVisible()
-    await expect(panel.getByRole('button', { name: '发送回答' })).toBeDisabled()
+    await expect(panel.getByRole('button', { name: '提交回答', exact: true }).first()).toBeDisabled()
     await panel.getByLabel('Color：自定义回答').fill('Green')
     await panel.getByRole('checkbox', { name: /Desktop/ }).check()
     await panel.getByRole('checkbox', { name: /Web/ }).check()
     await page.screenshot({ path: path.join(output, '01-question.png'), scale: 'css' })
-    await panel.getByRole('button', { name: '发送回答' }).click()
+    await panel.getByRole('button', { name: '提交回答', exact: true }).first().click()
     if (input.delegated) {
       await expect.poll(async () => (await page.evaluate(() => window.aiDevFlowDesktop!.loadState())).codingPermissionRequests
         .find((item) => item.codingRunId === waiting.id && item.status === 'pending' && (item.origin ?? 'coding_executor') === 'coding_executor')?.command,
       { timeout: 30_000 }).toBe('npm test')
-      const command = page.getByTestId('workbench-coding-permission-summary').getByLabel('待授权命令')
+      const command = page.locator('[data-card-id^="permission:"] > pre[data-raw-material]').filter({ hasText: 'npm test' }).first()
       await expect(command).toBeVisible()
       assert.equal(await command.textContent(), 'npm test')
       assert.equal(await command.evaluate((element) => element.closest('details') === null), true,
         'One-time command approval must not require expanding the session reuse disclosure')
-      await page.getByRole('button', { name: '查看权限详情', exact: true }).click()
       await expect(command).toBeVisible()
       await command.scrollIntoViewIfNeeded()
       await page.screenshot({ path: path.join(output, '01b-command-permission.png'), scale: 'css' })
@@ -147,6 +146,8 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
       if (current?.status === 'failed') throw new Error(current.summary)
       return state.codingPermissionRequests.find((item) => item.codingRunId === waiting.id && item.origin === 'change_acceptance')?.status
     }, { timeout: 60_000 }).toBe('pending')
+    await expect(page.getByRole('article', { name: '问题 1', exact: true })).toContainText('已回答：Green')
+    await expect(page.getByRole('article', { name: '问题 2', exact: true })).toContainText('已回答：Desktop、Web')
     const completed = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
     const current = completed.codingRuns.find((item) => item.id === waiting.id)!
     const providerEvents = completed.codingEvents.filter((item) => item.codingRunId === waiting.id &&
@@ -223,7 +224,7 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
       const relay = await app.evaluate(() => (globalThis as typeof globalThis & { fixtureRelayDiagnostics?: unknown[] }).fixtureRelayDiagnostics).catch(() => undefined)
       const failure = { runs: state?.codingRuns.map((item) => ({ id: item.id, status: item.status, summary: item.summary,
         engine: item.engine, providerId: item.providerId, configVersion: item.configVersion, managedWorkspaceId: item.managedWorkspaceId })),
-        events: state?.codingEvents.slice(-8), relay, toast: await page.getByTestId('toast').textContent().catch(() => null) }
+        events: state?.codingEvents.slice(-8), relay, toast: await page.getByTestId('toast').textContent({ timeout: 1_000 }).catch(() => null) }
       await writeFile(path.join(output, 'failure.json'), JSON.stringify(failure, null, 2)).catch(() => undefined)
       console.error(JSON.stringify(failure))
     }

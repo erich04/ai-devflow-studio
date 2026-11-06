@@ -14,7 +14,7 @@ import type { CodingExecutor } from './coding-executor.js'
 import { isGitRepository } from './coding-runner.js'
 import type { LocalStore } from './local-store.js'
 
-export const NATIVE_CODING_MAX_PROVIDER_CALLS = 3
+export const NATIVE_CODING_MAX_PROVIDER_CALLS = 4
 export const NATIVE_CODING_MAX_PROMPT_CHARS = 30_000
 // Preserve complete approved stage artifacts, with room left for the native
 // request envelope and repository context under the final 30,000-character cap.
@@ -85,6 +85,7 @@ export function estimateNativeCodingWorstCaseCost(input: {
   model: string
   billingProvider?: 'deepseek' | 'openai_compatible'
   timestamp: string
+  providerCallLimit?: number
 }) {
   return estimateCodingRuntimeCost({
     engine: 'native',
@@ -98,7 +99,7 @@ export function estimateNativeCodingWorstCaseCost(input: {
     userId: input.requestedBy,
     timestamp: input.timestamp,
     maxOutputTokens: NATIVE_CODING_MAX_OUTPUT_TOKENS,
-    providerCallLimit: NATIVE_CODING_MAX_PROVIDER_CALLS,
+    providerCallLimit: input.providerCallLimit ?? NATIVE_CODING_MAX_PROVIDER_CALLS,
   })
 }
 

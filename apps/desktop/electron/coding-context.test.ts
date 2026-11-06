@@ -5,7 +5,7 @@ import {
 } from '@ai-devflow/shared'
 import { runs } from '@ai-devflow/shared/fixtures'
 import {
-  assertCodingContextCurrent, buildCodingMemoryQuery, buildWithCodingMemory, codingPromptDigest, recallCodingMemory,
+  assertCodingContextCurrent, buildCodingMemoryQuery, buildWithCodingMemory, codingPromptDigest, recallCodingMemory, recallScopedMemory,
   registerProjectMemoryRecall, type CodingMemoryStore, type RecalledMemory,
 } from './coding-context'
 import { projectMemoryIdentity } from './project-memory-recall'
@@ -19,6 +19,20 @@ const pairing: DesktopPairingCredential = {
 }
 
 describe('Coding Context authority', () => {
+  it('keeps the best query hit when the short conventions page competes for a small budget', async () => {
+    const store: CodingMemoryStore = { getDesktopPairingCredential: async () => pairing }
+    const hits = ['strong', 'other'].map(id => projectMemoryIdentity({ id }, id))
+    const conventions = vi.fn(async () => projectMemoryIdentity({ id: 'devflow-essentials' }, 'short page'))
+    registerProjectMemoryRecall(store, { recall: async () => ({ items: hits, degraded: false }), conventions, assertCurrent: async () => {} })
+    const input = { store, projectId: run.projectId, userId: run.creatorId, runtimeId: 'chat', requestId: 'q', query: 'retry', now,
+      budget: { maxBytes: 2000, maxItems: 2 }, includeCompactConventions: true }
+    const recalled = await recallScopedMemory(input)
+    expect(recalled.memories.map(m => m.id)).toEqual(['pm-strong', 'pm-devflow-essentials'])
+    expect(recalled.omittedMemoryCount).toBe(1)
+    expect(conventions).toHaveBeenCalledWith({ projectId: run.projectId, userId: run.creatorId, compact: true })
+    expect((await recallScopedMemory({ ...input, budget: { maxBytes: 210, maxItems: 2 } })).memories.map(m => m.id)).toEqual(['pm-strong'])
+  })
+
   it('derives retrieval scope from the paired actor and rejects a different actor', async () => {
     const store: CodingMemoryStore = { getDesktopPairingCredential: async () => pairing }
     const recall = vi.fn(async () => ({ items: [], degraded: false }))

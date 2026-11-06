@@ -2,7 +2,7 @@ import type { Database } from 'sql.js'
 import { createMemoryLearningTables } from './automatic-memory-store'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 42
+export const CURRENT_SCHEMA_VERSION = 43
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2981,12 +2981,83 @@ export const schemaMigrations: readonly SchemaMigration[] = [
   {
     version: 42,
     migrate(db) {
-      // Native v3 sessions (ADR 0029). The draft branch wrote this table as its schema 39 and later
-      // as its schema 41, while main used 39 for Hindsight, 40 for memory candidates and 41 for
-      // project memory. A database from the draft 39 lacks main's Hindsight tables; one from the
-      // draft 41 already has this table but skipped main's 41, so it lacks the project memory
-      // tables. Both sets are created here as well. Every statement is create-if-not-exists: on a
-      // database that followed main only the session table is new, and a second run is a no-op.
+      db.run(`
+    create table coding_change_sets_v42 (
+      id text primary key,
+      state_version integer not null,
+      coding_run_id text not null references coding_agent_runs(id) on delete cascade,
+      project_id text not null references local_projects(id) on delete cascade,
+      workspace_id text not null references managed_coding_workspaces(id) on delete cascade,
+      phase text not null,
+      revision_index integer not null default 0,
+      executor_version integer not null,
+      config_version integer not null,
+      provider_id text not null,
+      change_set_digest text not null,
+      json text not null,
+      created_at text not null,
+      expires_at text not null,
+      check (state_version = 2),
+      check (phase in ('initial', 'repair')),
+      check (executor_version = 2),
+      check (config_version between 1 and 2147483647),
+      check (length(trim(provider_id)) between 1 and 200 and trim(provider_id) = provider_id),
+      check (change_set_digest not glob '*[^0-9a-f]*' and length(change_set_digest) = 64),
+      check (json_valid(json)),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.codingRunId') = coding_run_id),
+      check (json_extract(json, '$.projectId') = project_id),
+      check (json_extract(json, '$.workspaceId') = workspace_id),
+      check (json_extract(json, '$.phase') = phase),
+      check (json_extract(json, '$.executorVersion') = executor_version),
+      check (json_extract(json, '$.configVersion') = config_version),
+      check (json_extract(json, '$.providerId') = provider_id),
+      check (json_extract(json, '$.changeSetDigest') = change_set_digest),
+      check (json_extract(json, '$.createdAt') = created_at),
+      check (json_extract(json, '$.expiresAt') = expires_at),
+      check (expires_at > created_at),
+      check (revision_index between 0 and 3),
+      check (coalesce(json_extract(json, '$.revision.index'), 0) = revision_index),
+      unique (coding_run_id, phase, revision_index)
+    );
+
+    insert into coding_change_sets_v42 (id, state_version, coding_run_id, project_id, workspace_id, phase, executor_version, config_version, provider_id, change_set_digest, json, created_at, expires_at)
+      select id, state_version, coding_run_id, project_id, workspace_id, phase, executor_version, config_version, provider_id, change_set_digest, json, created_at, expires_at from coding_change_sets;
+    drop table coding_change_sets;
+    alter table coding_change_sets_v42 rename to coding_change_sets;
+    create index idx_coding_change_sets_run on coding_change_sets(coding_run_id, created_at, id);
+    create index idx_coding_change_sets_expiry on coding_change_sets(expires_at, id);
+    create table if not exists coding_change_reviews (
+      id text primary key,
+      coding_run_id text not null references coding_agent_runs(id) on delete cascade,
+      change_set_id text not null references coding_change_sets(id) on delete cascade,
+      change_set_digest text not null,
+      status text not null check (status in ('running', 'completed', 'failed', 'cancelled')),
+      json text not null check (json_valid(json)),
+      created_at text not null,
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.stateVersion') = 1),
+      check (json_extract(json, '$.codingRunId') = coding_run_id),
+      check (json_extract(json, '$.changeSetId') = change_set_id),
+      check (json_extract(json, '$.status') = status),
+      check (json_extract(json, '$.startedAt') = created_at),
+      check (length(change_set_digest) = 64 and change_set_digest not glob '*[^0-9a-f]*'),
+      check (json_extract(json, '$.changeSetDigest') = change_set_digest)
+    );
+    create index if not exists idx_coding_change_reviews_run on coding_change_reviews(change_set_id, created_at, id);
+      `)
+    },
+  },
+  {
+    version: 43,
+    migrate(db, hooks) {
+      // V3's earlier schema 42 persisted sessions; main's 42 added change-set revisions.
+      // Only replay main's table rebuild for databases that still have the old layout.
+      if (!db.exec("select 1 from pragma_table_info('coding_change_sets') where name = 'revision_index'").length) {
+        schemaMigrations.find(migration => migration.version === 42)!.migrate(db, hooks)
+      }
+      // Earlier draft versions also skipped the Hindsight or project-memory tables.
       db.run(`
         create table if not exists hindsight_configurations (
           generation text primary key, project_id text not null, json text not null

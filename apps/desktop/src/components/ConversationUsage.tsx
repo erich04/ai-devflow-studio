@@ -19,8 +19,8 @@ export function summarizeConversationUsage(session: WorkbenchConversation) {
 export function ConversationUsage({ session }: { session: WorkbenchConversation }) {
   const usage = summarizeConversationUsage(session)
   const short = usage.total >= 1_000_000 ? `${(usage.total / 1_000_000).toFixed(1)}m` : usage.total >= 1000 ? `${(usage.total / 1000).toFixed(1)}k` : String(usage.total)
-  return <DetailPopover className="conversation-usage-button" title={`当前会话用量 · ${usage.status}`} label={<><Gauge size={16} /><span className="usage-label">用量 {usage.reported ? short : '—'}</span>{usage.partial && <small>{usage.reported ? '部分' : '未返回'}</small>}</>}>
-    <p>当前会话累计的 Provider 用量；不代表上下文窗口占用或整个 Run 的用量。</p>
+  return <DetailPopover className="conversation-usage-button" title={`当前会话用量 · ${usage.status}`} label={<><Gauge size={16} /><span className="usage-label">用量 {usage.reported ? short : '—'} · 费用未知</span>{usage.partial && <small>{usage.reported ? '部分' : '未返回'}</small>}</>}>
+    <p>当前会话累计的模型用量；不代表上下文窗口占用。答疑的费用不计入本任务。</p>
     <dl className="detail-values"><dt>累计 Token</dt><dd>{usage.reported ? usage.total.toLocaleString() : '未提供'}</dd>
       <dt>输入 Token</dt><dd>{usage.input?.toLocaleString() ?? '未提供'}{usage.input != null && !usage.inputComplete ? '（部分）' : ''}</dd>
       <dt>输出 Token</dt><dd>{usage.output?.toLocaleString() ?? '未提供'}{usage.output != null && !usage.outputComplete ? '（部分）' : ''}</dd></dl>

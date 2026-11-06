@@ -11,7 +11,7 @@ import type {
 } from './domain'
 import type { GitHubDeliveryIntent } from './github-delivery'
 import type { GateEnforcementDecision } from './enforcement'
-import { buildClarificationReviewBundle } from './clarification'
+import { assessClarificationReviewTarget, buildClarificationReviewBundle } from './clarification'
 
 export type WorkflowCommand =
   | { type: 'complete_agent'; nodeId: string; artifactId: string }
@@ -395,23 +395,17 @@ export function evaluateWorkflowCommand(input: EvaluateWorkflowCommandInput): Wo
         'Only the current review-requested clarification revision can be approved',
       )
     }
-    const latestReview = input.evidence.agentReviews
-      .filter((review) => review.runId === input.run.id && review.nodeId === node.id)
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
-    if (latestReview?.contextManifest) {
-      const subject = latestReview.contextManifest.subjectArtifacts.find(
-        (artifact) => artifact.kind === 'clarification',
+    const reviewTarget = assessClarificationReviewTarget({
+      runId: input.run.id,
+      gateNodeId: node.id,
+      reviews: input.evidence.agentReviews,
+      activeRevision: bundle.activeRevision,
+    })
+    if (reviewTarget.state === 'stale') {
+      return blocked(
+        'clarification_revision_stale',
+        'The requirement review does not target the current clarification revision',
       )
-      if (
-        !subject ||
-        subject.id !== bundle.activeRevision.id ||
-        subject.updatedAt !== bundle.activeRevision.updatedAt
-      ) {
-        return blocked(
-          'clarification_revision_stale',
-          'The requirement review does not target the current clarification revision',
-        )
-      }
     }
   }
 

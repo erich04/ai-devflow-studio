@@ -6,9 +6,15 @@ describe('recall intents', () => {
     expect(splitRecallIntents('撤销窗口现在是多少秒？代码注释用什么语言写？')).toEqual(['撤销窗口现在是多少秒', '代码注释用什么语言写'])
     expect(splitRecallIntents('删除任务时需要注意什么，每页加载多少条任务')).toEqual(['删除任务时需要注意什么', '每页加载多少条任务'])
     expect(splitRecallIntents('把归档的撤销时长设成和删除一样；另外注释按项目约定的语言写。只改这个文件。'))
-      .toEqual(['把归档的撤销时长设成和删除一样', '注释按项目约定的语言写', '只改这个文件'])
+      .toEqual(['把归档的撤销时长设成和删除一样', '注释按项目约定的语言写'])
     expect(splitRecallIntents('Set the archive undo window to the delete one, and write comments in the agreed language.'))
       .toEqual(['Set the archive undo window to the delete one', 'and write comments in the agreed language'])
+  })
+
+  it('looks up the referenced property when a request copies an existing value', () => {
+    expect(splitRecallIntents('把归档的撤销时长设成和删除任务的撤销窗口相同的时长（以我们最后商定的为准），注释按项目约定的语言写。'))
+      .toEqual(['删除任务的撤销窗口时长', '注释按项目约定的语言写'])
+    expect(splitRecallIntents('批量导出使用与单条导出相同的格式')).toEqual(['单条导出格式'])
   })
 
   it('leaves a single ask whole and drops fragments too short to search', () => {
@@ -16,6 +22,13 @@ describe('recall intents', () => {
     expect(splitRecallIntents('How long is the undo window after deleting a task?')).toEqual([])
     expect(splitRecallIntents('好的，谢谢')).toEqual([])
     expect(splitRecallIntents('')).toEqual([])
+  })
+
+  it('does not spend a query on edit scope, but keeps substantive questions about files', () => {
+    expect(splitRecallIntents('实现同步重试，次数和上限按我们定好的来，只改这个文件。')).toEqual([])
+    expect(splitRecallIntents('实现同步重试，次数和上限按之前定好的来，注释用英文，只改 src/sync.ts。')).toEqual(['实现同步重试，次数和上限按之前定好的来', '注释用英文'])
+    expect(splitRecallIntents('Implement sync retries; only edit this file.')).toEqual([])
+    expect(splitRecallIntents('只改这个文件会影响回滚吗？配置文件在哪？')).toEqual(['只改这个文件会影响回滚吗', '配置文件在哪'])
   })
 
   it('recalls at most a few clauses', () => {

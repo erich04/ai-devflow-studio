@@ -100,3 +100,9 @@
 ## 证据与边界
 
 见[本次验证记录](../validation/open-issues-resolution-20261010.md)。Cursor 提出的两项交界缺陷经独立核实后已修复。模拟响应不能证明历史 #201 的确切畸形内容，也不能证明 #202 的窗口关闭原因。#231 真实端点和 Thinking 各强度兼容性继续保持未验证。
+
+<a id="change-set-approvals-not-session-reusable-2026-10-31-ux-batch-2a"></a>
+
+## 带改动集的审批不能在会话里复用（2026-10-31，UX batch 2a）
+
+带 `changeSetId` 的请求没有会话规则，不能创建会话授权，已有授权也不能自动批准，即使文件路径完全相同。主进程对这类请求的 `scope: 'session'` 回复拒绝且不写入。批准针对确切的改动编号和摘要，同一批文件的新内容仍须重新查看和批准。共享 `codingSessionPermissionRule` 对这些请求返回 `undefined`；其他运行命令和文件请求继续遵循原有规则。

@@ -71,6 +71,17 @@ export type RecalledMemory = {
   projectMemory?: { degraded: boolean }
 }
 
+/** Revalidate only the identities that survived prompt packing, under their original scope. */
+export async function assertScopedMemoryCurrent(store: CodingMemoryStore, recalled: RecalledMemory, identities: readonly { id: string }[]) {
+  if (!identities.length) return
+  const { localProjectId: projectId, userId } = recalled.scope
+  if (!projectId) throw new Error('Project memory scope is missing')
+  const scope = await executionScope({ store, projectId, userId, runtimeId: recalled.runtimeId })
+  if (JSON.stringify(scope) !== JSON.stringify(recalled.scope)) throw new Error('Project memory scope changed')
+  const unchecked = await assertProjectMemoryCurrent(store, { projectId, userId, identities, recalledAt: recalled.recalledAt })
+  if (unchecked.length) throw new Error('Unknown project memory identity')
+}
+
 /**
  * Project memory recall shared by the coding brief, stage Agents, Gate review and the discussion
  * bar (ADR 0030). Memory lives only in the project's Hindsight bank: when the project's memory is
@@ -79,22 +90,28 @@ export type RecalledMemory = {
 export async function recallScopedMemory(input: {
   store: CodingMemoryStore; projectId: string; userId: string; runtimeId: string; requestId: string
   /** `intents`: the separate asks in the user's own words (`splitRecallIntents`), each recalled beside `query`. */
-  query: string; intents?: readonly string[]; now: string; budget: MemoryRecallBudget
+  query: string; intents?: readonly string[]; now: string; budget: MemoryRecallBudget; includeCompactConventions?: boolean
 }): Promise<RecalledMemory> {
   const scope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
-  const projectMemory = await projectMemoryRecall.get(input.store)?.recall({
+  const port = projectMemoryRecall.get(input.store)
+  const projectMemory = await port?.recall({
     projectId: input.projectId, userId: input.userId, query: input.query, budget: input.budget,
     ...(input.intents?.length ? { intents: input.intents } : {}),
   })
   if (!projectMemory) return { scope, runtimeId: input.runtimeId, recalledAt: input.now, context: [], memories: [], omittedMemoryCount: 0 }
   // Hindsight ordered the memory for the query and each ask; the lists were merged in turn.
-  const selected = selectMemoryWithinBudget(projectMemory.items, (item) => item.statement, input.budget)
+  // Keep the most relevant hit first. The short page competes within this entry point's
+  // existing byte and item limits, and is never included in the targeted preference search.
+  const page = input.includeCompactConventions && !projectMemory.degraded
+    ? await port?.conventions?.({ projectId: input.projectId, userId: input.userId, compact: true }) : null
+  const candidates = page ? [...projectMemory.items.slice(0, 1), page, ...projectMemory.items.slice(1)] : projectMemory.items
+  const selected = selectMemoryWithinBudget(candidates, (item) => item.statement, input.budget)
   const currentScope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
   if (JSON.stringify(currentScope) !== JSON.stringify(scope)) throw new Error('Coding Context pairing changed during recall')
   return { scope, runtimeId: input.runtimeId, recalledAt: input.now,
     context: selected.map(({ id, statement }) => ({ id, revision: 1, statement })),
     memories: selected.map(({ id, contentDigest }) => ({ id, revision: 1, headVersion: 1, contentDigest })),
-    omittedMemoryCount: projectMemory.items.length - selected.length,
+    omittedMemoryCount: candidates.length - selected.length,
     projectMemory: { degraded: projectMemory.degraded } }
 }
 

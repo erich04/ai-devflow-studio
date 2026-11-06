@@ -60,6 +60,25 @@ type ConversationSource = Pick<WorkbenchConversation, 'id' | 'localProjectId' | 
 /** One conversation segment holds this much JSON; the next message starts a new segment. */
 export const CONVERSATION_SEGMENT_BYTES = PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 2_048
 const CONVERSATION_CONTEXT = 'A discussion between the user and DevFlow\'s assistant about this software project. What the user says is their own statement; the assistant\'s statements are claims, not verified facts.'
+// Remove only a complete, numbered measurement sentence. Do not drop the message: it may
+// also contain a cause, a correction, or a decision. Segment boundaries still use the
+// original redacted messages so existing Hindsight document IDs do not shift on upgrade.
+const SAMPLE_PREFIX = /(?:第\s*\d+\s*轮(?:性能(?:排查|测试|测量)|采样)|(?:perf(?:ormance)?\s+)?(?:sample|benchmark round)\s*#?\d+)[：:][ \t]*/iu
+const SAMPLE_SETUP = /(?:在\s*\d+\s*条任务的列表上连续滚动\s*\d+\s*秒[，,]\s*)?/u
+const METRIC = /(?:平均帧率|最长任务|帧率|延迟|耗时|内存|吞吐量|fps|latency|p(?:50|95|99)|duration|memory|throughput)\s*[:=：]?\s*\d+(?:\.\d+)?\s*(?:fps|ms|s|秒|毫秒|MiB|MB|req\/s)?/iu
+// Require numeric fields all the way to the sentence boundary. A target, comparison or
+// decision in the same sentence makes the match fail closed and preserves that sentence.
+const PERF_SAMPLE = new RegExp(
+  `(?:^|(?<=[。！？\\n]))[ \\t]*${SAMPLE_PREFIX.source}${SAMPLE_SETUP.source}${METRIC.source}(?:[，,][ \\t]*${METRIC.source})*[ \\t]*(?:。|(?=\\n|$))`, 'giu')
+
+function withoutMeasurementRows<T extends { content: string }>(messages: T[]): T[] {
+  return messages.flatMap((message) => {
+    const content = message.content.replace(PERF_SAMPLE, '')
+    if (content === message.content) return [message]
+    return content.trim() ? [{ ...message, content: content.trim() }] : []
+  })
+}
+
 /** The first segment keeps the id a conversation has always had, so a short one is unchanged. */
 export function conversationMemoryDocumentId(conversationId: string, segment: number): string {
   return segment === 1 ? `conversation:${conversationId}` : `conversation:${conversationId}:${segment}`
@@ -86,7 +105,7 @@ export function buildConversationMemoryDocuments(conversation: ConversationSourc
   return segments.map((segment, index) => ({
     documentId: conversationMemoryDocumentId(conversation.id, index + 1), sourceKind: 'conversation', sourceId: conversation.id,
     // Later segments say which part they are; the first keeps its title and context as before.
-    title: clip(index ? `${title}（第 ${index + 1} 段）` : title, 300), payload: JSON.stringify(segment),
+    title: clip(index ? `${title}（第 ${index + 1} 段）` : title, 300), payload: JSON.stringify(withoutMeasurementRows(segment)),
     context: index ? `${CONVERSATION_CONTEXT} It continues earlier parts of the same discussion.` : CONVERSATION_CONTEXT,
     tags: ['source:conversation'], occurredAt: segment[0]!.timestamp,
     // The open segment waits until the conversation is quiet; a full one can go now.

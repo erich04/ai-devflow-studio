@@ -124,7 +124,7 @@ export interface TeamApi {
 /** In-memory demo Team API on a free port; database variables are cleared on purpose. */
 export async function startTeamApi(workspace: Workspace): Promise<TeamApi> {
   const port = await chooseAvailableE2ePortBase()
-  const child = spawnQuiet(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'dev'], {
+  const child = spawnQuiet(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'exec', 'tsx', 'src/server.ts'], {
     DATABASE_URL: '',
     DEVFLOW_DATABASE_URL: '',
     DEVFLOW_API_DIAGNOSTICS_PATH: path.join(workspace.tempRoot, 'api-diagnostics.json'),

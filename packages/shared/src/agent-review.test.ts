@@ -14,6 +14,8 @@ import {
   createKnowledgeReviewPrompt,
   createOpenAiCompatibleAgentProvider,
   estimateAgentTokenUsage,
+  FINDING_IMPORTANCE_INSTRUCTION,
+  OPEN_QUESTION_CITATION_INSTRUCTION,
   estimateKnowledgeReviewCostPreflight,
   isTrustedNoCostKnowledgeReviewProvider,
   runBudgetedKnowledgeReviewAgent,
@@ -2054,5 +2056,45 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     expect(failure).toMatchObject({ code: 'response_too_large', httpStatus: 200 })
     expect(json).not.toHaveBeenCalled()
     expect(cancelled).toBe(true)
+  })
+})
+
+describe('gate review instructions for open questions and finding importance', () => {
+  const reviewRun = runs[0]!
+  async function promptFor(nodeId: string) {
+    const gate = reviewRun.nodes.find((item) => item.id === nodeId)!
+    const context = await buildAgentReviewContext({ run: reviewRun, node: gate, artifacts, testEvidence: [], knowledgeDocuments: [], knowledgeChunks: [] })
+    return createKnowledgeReviewPrompt(context)
+  }
+
+  it('asks clarify reviews for verbatim open-question quotes and finding importance', async () => {
+    const prompt = await promptFor('n-clarify-gate')
+    expect(OPEN_QUESTION_CITATION_INSTRUCTION).toContain('copied verbatim from the Subject.')
+    expect(OPEN_QUESTION_CITATION_INSTRUCTION).toContain('quote a 4–600 character part of it that occurs only once in the Subject.')
+    const citation = prompt.indexOf('Quotes locate evidence, not proof of semantic correctness.')
+    const openQuestion = prompt.indexOf(OPEN_QUESTION_CITATION_INSTRUCTION)
+    const importance = prompt.indexOf(FINDING_IMPORTANCE_INSTRUCTION)
+    expect(citation).toBeGreaterThan(0)
+    expect(openQuestion).toBeGreaterThan(citation)
+    expect(importance).toBeGreaterThan(openQuestion)
+  })
+
+  it('asks design reviews for importance only', async () => {
+    const prompt = await promptFor('n-design-gate')
+    expect(prompt).not.toContain(OPEN_QUESTION_CITATION_INSTRUCTION)
+    expect(prompt).not.toContain('Open Questions')
+    expect(prompt).toContain(FINDING_IMPORTANCE_INSTRUCTION)
+  })
+
+  it('adds neither instruction to other stages', async () => {
+    const reviewNode = { ...node, id: 'pr-review', stage: 'pr' as const, kind: 'pr' as const, artifactIds: ['delivery-subject'] }
+    const context = await buildAgentReviewContext({
+      run: reviewRun, node: reviewNode, artifacts: [{ id: 'delivery-subject', runId: reviewRun.id, nodeId: reviewNode.id,
+        kind: 'pr', title: 'Delivery', summary: 'Subject', content: 'Delivery package body.', redacted: true, updatedAt: '2026-10-20T00:00:00Z' }],
+      testEvidence: [], knowledgeDocuments: [], knowledgeChunks: [],
+    })
+    const prompt = createKnowledgeReviewPrompt(context)
+    expect(prompt).not.toContain(OPEN_QUESTION_CITATION_INSTRUCTION)
+    expect(prompt).not.toContain(FINDING_IMPORTANCE_INSTRUCTION)
   })
 })

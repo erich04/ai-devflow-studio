@@ -39,7 +39,7 @@ describe('Electron smoke V1.5 trusted workflow contract', () => {
     )
   })
 
-  it('keeps project test execution IDs-only and targets the current Test node', () => {
+  it('confirms existing test evidence on the current Test node without trusting renderer payloads', () => {
     // Since S2 the smoke runs the check from the task's test step through the real renderer
     // (plan §7.2 W4); the renderer write path must still send IDs only.
     expect(smoke).not.toMatch(
@@ -48,7 +48,7 @@ describe('Electron smoke V1.5 trusted workflow contract', () => {
     expect(smoke).toMatch(
       /runProjectTestsInTask\(first\.page,\s*\{[\s\S]*?nodeId: localNodes\.test\.id,/,
     )
-    expect(smoke).toContain("getByTestId('task-status-row').getByRole('button', { name: '运行检查', exact: true })")
+    expect(smoke).toContain("bar.getByRole('button', { name: '确认测试证据，进入 PR 交付', exact: true })")
     expect(rendererActions).toMatch(
       /desktopApi\.runProjectTests\(\{\s*projectId: selectedLocalProject\.id,\s*runId: selectedRun\.id,\s*nodeId: testNode\.id,\s*\}\)/,
     )
@@ -56,8 +56,11 @@ describe('Electron smoke V1.5 trusted workflow contract', () => {
 
   it('decides Gate Review and coding permissions in the task, not on the Agents page', () => {
     expect(smoke).toContain('await runKnowledgeReviewInTask(first.page, {')
-    expect(smoke).toContain("getByRole('button', { name: '审查当前方案', exact: true })")
-    expect(smoke).toContain("buildStatusRow.getByRole('button', { name: '批准本次', exact: true }).click()")
+    expect(smoke).toContain("getByTestId('gate-decision-bar').getByRole('button', { name: '审查方案 v1', exact: true })")
+    expect(smoke).toContain("toContainText('需求 v1 · 你的决定'")
+    expect(smoke).toContain("toContainText('方案 v1 · 你的决定'")
+    expect(smoke).toContain('await checkGateLayout(first.page)')
+    expect(smoke).toContain("permissionCard.getByRole('button', { name: '允许一次', exact: true }).click()")
     expect(smoke).not.toContain("getByRole('button', { name: /仅批准本次/ }).click()")
   })
 

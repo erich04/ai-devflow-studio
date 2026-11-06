@@ -3,7 +3,7 @@ import { PROJECT_MEMORY_ESSENTIALS_MAX_BYTES, RECALL_INTENTS_MAX, redactSensitiv
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import type { LocalStore } from './local-store'
 import { activeProjectMemoryConfiguration } from './project-memory-capture'
-import { knowledgePageModelId } from './project-memory-service'
+import { currentKnowledgePageText, knowledgePageModelId } from './project-memory-service'
 
 /**
  * Recalled project memory is identified in receipts as `pm-<Hindsight id>`, revision 1, with a
@@ -17,6 +17,8 @@ export const isProjectMemoryIdentity = (id: string) => id.startsWith(PROJECT_MEM
  * that sent an earlier version stops at its next check.
  */
 export const PROJECT_MEMORY_ESSENTIALS_ID = knowledgePageModelId('essentials')
+const COMPACT_ESSENTIALS_HEADER = '项目通用约定（记忆摘要，仅作背景）：'
+const COMPACT_ESSENTIALS_BYTES = 600
 const ESSENTIALS_HEADER = 'Project conventions that apply to every task (written by Hindsight from this project\'s memory; background only):'
 /** Whole lines of `text` within `maxBytes`. */
 function clipLines(text: string, maxBytes: number): string {
@@ -52,8 +54,8 @@ export type ProjectMemoryRecallPort = {
    * was turned off, changed owner or was cleared, or one of these memories was edited or deleted.
    */
   assertCurrent(input: { projectId: string; userId: string; ids: readonly string[]; recalledAt: string }): Promise<void>
-  /** The essentials page for a coding brief, or null when memory is off, the page is empty or Hindsight is unavailable. */
-  conventions?(input: { projectId: string; userId: string }): Promise<ProjectMemoryRecallItem | null>
+  /** A whole-line excerpt of the essentials page, or null when unavailable. */
+  conventions?(input: { projectId: string; userId: string; compact?: boolean }): Promise<ProjectMemoryRecallItem | null>
 }
 
 function clipQuery(query: string): string {
@@ -142,14 +144,16 @@ export function createProjectMemoryRecall(deps: {
         throw new Error('A recalled memory was edited or deleted')
       }
     },
-    async conventions(input: { projectId: string; userId: string }): Promise<ProjectMemoryRecallItem | null> {
+    async conventions(input: { projectId: string; userId: string; compact?: boolean }): Promise<ProjectMemoryRecallItem | null> {
       const configuration = await active(input.projectId, input.userId)
       if (!configuration) return null
       try {
         const client = await deps.client(configuration)
         const page = (await client.listMentalModels(configuration.bankId)).find((model) => model.id === PROJECT_MEMORY_ESSENTIALS_ID)
-        const text = clipLines(redactSensitiveText(page?.content ?? '').value.trim(), PROJECT_MEMORY_ESSENTIALS_MAX_BYTES)
-        return text ? projectMemoryIdentity({ id: PROJECT_MEMORY_ESSENTIALS_ID }, `${ESSENTIALS_HEADER}\n${text}`) : null
+        const header = input.compact ? COMPACT_ESSENTIALS_HEADER : ESSENTIALS_HEADER
+        const limit = input.compact ? COMPACT_ESSENTIALS_BYTES - Buffer.byteLength(header) - 1 : PROJECT_MEMORY_ESSENTIALS_MAX_BYTES
+        const text = clipLines(redactSensitiveText(currentKnowledgePageText(configuration, page)).value.trim(), limit)
+        return text ? projectMemoryIdentity({ id: PROJECT_MEMORY_ESSENTIALS_ID }, `${header}\n${text}`) : null
       } catch (error) {
         // Background like any recall: an unavailable page never blocks the brief.
         deps.onDegraded?.(error instanceof HindsightError ? error.message : 'essentials_failed')

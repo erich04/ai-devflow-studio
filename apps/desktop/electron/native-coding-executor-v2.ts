@@ -1,3 +1,4 @@
+import { buildChangeReviewPayload, parseChangeReviewOutput, parseTestOutput } from '@ai-devflow/shared'
 import { createHash, randomUUID } from 'node:crypto'
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
@@ -103,7 +104,7 @@ export type NativeCodingV2DecisionProvider = {
   complete(input: {
     operationKey?: string
     signal?: AbortSignal
-    phase: 'analysis' | 'initial' | 'repair'
+    phase: 'analysis' | 'initial' | 'repair' | 'revision' | 'change_review'
     systemPrompt: string
     userPrompt: string
     maxOutputTokens: number
@@ -540,7 +541,7 @@ export const NATIVE_CODING_V2_SYSTEM_PROMPT = [
     'Hard limits: select at most 8 unique file paths and at most 8 searches. Each literal query is 1–200 characters. summary is a non-empty string of at most 1000 characters.',
   ],
   [
-    'Phases "initial" and "repair" each propose one exact Change Set.',
+    'Phases "initial", "repair" and "revision" each propose one exact Change Set.',
     'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"one/exact/allowed/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded change"}.',
     'The top-level keys are exactly stateVersion, changes, summary. Do not add extra keys.',
     'stateVersion must be the number 2. Each change has exactly path and replacements. Each replacement has exactly oldText and newText.',
@@ -563,6 +564,17 @@ export const NATIVE_CODING_V2_SYSTEM_PROMPT = [
     'Do not undo correct requested behavior to address missing dependencies, unavailable tools, or other environment failures.',
     'If a TypeScript error appears in a file outside the allowed list, fix the public contract from an allowed file instead of editing the outside file.',
     'Repair only supplied files. Do not create, delete, rename, or touch any path outside the initial Change Set.',
+  ],
+  [
+    'Phase "revision" re-proposes one complete exact Change Set for the current files. The current files do NOT contain previousChangeSet; it was never applied.',
+    'Apply revisionRequest to previousChangeSet: keep its correct parts, change only what the list asks, and add nothing else. Use the same shape and hard limits as phase "initial".',
+  ],
+  [
+    'Phase "change_review" reviews the exact Change Set in changeSet. Report only problems that would give wrong results, break the brief or existing behaviour, or are clearly inconsistent with nearby code; return an empty findings array when there are none.',
+    'Use exactly this shape: {"stateVersion":2,"findings":[{"path":"...","line":1,"lineText":"...","importance":"important","consequence":"...","reason":"...","item":"...","becomes":"..."}],"summary":"..."}.',
+    'path and line name one row of changeSet; lineText copies that row verbatim, at most 500 characters. Do not comment on truncated portions.',
+    'Write consequence, reason, item and becomes in Simplified Chinese for a non-technical reader. consequence: what goes wrong, at most 200 characters; reason: why, at most 300; item: one actionable change, at most 300; becomes: optional corrected code or text, at most 500. summary: at most 1000 characters.',
+    'importance is "important" or "suggestion" on every finding. Put code names, file names and commands inside backticks. At most 6 findings.',
   ],
 ].map((block) => block.join(' ')).join('\n\n')
 
@@ -919,6 +931,7 @@ function waitingTurn(input: {
   settledPermissionRequestIds: string[]
   startedAt?: string
   includeDecisionId?: string
+  includeDecision?: 'approved' | 'superseded' | 'expired'
 }) {
   const checkpointVersion = input.previousCheckpointVersion + 1
   let sequence = input.previousSequence
@@ -942,7 +955,7 @@ function waitingTurn(input: {
           checkpointVersion,
           type: 'permission_decision' as const,
           createdAt: input.permission.requestedAt,
-          metadata: { permissionRequestId: input.includeDecisionId, decision: 'approved' },
+          metadata: { permissionRequestId: input.includeDecisionId, decision: input.includeDecision ?? 'approved' },
         }]
       : []),
     {
@@ -1103,6 +1116,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     capabilities: [
       'cancellation',
       'checkpoint_continuation',
+      'feedback_revision',
       'structured_diff',
       'structured_test_evidence',
       'workspace_edit',
@@ -1164,9 +1178,13 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
 
     const controller = new AbortController()
     activeRequests.set(call.codingRunId, controller)
+    let dispatched = false
     let completed: NativeV2ModelResult | undefined
     let result: { value: T; usage: ProviderUsage; requestedAt: string; requestId: string }
     try {
+      await call.assertContextCurrent?.()
+      controller.signal.throwIfAborted()
+      dispatched = true
       completed = await input.decisionProvider.complete({
         operationKey: call.codingRunId, signal: controller.signal,
         phase: call.phase,
@@ -1210,9 +1228,9 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         ? error
         : new AgentProviderRequestError({
             code: 'unknown_provider_failure',
-            deliveryState: completed ? 'response_received' : 'possibly_delivered',
-            billingState: completed ? 'confirmed' : 'unknown',
-            retryable: !completed,
+            deliveryState: completed ? 'response_received' : dispatched ? 'possibly_delivered' : 'not_sent',
+            billingState: completed ? 'confirmed' : dispatched ? 'unknown' : 'not_incurred',
+            retryable: dispatched && !completed,
             sanitizedCause: 'unclassified_provider_failure',
             cause: error,
           })
@@ -1483,6 +1501,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           timestamp: requestedAt,
           metadata: {
             requestId: permissionRequest.id,
+            excerptPaths: excerpts.map(excerpt => excerpt.path),
             changeSetId: changeSet.id,
             changeSetDigest: changeSet.changeSetDigest,
             observableSummaries: {
@@ -1506,6 +1525,70 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       })
       if (turn.status !== 'waiting_permission') throw new Error('DevFlow Native v2 did not stop for approval')
       return { kind: 'waiting_permission', codingRun, events, permissionRequest, turn }
+    },
+    async cancelAuxiliary(codingRunId) { activeRequests.get(codingRunId)?.abort() },
+    async reviewChangeSet(context) {
+      verifyCodingChangeSetDigest(context.changeSet)
+      if (context.changeSet.codingRunId !== context.codingRun.id || context.changeSet.phase !== 'initial') throw new Error('Review change identity is invalid')
+      const result = await runProviderCall({
+        codingRunId: context.codingRun.id, assertContextCurrent: context.assertContextCurrent, reportProviderCall: context.reportProviderCall,
+        phase: 'change_review', systemPrompt: NATIVE_CODING_V2_SYSTEM_PROMPT,
+        userPrompt: JSON.stringify(buildChangeReviewPayload({ brief: safeText(context.brief), view: context.view })),
+        maxOutputTokens: MAX_OUTPUT_TOKENS, manifestPathCount: 0, excerptCount: context.view.files.length,
+        parse: value => parseChangeReviewOutput(value, context.view),
+      })
+      return result.value
+    },
+    async reviseChangeSet(revisionInput) {
+      const context = revisionInput.runtimeContext
+      const previous = await findChangeSetForPermission(context.codingRun, context.previous.request)
+      if (previous.id !== context.previous.changeSet.id || previous.changeSetDigest !== context.previous.changeSet.changeSetDigest) throw new Error('Revision source changed')
+      await context.assertContextCurrent()
+      const events = await input.store.listCodingAgentEvents(context.codingRun.id)
+      const permissions = await input.store.listCodingPermissionRequests(context.codingRun.id)
+      const priorEvent = events.find(e => e.metadata?.changeSetId === previous.id && e.metadata?.observableSummaries)
+      const originalEvent = events.find(e => Array.isArray(e.metadata?.excerptPaths))
+      const previousPaths = previous.changes.map(c => c.path)
+      const initial = previous.phase === 'repair' ? (await input.store.listCodingChangeSets(context.codingRun.id)).find(c => c.phase === 'initial' && permissions.some(p => p.changeSetId === c.id && p.status === 'approved')) : undefined
+      const candidatePaths = previous.phase === 'repair' ? initial?.changes.map(c => c.path) ?? previousPaths
+        : [...previousPaths, ...(Array.isArray(originalEvent?.metadata?.excerptPaths) ? originalEvent.metadata.excerptPaths.filter(isCanonicalRelativePath) : [])]
+      const paths = [...new Set(candidatePaths)].slice(0, 8)
+      const excerpts = await collectExcerpts({ worktreePath: context.workspace.worktreePath, manifest: paths, plan: { stateVersion: 2, files: paths, searches: [], summary: 'Read the previous proposal files.' } })
+      if (previousPaths.some(p => !excerpts.some(e => e.path === p))) throw new Error('受管工作区里有文件读不到')
+      const observable = priorEvent?.metadata?.observableSummaries as NativeObservableSummaries | undefined
+      const failed = previous.phase === 'repair' ? (await input.store.listTestEvidence(context.codingRun.runId)).filter(e => e.nodeId === context.codingRun.nodeId && e.status !== 'passed').at(-1) : undefined
+      const prompt = fitChangePrompt({ stateVersion: 2, brief: safeText(context.codingRun.prompt),
+        objectiveDigest: sha256(context.codingRun.userInstruction.trim()), contextDigest: sha256(context.codingRun.prompt),
+        ...(observable?.analysis ? { analysisSummary: observable.analysis.summary } : {}),
+        previousChangeSet: boundedInitialChangeSet(previous.changes), revisionRequest: { text: safeText(context.changeRequest), itemCount: context.itemCount },
+        ...(failed ? { testFailure: parseTestOutput(failed.stdout + '\n' + failed.stderr, failed.status).keyLines } : {}),
+        excerpts, allowedPaths: excerpts.map(e => e.path), phase: 'revision', limits: { existingUtf8Files: true, maxFiles: 6, maxReplacements: 12 },
+      }, MAX_PROMPT_CHARS, { id: input.decisionProvider.id, model: input.decisionProvider.modelId })
+      const result = await runProviderCall({ codingRunId: context.codingRun.id, assertContextCurrent: context.assertContextCurrent,
+        reportProviderCall: context.reportProviderCall, phase: 'revision', systemPrompt: NATIVE_CODING_V2_SYSTEM_PROMPT, userPrompt: prompt,
+        maxOutputTokens: MAX_OUTPUT_TOKENS, manifestPathCount: paths.length, excerptCount: excerpts.length,
+        parse: value => parseChangeProposal(value, new Set(excerpts.map(e => e.path))),
+      })
+      await context.assertContextCurrent()
+      const requestedAt = canonicalNow(clock)
+      const expiresAt = previous.phase === 'repair' ? context.previous.request.expiresAt : new Date(Date.parse(requestedAt) + PERMISSION_WINDOW_MS).toISOString()
+      const changeSet = await prepareCodingChangeSet({ id: createId('coding-change-set'), codingRunId: context.codingRun.id,
+        projectId: context.project.id, workspaceId: context.workspace.id, worktreePath: context.workspace.worktreePath,
+        phase: previous.phase, configVersion: input.configVersion, providerId: input.decisionProvider.id, createdAt: requestedAt, expiresAt,
+        proposal: result.value.changes, revision: { index: context.revisionIndex, previous: { id: previous.id, digest: previous.changeSetDigest }, changeRequest: safeText(context.changeRequest), itemCount: context.itemCount },
+      })
+      const permissionRequest = { ...permissionForChangeSet({ id: createId('coding-permission'), changeSet, runId: context.codingRun.runId, nodeId: context.codingRun.nodeId, requestedAt, phase: previous.phase }), title: 'Apply the revised Coding Change Set' }
+      const turn = waitingTurn({ requestId: context.codingRun.id, descriptor, permission: permissionRequest,
+        previousCheckpointVersion: revisionInput.previousCheckpointVersion, previousSequence: revisionInput.previousSequence, settledPermissionRequestIds: revisionInput.settledPermissionRequestIds,
+        includeDecisionId: context.previous.request.id, includeDecision: context.previous.expired ? 'expired' : 'superseded',
+      })
+      if (turn.status !== 'waiting_permission') throw new Error('Revision must stop for exact approval')
+      return { kind: 'waiting_permission', changeSet, turn, permissionRequest,
+        codingRun: { ...context.codingRun, status: 'waiting_permission', changeSetId: changeSet.id, summary: '新版本已生成，请查看后决定。' },
+        events: [{ id: createId('coding-event'), codingRunId: context.codingRun.id, runId: context.codingRun.runId, nodeId: context.codingRun.nodeId, sequence: 1, kind: 'permission', message: '已按修订清单生成新版本，等待批准。', timestamp: requestedAt, redacted: true,
+          metadata: { requestId: permissionRequest.id, changeSetId: changeSet.id, changeSetDigest: changeSet.changeSetDigest, excerptPaths: excerpts.map(e => e.path),
+            ...(observable?.analysis ? { observableSummaries: { stateVersion: 1, changeSetId: changeSet.id, changeSetDigest: changeSet.changeSetDigest, analysis: observable.analysis, initial: { requestId: result.requestId, summary: result.value.summary } } } : {}) } }],
+      }
     },
     async continuePermission(continuationInput) {
       const context = continuationInput.runtimeContext
@@ -1656,7 +1739,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
             id: createId('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId,
             nodeId: codingRun.nodeId, sequence: 1, kind: 'test',
             message: 'The saved worktree test failed; DevFlow Native v2 generated one bounded repair proposal.',
-            timestamp: testedAt, metadata: { status: tested.result.status, evidenceId: tested.evidence.id, promptBudget: repair.budget }, redacted: true,
+            timestamp: testedAt, metadata: { changeSetId: changeSet.id, changeSetDigest: changeSet.changeSetDigest, status: tested.result.status, evidenceId: tested.evidence.id, promptBudget: repair.budget }, redacted: true,
           },
           {
             id: createId('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId,
@@ -1697,7 +1780,8 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       const completedAt = canonicalNow(clock)
       const captured = await captureWorktreeDiff({ worktreePath: workspace.worktreePath })
       const allChangeSets = await input.store.listCodingChangeSets(codingRun.id)
-      const approvedPaths = new Set(allChangeSets.flatMap((candidate) => candidate.changes.map((change) => change.path)))
+      const approvals = await input.store.listCodingPermissionRequests(codingRun.id)
+      const approvedPaths = new Set(allChangeSets.filter(candidate => approvals.some(p => p.changeSetId === candidate.id && p.changeSetDigest === candidate.changeSetDigest && p.status === 'approved')).flatMap(candidate => candidate.changes.map(change => change.path)))
       if (
         captured.changedPaths.length < 1 ||
         captured.changedPaths.length > 6 ||
@@ -1737,7 +1821,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           id: createId('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId,
           nodeId: codingRun.nodeId, sequence: 2, kind: 'test',
           message: 'The saved recognized worktree test passed.',
-          timestamp: testedAt, metadata: { evidenceId: tested.evidence.id, status: 'passed' }, redacted: true,
+          timestamp: testedAt, metadata: { changeSetId: changeSet.id, changeSetDigest: changeSet.changeSetDigest, evidenceId: tested.evidence.id, status: 'passed' }, redacted: true,
         },
         {
           id: createId('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId,

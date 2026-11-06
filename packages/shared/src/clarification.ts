@@ -1,16 +1,23 @@
 import type {
   AgentEvent,
+  AgentReviewResult,
   Artifact,
   ClarificationFeedbackMetadata,
   ClarificationRepositoryFindings,
   ClarificationRevisionMetadata,
+  DesignRevisionIdentity,
   WorkflowNode,
   WorkflowRun,
 } from './domain'
+import { buildDesignRevisionIdentity, resolveSavedProposals } from './artifact-identity'
+import { sha256Text } from './digest'
 import { redactSensitiveText } from './redaction'
+
+export { sha256Text } from './digest'
 
 const digestPattern = /^[a-f0-9]{64}$/u
 const maxFeedbackCharacters = 4_000
+const maxRevisionProposals = 20
 
 export type ClarificationReviewBundleState =
   | 'ready'
@@ -40,6 +47,8 @@ export type RequestClarificationChangesInput = {
   expectedRevision: number
   expectedRevisionDigest: string
   now: string
+  /** Exact saved proposals from the revision list; [] means none. Older clients omit the field. */
+  proposals?: DesignRevisionIdentity[]
 }
 
 export type RequestClarificationChangesResult = {
@@ -48,13 +57,6 @@ export type RequestClarificationChangesResult = {
   feedbackArtifact: Artifact
   event: AgentEvent
   clarificationNode: WorkflowNode
-}
-
-export async function sha256Text(value: string): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
 }
 
 export async function createClarificationRevisionDigest(input: {
@@ -166,6 +168,37 @@ export function buildClarificationReviewBundle(input: {
   }
 }
 
+export type ClarificationReviewTarget =
+  | { state: 'none' }
+  | { state: 'legacy'; review: AgentReviewResult }
+  | { state: 'current'; review: AgentReviewResult }
+  | { state: 'stale'; review: AgentReviewResult; reviewedArtifactId?: string }
+
+/** The one rule for whether the latest Gate review targets the active clarification revision. */
+export function assessClarificationReviewTarget(input: {
+  runId: string
+  gateNodeId: string
+  reviews: readonly AgentReviewResult[]
+  activeRevision: Artifact
+}): ClarificationReviewTarget {
+  const review = input.reviews
+    .filter((candidate) => candidate.runId === input.runId && candidate.nodeId === input.gateNodeId)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+  if (!review) return { state: 'none' }
+  if (!review.contextManifest) return { state: 'legacy', review }
+  const subject = review.contextManifest.subjectArtifacts.find(
+    (artifact) => artifact.kind === 'clarification',
+  )
+  if (
+    !subject ||
+    subject.id !== input.activeRevision.id ||
+    subject.updatedAt !== input.activeRevision.updatedAt
+  ) {
+    return { state: 'stale', review, ...(subject ? { reviewedArtifactId: subject.id } : {}) }
+  }
+  return { state: 'current', review }
+}
+
 export function requireCurrentClarificationRevision(input: {
   run: WorkflowRun
   gateNode: WorkflowNode
@@ -209,6 +242,22 @@ export async function requestClarificationChanges(
     throw new Error('Clarification revision changed after the review was prepared')
   }
 
+  const clarificationNode = input.run.nodes.find(
+    (node) => node.kind === 'agent' && node.stage === 'clarify',
+  )
+  if (!clarificationNode) {
+    throw new Error('Requirement clarification node is missing')
+  }
+  const proposals = input.proposals
+    ? await Promise.all((await resolveSavedProposals({
+        run: input.run,
+        artifacts: input.artifacts,
+        identities: input.proposals,
+        allowedNodeIds: [clarificationNode.id, gateNode.id],
+        max: maxRevisionProposals,
+      })).map(buildDesignRevisionIdentity))
+    : undefined
+
   const reason = redactSensitiveText(input.reason.trim()).value
   if (!reason || reason.length > maxFeedbackCharacters) {
     throw new Error('Clarification revision feedback must be between 1 and 4000 characters')
@@ -229,6 +278,7 @@ export async function requestClarificationChanges(
     actorName: redactSensitiveText(input.actor.name).value,
     reasonDigest,
     createdAt: input.now,
+    ...(proposals ? { proposals } : {}),
   }
   const feedbackArtifact: Artifact = {
     id: feedbackArtifactId,
@@ -250,13 +300,6 @@ export async function requestClarificationChanges(
       feedbackArtifactIds: [...metadata.feedbackArtifactIds, feedbackArtifact.id],
     },
   }
-  const clarificationNode = input.run.nodes.find(
-    (node) => node.kind === 'agent' && node.stage === 'clarify',
-  )
-  if (!clarificationNode) {
-    throw new Error('Requirement clarification node is missing')
-  }
-
   const run: WorkflowRun = {
     ...input.run,
     version: input.run.version + 1,
