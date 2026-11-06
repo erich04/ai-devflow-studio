@@ -1,3 +1,4 @@
+import { unfinishedPlanWork } from './native-coding-plan'
 import { mkdir, readFile, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { createAgentRuntime, resumeAgentRuntime, requestAgentAction, validateNativeToolValue, redactSensitiveValue, type AgentRuntimeScope, type NativeToolDefinition, type NativeToolJsonSchema } from '@ai-devflow/shared'
@@ -236,6 +237,8 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       const current = await host.store.getNativeCodingSession(host.sessionId)
       if (!current || current.status !== 'running' || current.objectiveVersion !== ctx.session.objectiveVersion || current.pendingInput.length)
         throw new Error('Submission authority changed while preparing acceptance')
+      const unfinished = unfinishedPlanWork(current)
+      if (unfinished) throw new Error(unfinished)
       if (host.commands.hasActiveCommands) throw new Error('Commands are still running; wait before freezing')
       if (host.child) {
         const observed = await workspace.inspect(), baseline = new Map(workspace.identity.base.files.map(file => [file.path, file]))
