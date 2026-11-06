@@ -1777,7 +1777,9 @@ export function Inspector({
   />
 ) : null
 
-  if (buildTest?.facts && selectedRun && revisionLists && (selectedNode.stage === 'build' || selectedNode.stage === 'test') && resolveBuildTestPage(buildTest.facts, selectedNode.stage) !== 'notReached') {
+  // A V3 build owns its questions, approvals and evidence through the harness protocol.
+  const nativeBuild = selectedNode.stage === 'build' && Boolean(codingHarness)
+  if (!nativeBuild && buildTest?.facts && selectedRun && revisionLists && (selectedNode.stage === 'build' || selectedNode.stage === 'test') && resolveBuildTestPage(buildTest.facts, selectedNode.stage) !== 'notReached') {
     const currentWork = viewModel.activeTab.tabId === CURRENT_WORK_TAB
     const showCurrent = () => setDocumentId('')
     const openVersion = (id: string) => {
