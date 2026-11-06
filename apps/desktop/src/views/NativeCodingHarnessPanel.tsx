@@ -63,6 +63,16 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     {pendingRetry ? <p>{retryReasons[pendingRetry.reason]}。约 {Math.ceil(pendingRetry.delayMs / 1000)} 秒后自动重新发送（第 {pendingRetry.number}/{pendingRetry.limit} 次{pendingRetry.retryAfterMs !== undefined ? '，等待时间由模型服务指定' : ''}；重试不计入步数）。</p> : null}
     {snapshot.controlUnavailableReason ? <p role="status">{snapshot.controlUnavailableReason}</p> : null}
     {snapshot.independentVerification ? <p>{snapshot.independentVerification.status === 'preparing' ? '编码前将先生成并冻结独立验收检查。' : `已冻结 ${snapshot.independentVerification.criteriaCount} 条独立验收检查；自动返修 ${snapshot.independentVerification.repairRounds}/2 轮。`}{snapshot.independentVerification.lastResult === 'passed' ? '独立验收已通过。' : snapshot.independentVerification.lastResult === 'failed' ? '独立验收未通过。' : snapshot.independentVerification.lastResult === 'invalid' ? '验收检查自身出错，尚不能判断实现是否正确。' : ''}</p> : null}
+    {snapshot.plan ? <section aria-label="任务计划">
+      <h4>任务计划</h4>
+      <p>已完成 {snapshot.plan.nodes.filter(node => node.status === 'done').length} / {snapshot.plan.nodes.length} 项 · 计划版本 {snapshot.plan.version}</p>
+      <ol>{snapshot.plan.nodes.map(node => <li key={node.id}>
+        <strong>{node.title}</strong> · {{ pending: '待处理', in_progress: '进行中', done: '已完成', dropped: '已放弃' }[node.status]}{node.owner === 'host' ? '（宿主验收）' : ''}
+        {node.dependsOn.length ? <small> · 依赖 {node.dependsOn.map(id => snapshot.plan!.nodes.find(item => item.id === id)?.title ?? id).join('、')}</small> : null}
+        {node.dropReason ? <p>{node.dropReason}</p> : null}
+        {node.evidenceRefs.length ? <small> · 证据 {node.evidenceRefs.join('、')}</small> : null}
+      </li>)}</ol>
+    </section> : null}
     <p className="meta">输入 {snapshot.cost.inputTokens ?? '未知'} / 输出 {snapshot.cost.outputTokens ?? '未知'} tokens · 费用 {snapshot.cost.costUsd === null ? '待权威账本核定' : `$${snapshot.cost.costUsd.toFixed(4)}`} · {snapshot.cost.pendingSettlements} 笔待结算 · {snapshot.cost.unknownAttempts} 笔用量待核对</p>
     {snapshot.cost.costUsd === null && snapshot.cost.knownCostUsd !== undefined ? <p>已确认费用小计 ${snapshot.cost.knownCostUsd.toFixed(4)}；另有 {snapshot.cost.unknownCostCount} 笔金额未确认。</p> : null}
     {!snapshot.controlUnavailableReason && snapshot.status === 'waiting_permission' && !snapshot.permission ? <div className="coding-permission-card">

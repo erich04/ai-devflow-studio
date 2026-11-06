@@ -1,3 +1,4 @@
+import { completeCodingPlan } from './native-coding-plan'
 import { codingHarnessSnapshot, markCodingDeliveryConflict, currentCodingDeliveryDigest } from './native-coding-projection'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -735,6 +736,7 @@ function createHarnessService(host: HarnessHost): Harness {
           } }).catch(async error => { await mutate(id, draft => { if (draft.status === 'applying') { draft.status = 'paused'; draft.pauseReason = error instanceof Error ? error.message : 'Application did not start' } }); throw error }).finally(() => { verifications.delete(id) })
         await mutate(id, draft => {
           draft.deliveryEvidence.push(evidence)
+          completeCodingPlan(draft, evidence)
           draft.status = ['technical_completed', 'verified_no_change', 'manual_accepted'].includes(evidence.status) ? 'completed' : evidence.status === 'delivery_conflict' ? 'delivery_conflict' : evidence.status === 'test_failed' && evidence.result?.status !== 'cancelled' ? 'ready' : 'paused'
           const verifierInvalid = evidence.result?.independentVerification?.status === 'invalid'
           if (verifierInvalid && draft.status === 'ready') draft.status = 'paused'
@@ -836,7 +838,12 @@ function createHarnessService(host: HarnessHost): Harness {
           const recovery = await recoverCodingDelivery(core.workspace)
           const completed = recovery.evidence.filter(item => ['technical_completed', 'verified_no_change', 'manual_accepted'].includes(item.status)).at(-1)
           if (completed && (await snapshotCodingTree(core.workspace.identity.delivery, core.workspace.identity.base.excludedPaths)).digest === completed.targetDigest) {
-            await mutate(codingRun.id, draft => { if (!draft.deliveryEvidence.some(item => item.id === completed.id)) draft.deliveryEvidence.push(completed); draft.status = 'completed'; delete draft.pauseReason })
+            await mutate(codingRun.id, draft => {
+              if (!draft.deliveryEvidence.some(item => item.id === completed.id)) draft.deliveryEvidence.push(completed)
+              completeCodingPlan(draft, completed)
+              draft.status = 'completed'
+              delete draft.pauseReason
+            })
           } else if (completed || recovery.status === 'delivery_conflict') await mutate(codingRun.id, draft => { draft.status = 'delivery_conflict'; draft.pauseReason = 'delivery_reconciliation_required' })
           else if (['applying', 'verifying'].includes(session.status)) await mutate(codingRun.id, draft => { draft.status = 'paused'; draft.pauseReason = 'delivery_restored_after_restart' })
           else {

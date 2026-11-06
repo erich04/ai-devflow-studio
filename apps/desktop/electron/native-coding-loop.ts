@@ -1,3 +1,4 @@
+import { codingPlanContext, unfinishedPlanWork, updateCodingPlan, updatePlanTool } from './native-coding-plan'
 import { capturePrivateAuthorTurn, continuePrivateAuthor, type PrivateAuthorTurn } from './native-coding-author-continuation'
 import { randomUUID } from 'node:crypto'
 import { AgentProviderRequestError, nativeCallEnvelope, validateNativeHistory, nativeToolValueProblem, type NativeToolJsonSchema, type AgentProvider, type AgentProviderUsage, type CodingModelRetryReason, type NativeConversationRequest, type NativeToolCall, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
@@ -28,9 +29,12 @@ const controlTools: ReadOnlyFunctionDefinition[] = [
   { type: 'function', function: { name: 'request_user_input', description: '向用户澄清真实意图，保存后等待回答。必须单独调用。', parameters: { type: 'object', additionalProperties: false, required: ['text'], properties: { text: { type: 'string', minLength: 1, maxLength: 12000 }, options: { type: 'array', items: { type: 'string', maxLength: 1000 }, maxItems: 12 } } } } },
   { type: 'function', function: { name: 'report_blocked', description: '保存具体阻碍和调查依据后暂停。必须单独调用。', parameters: { type: 'object', additionalProperties: false, required: ['reason'], properties: { reason: { type: 'string', minLength: 1, maxLength: 12000 } } } } },
 ]
+function sessionControlTools(session: NativeCodingSession) {
+  return session.parent || session.privateAcceptanceFor ? controlTools : [...controlTools, updatePlanTool]
+}
 const terminal = (session: NativeCodingSession) => ['completed', 'cancelled', 'failed'].includes(session.status)
 const hostNotice = '[DevFlow 宿主状态通知，并非用户的新指令]\n'
-const invalidBatchNotice = (problem: string) => `${hostNotice}上一轮回复中的工具调用无效（${problem}），宿主没有执行其中任何调用。请重新发出这一步：只调用已声明的工具，每个调用使用新的 id，arguments 是符合参数定义的 JSON 对象字符串，一轮最多 16 个调用；request_user_input、report_blocked、propose_changeset、report_findings、await_task 必须单独调用。如果下一轮仍然无效，任务会暂停，等待人工处理。`
+const invalidBatchNotice = (problem: string) => `${hostNotice}上一轮回复中的工具调用无效（${problem}），宿主没有执行其中任何调用。请重新发出这一步：只调用已声明的工具，每个调用使用新的 id，arguments 是符合参数定义的 JSON 对象字符串，一轮最多 16 个调用；request_user_input、report_blocked、update_plan、propose_changeset、report_findings、await_task 必须单独调用。如果下一轮仍然无效，任务会暂停，等待人工处理。`
 const noProgressNotice = (steps: number) => `${hostNotice}最近 ${steps} 步的回复和得到的结果都没有变化，任务没有进展。请换一种做法，例如换检索条件或文件，或者直接修改并运行测试；确实无法推进时调用 report_blocked 说明原因。如果下一步仍然重复，任务会暂停，等待人工处理。`
 const envelopeProblems: Record<string, string> = {
   'Invalid native call envelope': '一轮需要 1 到 16 个调用',
@@ -291,7 +295,7 @@ export class NativeCodingLoop {
           ...(wallClock ? { wallClock } : {}), ...(acceptanceSchedule ? { acceptanceSchedule: { ...acceptanceSchedule, ...(approved ? { repairRoundsRemaining: null } : {}) } } : {}),
           ...(approved ? { approvedAcceptance: { sourceRef: approved.tests.sourceRef, testFiles: approved.tests.files.map(file => file.path), expectedTests: approved.tests.expectedTests,
             instruction: 'The user supplied fixed acceptance tests. Propose an exact revision to receive concrete verification failures, then repair and resubmit within the remaining shared step, time and cost limits. These approved tests determine the requested changed behavior. Preserve existing compatibility and report the observed results.' } } : {}),
-          objectiveVersion: session.objectiveVersion, role: session.parent?.mode ?? 'root',
+          objectiveVersion: session.objectiveVersion, plan: codingPlanContext(session), role: session.parent?.mode ?? 'root',
           candidateEditingGranted: Boolean(session.binding?.executionGranted && session.parent?.mode !== 'read_only'),
           ...(session.binding?.testInputPolicyVersion === 1 ? { testInputAuthority: 'Existing baseline tests, fixtures and runner configuration are acceptance inputs. Preserve unrelated behavior and prefer adding tests in new files. If the approved objective explicitly changes an old expectation, stage the smallest corresponding input update and call propose_changeset; the host will request separate exact-content human authorization before freezing it. That permission card is the authorization channel for the staged bytes; ask a clarification question when the required behavior itself is ambiguous. Until the grant, the update cannot be submitted or delivered. Editing code and passing modified tests do not grant authority. Never weaken unrelated assertions or modify host fixed acceptance.' } : {}),
           finalVerification: 'Host independently verifies the approved frozen revision; neither a model statement nor human approval alone proves completion.' }
@@ -316,7 +320,7 @@ export class NativeCodingLoop {
           onUsage: async (usage: AgentProviderUsage) => { await this.change(id, draft => { const attempt = draft.attempts.find(item => item.id === attemptId); if (attempt) attempt.usage = usage }) },
           maxOutputTokens: provider.resolveRequestPolicy?.({}).maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192, signal: controller.signal }
         const context = planning ? { request: { ...planning.request, messages: continuePrivateAuthor(planning.source, planning.request.messages, session.independentVerification, planning.request.tools[0]?.function.name), ...requestOptions }, compact: undefined }
-          : codingContext(session, provider, { systemPrompt: session.parent?.mode === 'read_only' ? readOnlySystemPrompt : systemPrompt, messages: session.transcript, tools: [...this.host.tools.definitions, ...controlTools], ...requestOptions }, JSON.stringify(runtimeState))
+          : codingContext(session, provider, { systemPrompt: session.parent?.mode === 'read_only' ? readOnlySystemPrompt : systemPrompt, messages: session.transcript, tools: [...this.host.tools.definitions, ...sessionControlTools(session)], ...requestOptions }, JSON.stringify(runtimeState))
         const request: NativeConversationRequest = context.request
         request.maxOutputTokens = provider.resolveRequestPolicy?.(request).maxOutputTokens ?? request.maxOutputTokens ?? 8192
         validateNativeHistory(request.messages)
@@ -513,10 +517,10 @@ export class NativeCodingLoop {
     if (session.status !== 'running') return session
     const completed = new Set(session.transcript.flatMap(message => message.role === 'tool' ? [message.tool_call_id] : []))
     const pending = session.transcript.flatMap(message => message.role === 'assistant' ? message.tool_calls ?? [] : []).filter(call => !completed.has(call.id))
-    const controls = ['request_user_input', 'report_blocked', 'propose_changeset', 'report_findings', 'await_task']
+    const controls = ['request_user_input', 'report_blocked', 'update_plan', 'propose_changeset', 'report_findings', 'await_task']
     try {
       for (const call of pending) {
-        const definition = [...this.host.tools.definitions, ...controlTools].find(item => item.function.name === call.function.name)
+        const definition = [...this.host.tools.definitions, ...sessionControlTools(session)].find(item => item.function.name === call.function.name)
         if (!definition) throw new Error('Invalid tool batch: use only declared tools')
         let args: unknown
         try { args = JSON.parse(call.function.arguments) } catch { throw new Error(`Invalid tool batch: ${call.function.name} arguments must be valid JSON`) }
@@ -567,6 +571,26 @@ export class NativeCodingLoop {
         if (!args || typeof args !== 'object' || Array.isArray(args) || (controls.includes(name) && pending.length !== 1)) throw new Error('Control tools must be called alone')
       } catch (error) {
         session = await this.change(session.id, draft => { draft.transcript.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid arguments' }) }) }); continue
+      }
+      if (name === 'update_plan') {
+        session = await this.change(session.id, draft => {
+          if (signal.aborted || draft.status !== 'running' || draft.writer?.owner !== this.owner || draft.writer.epoch !== latest.writer?.epoch ||
+              draft.transcript.some(message => message.role === 'tool' && message.tool_call_id === call.id)) return
+          let result: { updatedVersion: number } | { error: string; executed: false }
+          try {
+            if (draft.pendingInput.length) throw new Error('Plan update superseded by human steering')
+            result = { updatedVersion: updateCodingPlan(draft, args).version }
+          } catch (error) { result = { error: error instanceof Error ? error.message : 'Invalid plan update', executed: false } }
+          draft.transcript.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) })
+        })
+        continue
+      }
+      if (name === 'propose_changeset' && !latest.toolReceipts.some(item => item.id === call.id)) {
+        const reason = unfinishedPlanWork(latest)
+        if (reason) {
+          session = await this.change(session.id, draft => { draft.transcript.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: reason, executed: false }) }) })
+          continue
+        }
       }
       if (name === 'request_user_input' || name === 'report_blocked') {
         const text = args[name === 'request_user_input' ? 'text' : 'reason']

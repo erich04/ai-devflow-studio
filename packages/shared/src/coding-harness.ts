@@ -21,8 +21,22 @@ export type CodingHarnessCommand =
 /** Why the host re-sent a model step on its own: the earlier request was refused unbilled, failed on the server, or never left this machine. */
 export type CodingModelRetryReason = 'rate_limited' | 'overloaded' | 'server_error' | 'connection_not_sent'
 export type CodingHarnessSummary = { protocolVersion: 2; sessionId: string; status: CodingHarnessStatus; version: number }
+export type CodingPlanNode = {
+  id: string
+  title: string
+  kind: 'investigate' | 'implement' | 'verify'
+  owner: 'agent' | 'host'
+  status: 'pending' | 'in_progress' | 'done' | 'dropped'
+  dependsOn: string[]
+  acceptanceRefs: string[]
+  writeScope: string[]
+  evidenceRefs: string[]
+  dropReason?: string
+}
+export type CodingPlanRevision = { version: number; objectiveVersion: number; nodes: CodingPlanNode[] }
 export type CodingHarnessSnapshot = CodingHarnessSummary & {
   codingRunId: string; objectiveVersion: number; pauseReason?: string; steps: number; activeMilliseconds: number
+  plan?: CodingPlanRevision
   controlUnavailableReason?: string
   messages: Array<{ id: string; role: 'user' | 'assistant' | 'tool'; text: string; truncated?: boolean }>
   question?: { id: string; text: string; options: string[] }

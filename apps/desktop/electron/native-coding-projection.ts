@@ -1,3 +1,4 @@
+import { currentCodingPlan } from './native-coding-plan'
 import { redactSensitiveText, type CodingHarnessSnapshot, type CodingHarnessPage, type ModelCostRecord } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
 import type { NativeCodingSession } from './native-coding-session'
@@ -38,12 +39,14 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
     const costs = attempts.map(attempt => ledger?.find(row => row.sourceKind === 'model_call' && row.sourceId === attempt.id)?.costUsd ?? null)
     const historyOffset = Math.min(page?.historyOffset ?? Math.max(0, session.transcript.length - 40), Math.max(0, session.transcript.length - 1))
     const messageText = (message: NativeCodingSession['transcript'][number]) => redactSensitiveText(message.role === 'assistant' ? [message.content ?? '', ...(message.tool_calls ?? []).map(call => `${call.function.name} ${call.function.arguments}`)].filter(Boolean).join('\n') : message.content).value
+    const plan = currentCodingPlan(session)
     const result: CodingHarnessSnapshot = { protocolVersion: 2, sessionId: session.id, codingRunId: session.codingRunId, status: session.status, version: session.version,
       objectiveVersion: session.objectiveVersion, ...(session.pauseReason ? { pauseReason: session.pauseReason } : {}), steps: session.rootStepAttempts?.length ?? session.steps, activeMilliseconds: session.parent ? session.activeMilliseconds : codingActiveMilliseconds(session.activity),
       ...(session.parent ? { parent: { codingRunId: session.parent.codingRunId, mode: session.parent.mode } } : {}),
       messages: session.transcript.slice(historyOffset, historyOffset + 40).map((message, index) => ({ id: `message-${historyOffset + index}`, role: message.role, text: messageText(message).slice(0, 16000), truncated: messageText(message).length > 16000 })),
       historyPage: { offset: historyOffset, total: session.transcript.length, previous: historyOffset > 0 ? Math.max(0, historyOffset - 40) : null, next: historyOffset + 40 < session.transcript.length ? historyOffset + 40 : null },
       limits: { maxSteps: session.limits.maxSteps, maxActiveMilliseconds: session.limits.maxActiveMilliseconds },
+      ...(plan ? { plan } : {}),
       acceptance: session.acceptance.map(({ id, text, sourceRef, resolution }) => ({ id, text, sourceRef, resolution })),
       ...(binding.manualValidationPlan ? { manualValidationPlan: binding.manualValidationPlan } : {}),
       ...(binding.permissionPolicy ? { permissionPolicy: { mode: binding.permissionPolicy.mode, rules: binding.permissionPolicy.rules, humanPrompts: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source !== 'rule').length, 0), automaticDecisions: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source === 'rule').length, 0) } } : {}),

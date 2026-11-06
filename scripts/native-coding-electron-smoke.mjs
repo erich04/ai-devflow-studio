@@ -179,8 +179,10 @@ const modelServer = createServer(async (request, response) => {
       const operations = [
         ['glob_files', { pattern: 'src/**' }],
         ['read_file', { path: 'src/message.js' }],
+        ['update_plan', { objectiveVersion: 1, expectedVersion: 0, id: 'edit-message', kind: 'implement', title: '更新消息导出', status: 'in_progress', writeScope: ['src/message.js'] }],
         ['request_user_input', { text: 'Should the message become new?', options: ['Yes'] }],
         ['write_file', { path: 'src/message.js', expectedHash: results[1]?.hash, content: 'export const message = "new"\n' }],
+        ['update_plan', { objectiveVersion: 1, expectedVersion: 1, id: 'edit-message', status: 'done', evidenceRefs: ['native-tool-4'] }],
         ['propose_changeset', { summary: 'Updated the human-confirmed message using source evidence.' }],
       ]
       if (results.some(result => result.error) || results.length >= operations.length) throw new Error(`Unexpected tool history: ${JSON.stringify(results)}`)
@@ -557,12 +559,22 @@ try {
     if (liveRoot) {
       expect(question.question.text.length).toBeGreaterThan(0)
       await page.screenshot({ path: path.join(liveRelay.directory, 'question.png'), fullPage: true })
-    } else expect(question.question.text).toBe('Should the message become new?')
+    } else {
+      expect(question.question.text).toBe('Should the message become new?')
+      expect(question.plan.nodes[0]).toMatchObject({ id: 'edit-message', status: 'in_progress' })
+      await page.reload()
+      await expect.poll(() => page.getByRole('region', { name: '任务计划' }).innerText()).toContain('更新消息导出')
+      expect((await get()).plan).toEqual(question.plan)
+    }
     await page.getByRole('textbox', { name: '补充说明或回答', exact: true }).fill(liveRoot ? 'Yes. The target is new; preserve double quotes and the trailing newline. Continue with the saved tests.' : 'Yes')
     await page.getByRole('button', { name: '回答并继续', exact: true }).click()
     await expect.poll(async () => (await get()).status, { timeout: liveRoot ? 180000 : 30000 }).toBe('review')
     const review = await get()
     if (liveRoot) await page.screenshot({ path: path.join(liveRelay.directory, 'review.png'), fullPage: true })
+    if (!liveRoot) {
+      expect(review.plan.nodes[0]).toMatchObject({ status: 'done', evidenceRefs: ['native-tool-4'] })
+      expect(review.plan.nodes[1]).toMatchObject({ owner: 'host', status: 'pending' })
+    }
     expect(review.revision.files.map(file => file.path)).toEqual(['src/message.js'])
     expect(await readFile(path.join(repositoryPath, 'src/message.js'), 'utf8')).toBe('export const message = "old"\n')
     const panel = page.getByRole('region', { name: 'Native 多轮任务', exact: true })
@@ -572,6 +584,7 @@ try {
     await expect.poll(async () => (await get()).status, { timeout: 30000 }).toBe('completed')
     const approved = await get()
     expect(approved.status).toBe('completed')
+    if (!liveRoot) expect(approved.plan.nodes[1]).toMatchObject({ kind: 'verify', status: 'done', evidenceRefs: [approved.evidence.at(-1).id] })
     await expect.poll(async () => {
       const state = await page.evaluate(() => window.aiDevFlowDesktop.loadState())
       return { coding: state.codingRuns.find(item => item.id === started.codingRun.id)?.status, build: state.runs.find(item => item.id === run.id)?.nodes.find(item => item.id === buildNode.id)?.status }
@@ -596,7 +609,7 @@ try {
     if (liveRoot) {
       await page.screenshot({ path: path.join(liveRelay.directory, 'completed.png'), fullPage: true })
       liveEvidence = { model: 'deepseek-flash', realElectron: true, backend: 'isolated demo team; real SQLite and Git; no claim of PostgreSQL end-to-end coverage', review, approved, codingRun: saved, testEvidence: state.testEvidence.find(item => item.id === saved.testEvidenceId), deliveredContent: await readFile(path.join(workspace.worktreePath, 'src/message.js'), 'utf8') }
-    } else expect(modelRequests.filter(request => request.tools?.some(tool => tool.function.name === 'propose_changeset'))).toHaveLength(5)
+    } else expect(modelRequests.filter(request => request.tools?.some(tool => tool.function.name === 'propose_changeset'))).toHaveLength(7)
     await page.evaluate(input => window.aiDevFlowDesktop.saveCodingRuntimeConfiguration(input), { projectId: project.id, executor: 'native-model', providerId: 'deepseek-native-smoke', nativeVersion: 2 })
     expect((await get()).revision.digest).toBe(review.revision.digest)
     if (manualAcceptance) console.log('Native v3 manual acceptance smoke passed: preselected plan, exact revision, human notes, archived acceptance; no automated test evidence or workflow test exemption.')

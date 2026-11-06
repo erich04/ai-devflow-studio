@@ -1,5 +1,6 @@
+import { validateCodingPlanHistory } from './native-coding-plan'
 import { isDeepStrictEqual } from 'node:util'
-import { validateNativeHistory, parseCodingCommandRules, type NativeToolMessage, type AgentProviderUsage, type AgentRuntimeState, type CodingModelRetryReason } from '@ai-devflow/shared'
+import { validateNativeHistory, parseCodingCommandRules, type NativeToolMessage, type AgentProviderUsage, type AgentRuntimeState, type CodingModelRetryReason, type CodingPlanRevision } from '@ai-devflow/shared'
 import type { NativeToolCapabilityGrantRecord, NativeToolAuditRecord } from './native-tool-registry'
 import type { CodingExecutorStartInput } from './coding-executor'
 import type { CodingCommandPlan, CodingExecutionProfile } from './coding-command-runner'
@@ -37,6 +38,7 @@ export type NativeCodingSession = {
   transcript: NativeToolMessage[]
   question?: NativeCodingQuestion
   attempts: CodingModelAttempt[]
+  planHistory?: CodingPlanRevision[]
   toolReceipts: CodingToolReceipt[]
   toolAuthorities: Array<{ runtime: AgentRuntimeState; grant?: NativeToolCapabilityGrantRecord; consumed: boolean; audit: NativeToolAuditRecord[] }>
   commands: Array<{ id: string; digest: string }>
@@ -186,6 +188,7 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
     if (policy.version !== 1 || !['ask', 'sandbox_rules', 'unattended'].includes(policy.mode)) throw new Error('Invalid saved coding permission policy')
     parseCodingCommandRules(policy.rules)
   }
+  validateCodingPlanHistory(session, previous)
   if (previous) {
     if (!isDeepStrictEqual(previous.binding?.approvedVerification, session.binding?.approvedVerification)) throw new Error('Approved verification is immutable')
     if (!isDeepStrictEqual(previous.privateAcceptanceFor, session.privateAcceptanceFor)) throw new Error('Private acceptance ownership is immutable')
