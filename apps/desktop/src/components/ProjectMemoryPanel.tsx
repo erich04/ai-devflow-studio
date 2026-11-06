@@ -166,7 +166,7 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
           ? <ConversationBody message={{ id: `knowledge-${knowledge.id}`, role: 'assistant', text: knowledge.content, format: 'markdown', createdAt: knowledge.refreshedAt ?? '' }} showFormatToggle={false} />
           : <p className="empty-note">还没有内容。积累了相关记忆后会自动整理；删除或修改记忆后会先清空，再重新整理。</p>}
         <small className="project-memory-meta">{[knowledge.refreshedAt ? `整理于 ${time(knowledge.refreshedAt)}` : '', knowledge.stale ? '有新记忆，稍后更新' : '',
-          knowledge.failedAt ? '最近一次整理失败，保留上一版' : '', knowledge.id === 'essentials' ? '这一页会放进每次编码简报' : ''].filter(Boolean).join(' · ')}</small>
+          knowledge.failedAt ? '最近一次整理失败，保留上一版' : '', knowledge.id === 'essentials' ? '编码简报可附上本页；讨论、阶段 Agent 和 Gate 评审按剩余容量附上简版' : ''].filter(Boolean).join(' · ')}</small>
         <div className="project-memory-actions">
           {api.refreshProjectKnowledgePage && <button type="button" className="ghost-button" disabled={busy || !status?.enabled}
             onClick={() => void refreshKnowledgePage(knowledge.id)}>立即整理</button>}
@@ -189,6 +189,7 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
       </form>
       {listError && <p className="error-note" role="alert">{listError}</p>}
       {page && page.items.length === 0 && <p className="empty-note">{query ? '没有匹配的记忆。' : kindInfo.empty}</p>}
+      {kind === 'observation' && <p className="empty-note">观察由 Hindsight 从来源归纳。要更正或删除依据，请在「事实」或「经历」中修改，或在「最近的来源」中忘记整段来源。</p>}
       {page && page.items.length > 0 && <ul className="project-memory-list" aria-label="记忆列表">
         {page.items.map((item) => <li key={item.id} className="agent-evidence-card">
           {editing?.id === item.id ? <>
@@ -201,7 +202,7 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
           </> : <p>{item.text}</p>}
           <small className="project-memory-meta">{[item.date, item.source ? `${SOURCE_LABEL[item.source.sourceKind]}：${item.source.title}` : '', item.editedAt ? '已手动修改' : '']
             .filter(Boolean).join(' · ')}</small>
-          {editing?.id !== item.id && <div className="project-memory-actions">
+          {item.kind !== 'observation' && editing?.id !== item.id && <div className="project-memory-actions">
             <button type="button" className="ghost-button" disabled={busy} onClick={() => setEditing({ id: item.id, text: item.text })}>编辑</button>
             <button type="button" className="ghost-button" disabled={busy}
               onClick={() => void act(() => api.forgetProjectMemory!({ projectId, memoryId: item.id }))}>删除</button>

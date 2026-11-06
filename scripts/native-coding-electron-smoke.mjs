@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron, expect } from '@playwright/test'
 import { resolveE2eRuntime } from './e2e-runtime.mjs'
 import { stopNativeSmokeProcess } from './native-smoke-process.mjs'
+import { runBuildTestScenario } from './build-test-electron-scenarios.mjs'
+
+const buildTestSmoke = process.env.DEVFLOW_BUILD_TEST_SMOKE === '1'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps/desktop')
@@ -28,6 +31,7 @@ const sessionSecret = 'native-coding-electron-smoke-session-secret-32'
 const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-native-coding-electron-'))
 const repositoryPath = path.join(tempRoot, 'fixture-repository')
 const userDataDir = path.join(tempRoot, 'user-data')
+const testCounterPath = path.join(tempRoot, 'test-command-count')
 const modelRequests = []
 
 function browserSessionHeaders(authAccountId) {
@@ -101,6 +105,10 @@ function nativePhaseOf(body) {
 }
 
 function modelContentFor(phase) {
+  if (phase === 'change_review') {
+    const first = buildTestSmoke && !modelRequests.some(request => nativePhaseOf(request) === 'revision')
+    return JSON.stringify({ stateVersion: 2, findings: first ? [{ path: 'src/message.js', line: 1, lineText: 'export const message = \"new\"', importance: 'suggestion', consequence: '消息文字还可以更明确', reason: '保留原有导出，只修订消息值', item: '将消息改成 revised，保留原有导出', becomes: 'export const message = \"revised\"' }] : [] })
+  }
   if (phase === 'analysis') {
     return JSON.stringify({
       stateVersion: 2,
@@ -115,7 +123,7 @@ function modelContentFor(phase) {
       stateVersion: 2,
       changes: [{
         path: 'src/message.js',
-        replacements: [{ oldText: 'message = "old"', newText: 'message = "new"' }],
+        replacements: [{ oldText: phase === 'repair' ? 'message = "revised"' : 'message = "old"', newText: phase === 'repair' ? 'message = "fixed"' : phase === 'revision' ? 'message = "revised"' : 'message = "new"' }],
       }],
       summary: 'Apply the exact requested message change.',
     }),
@@ -123,10 +131,6 @@ function modelContentFor(phase) {
   ].join('\n')
 }
 
-// The read-only Gate Review prompt names its three repository tools; the wording changed with #201.
-function isRepositoryReviewPrompt(systemPrompt) {
-  return /repo_list[\s\S]*repo_read[\s\S]*repo_search/u.test(systemPrompt)
-}
 function repositoryReviewContent(body) {
   const input = JSON.parse(body.messages[1].content)
   if (!input.observations?.length) return JSON.stringify({ tool: { name: 'repo_read', args: { path: 'src/message.js' } } })
@@ -193,7 +197,7 @@ const modelServer = createServer(async (request, response) => {
       return
     }
     const payload = JSON.stringify({
-      choices: [{ message: { content: isRepositoryReviewPrompt(systemPrompt)
+      choices: [{ message: { content: nativePhaseOf(body) === undefined
         ? repositoryReviewContent(body) : modelContentFor(nativePhaseOf(body)) }, finish_reason: 'stop' }],
       usage: {
         prompt_tokens: 40 + modelRequests.length,
@@ -369,6 +373,7 @@ try {
     "const fs = require('node:fs'); if (fs.readFileSync('src/message.js', 'utf8') !== 'export const message = \\\"new\\\"\\n') process.exit(1)\n",
     'utf8',
   )
+  if (buildTestSmoke) await writeFile(path.join(repositoryPath, 'test.js'), `require('node:fs').writeFileSync(${JSON.stringify(testCounterPath)}, String(Number(require('node:fs').existsSync(${JSON.stringify(testCounterPath)}) ? require('node:fs').readFileSync(${JSON.stringify(testCounterPath)}, 'utf8') : 0) + 1)); const { test } = require('node:test'); const assert = require('node:assert/strict'); const fs = require('node:fs'); test('消息符合保存的测试要求', () => assert.equal(fs.readFileSync('src/message.js', 'utf8'), 'export const message = \"fixed\"\\n'))\n`)
   await writeFile(path.join(repositoryPath, 'package.json'), JSON.stringify({
     name: 'native-coding-electron-smoke',
     version: '1.0.0',
@@ -514,6 +519,9 @@ try {
     configVersion: 1,
   })
 
+  if (buildTestSmoke) {
+    await runBuildTestScenario({ page, run, buildNode, project, modelRequests, repositoryPath, testCounterPath })
+  } else {
   let livePrompt
   if (liveRoot) {
     const { createClosureRelay, closureElectronPrompt } = await import('./native-coding-closure-live.mts')
@@ -623,6 +631,7 @@ try {
   })
   expect(changeSetPreview.unifiedDiff).toContain('diff --git a/src/message.js b/src/message.js')
 
+  await expect.poll(async () => (await page.evaluate(runId => window.aiDevFlowDesktop.getCodingChangeHistory({ runId }), run.id)).reviews.at(-1)?.status).toBe('completed')
   await page.evaluate(async (input) => window.aiDevFlowDesktop.replyCodingPermission(input), {
     requestId: permission.id,
     codingRunId: permission.codingRunId,
@@ -652,18 +661,19 @@ try {
   expect(completedState.codingEvents.filter((event) => event.codingRunId === codingRun.id).length)
     .toBeGreaterThanOrEqual(4)
   const codingRequests = modelRequests.filter(request => nativePhaseOf(request) !== undefined)
-  expect(codingRequests).toHaveLength(2)
-  expect(modelRequests).toHaveLength(4)
+  expect(codingRequests).toHaveLength(3)
+  expect(modelRequests).toHaveLength(5)
   expect(modelRequests.every((request) => request.model === 'deepseek-flash')).toBe(true)
   // Through the real HTTP adapter: both phases send the identical system message and open
   // the user JSON with the same brief, so provider prefix caching can reuse it.
-  expect(codingRequests.map(nativePhaseOf)).toEqual(['analysis', 'initial'])
+  expect(codingRequests.map(nativePhaseOf)).toEqual(['analysis', 'initial', 'change_review'])
   expect(codingRequests[1].messages[0].content).toBe(codingRequests[0].messages[0].content)
   const sentBrief = JSON.parse(codingRequests[0].messages[1].content).brief
   const sharedPrefix = `{"stateVersion":2,"brief":${JSON.stringify(sentBrief)},`
   expect(codingRequests.every((request) => request.messages[1].content.startsWith(sharedPrefix))).toBe(true)
   expect((await page.evaluate(() => window.aiDevFlowDesktop.loadState())).settings.knowledgeReviewExecutor).toBe('native-agent')
   console.log('DevFlow Native Electron smoke passed: real Main, local model server, built-in repository review without OpenCode, exact approval, managed-worktree edit, saved test, Diff, Trace, Evidence, and provider-reported cost.')
+  }
   }
   livePassed = true
 } finally {

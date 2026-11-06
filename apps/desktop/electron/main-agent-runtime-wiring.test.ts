@@ -89,10 +89,10 @@ describe('Electron Agent Runtime production wiring', () => {
 
   it('recalls stage Agent Memory for the trusted actor and generates without it when recall fails (ADR 0024)', () => {
     expect(main).toMatch(
-      /const stageMemory = await recallScopedMemory\(\{[\s\S]*?userId: actor\.userId[\s\S]*?runtimeId: `agent-runtime-stage-\$\{stageRuntimeKey\}`[\s\S]*?budget: STAGE_AGENT_MEMORY_RECALL_BUDGET[\s\S]*?\}\)\.catch\(\(\) => \{[\s\S]*?return \{ context: \[\]/,
+      /const stageMemory = await recallScopedMemory\(\{[\s\S]*?userId: actor\.userId[\s\S]*?runtimeId: `agent-runtime-stage-\$\{stageRuntimeKey\}`[\s\S]*?budget: STAGE_AGENT_MEMORY_RECALL_BUDGET[\s\S]*?\}\)\.catch\(\(\) => \{[\s\S]*?return undefined/,
     )
     expect(main).toMatch(
-      /generated = await runWorkflowStageAgent\(\{[\s\S]*?stageMemory\.context\.length \? \{ memoryContext: stageMemory\.context \}/,
+      /generated = await runWorkflowStageAgent\(\{[\s\S]*?stageMemory\?\.projectMemory \? \{\s*memoryContext: stageMemory\.context, omittedMemoryCount: stageMemory\.omittedMemoryCount,[\s\S]*?assertScopedMemoryCurrent\(store, stageMemory, identities\)/,
     )
     // ADR 0030: project memory recall is registered on the same store every entry point uses.
     expect(main).toMatch(/registerProjectMemoryRecall\(store, projectMemoryRecall\)/)

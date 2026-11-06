@@ -14,10 +14,11 @@ it('distinguishes no call, unreported call, a real zero and partial usage withou
 it('opens accessible details, switches totals with the conversation and returns focus on Escape', () => {
   const { rerender } = render(<ConversationUsage session={session([message({ inputTokens: 49000, outputTokens: 78, totalTokens: 49078 }), message()])} />)
   const trigger = screen.getByRole('button', { name: /当前会话用量/ })
-  expect(trigger).toHaveTextContent('用量 49.1k部分')
+  expect(trigger).toHaveTextContent('用量 49.1k · 费用未知部分')
   fireEvent.click(trigger)
   expect(screen.getByRole('dialog')).toHaveTextContent('49,078')
   expect(screen.getByRole('dialog')).toHaveTextContent('不代表上下文窗口占用')
+  expect(screen.getByRole('dialog')).toHaveTextContent('答疑的费用不计入本任务')
   fireEvent.keyDown(document, { key: 'Escape' })
   expect(screen.queryByRole('dialog')).toBeNull()
   expect(trigger).toHaveFocus()

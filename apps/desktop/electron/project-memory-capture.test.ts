@@ -18,6 +18,17 @@ describe('project memory documents', () => {
   const conversation = (count: number, title = '') => ({ id: 'chat', localProjectId: 'p', title, status: 'idle' as const, updatedAt: now,
     messages: Array.from({ length: count }, (_, index) => message(index)) })
 
+  it('removes only a numbered performance measurement, retaining decisions in the same message and the original transcript', () => {
+    const sample = '第 12 轮性能测试：平均帧率 50 fps，最长任务 88 ms。'
+    const chat = conversation(2)
+    chat.messages[0]!.text = sample + '决定：行高必须是 44px。目标是平均帧率 60 fps。'
+    chat.messages[1]!.text = 'benchmark round 2: latency=23ms, p95=80ms\n第 3 轮性能测试：延迟 15ms，必须保持这个上限。'
+    const [document] = buildConversationMemoryDocuments(chat, now)
+    expect(JSON.parse(document!.payload)[0].content).toBe('决定：行高必须是 44px。目标是平均帧率 60 fps。')
+    expect(JSON.parse(document!.payload)[1].content).toBe('第 3 轮性能测试：延迟 15ms，必须保持这个上限。')
+    expect(chat.messages[0]!.text.startsWith(sample)).toBe(true)
+  })
+
   it('keeps a long conversation whole, in segments that never change once full', () => {
     const documents = buildConversationMemoryDocuments(conversation(80), now)
     expect(documents.length).toBeGreaterThan(2)

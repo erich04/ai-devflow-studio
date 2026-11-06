@@ -318,6 +318,11 @@ export type StageAgentExecutorProvenance = {
   durationMs: number
   terminalReason: StageAgentTerminalReason
   contextDigest: string
+  /** Background actually sent after budgeting. Keep identities and digests, never memory text. */
+  backgroundMemory?: {
+    memories: Array<{ id: string; revision: number; contentDigest: string }>
+    omittedCount: number
+  }
   /** L0/L1 context bound into the prompt (ADR 0025); absent on older records. */
   knowledgeContext?: KnowledgeContextManifest
 }
@@ -346,6 +351,8 @@ export type ClarificationRevisionMetadata = {
   repositoryFindings?: ClarificationRepositoryFindings
   executor: StageAgentExecutorProvenance
   generatedAt: string
+  /** Saved proposals the generator actually used for this revision (UX batch 1). */
+  inputProposals?: DesignRevisionIdentity[]
 }
 
 export type ClarificationFeedbackMetadata = {
@@ -357,6 +364,8 @@ export type ClarificationFeedbackMetadata = {
   actorName: string
   reasonDigest: string
   createdAt: string
+  /** Present iff the request carried the field (possibly []): the exact proposals to use. */
+  proposals?: DesignRevisionIdentity[]
 }
 
 export type ClarificationAuditRecord = {
@@ -399,7 +408,13 @@ export type Artifact = {
   clarificationFeedback?: ClarificationFeedbackMetadata
   designEvidence?: DesignEvidence
   /** Exact inputs of an explicitly requested design revision; old materials remain immutable. */
-  designRevision?: { version: 1; previous: DesignRevisionIdentity; proposals: DesignRevisionIdentity[] }
+  designRevision?: {
+    version: 1
+    previous: DesignRevisionIdentity
+    proposals: DesignRevisionIdentity[]
+    /** Redacted revision list the user submitted with the request, when any. */
+    changeRequest?: string
+  }
   githubDeliverySource?: GitHubDeliveryPackageSource
 }
 
@@ -414,6 +429,8 @@ export type GitHubDeliveryPackageSource = {
 }
 
 export type AgentEvent = {
+  /** Local test confirmation audit; no prompt, source, or credentials. */
+  metadata?: { confirmedBy?: string }
   id: string
   runId: string
   nodeId?: string
@@ -505,7 +522,7 @@ export type RuntimeCostBreakdown = {
   totalUsd: number
 }
 
-export type RuntimeProviderRequestPhase = 'analysis' | 'initial' | 'repair'
+export type RuntimeProviderRequestPhase = 'analysis' | 'initial' | 'repair' | 'revision' | 'change_review'
 
 export type RuntimeProviderCallSettlement = {
   budgetAttemptIds?: string[]
@@ -852,6 +869,8 @@ export type AgentReviewMissingEvidenceDetail = {
   /** Valid citations locate text; they do not prove a model's interpretation. */
   citations: AgentReviewEvidenceCitation[]
   requiresReview: boolean
+  /** Advisory level from clarify and design reviews; policy never reads it. */
+  importance?: 'important' | 'suggestion'
 }
 
 export type AgentReviewFeedback = {
@@ -1286,6 +1305,7 @@ export type ProjectGitStatus =
 export type TestEvidenceStatus = 'running' | 'passed' | 'failed' | 'timed_out'
 
 export type TestEvidence = {
+  reusedFrom?: { evidenceId: string; codingRunId: string; verifiedAt: string }
   id: string
   runId: string
   nodeId: string
@@ -1416,6 +1436,7 @@ export type CodingChangeSetChange = {
 }
 
 export type CodingChangeSet = {
+  revision?: { index: number; previous: { id: string; digest: string }; changeRequest: string; itemCount: number }
   id: string
   stateVersion: 2
   codingRunId: string
@@ -1461,6 +1482,8 @@ export type CodingAgentRunStatus =
 
 export type CodingAgentRun = {
   harness?: import('./coding-harness').CodingHarnessSummary
+  revisionInFlight?: { previousChangeSetId: string; previousChangeSetDigest: string; previousRequestId: string; requestedAt: string; itemCount: number; previousExpired?: true; stopRequestedAt?: string }
+  retryOf?: { kind: 'redevelop' | 'refix'; codingRunId: string; changeSetId?: string; failedTestEvidenceId?: string; hasReason: boolean }
   question?: import('./coding-question').CodingQuestionRequest
   questionReceipts?: import('./coding-question').CodingQuestionReceipt[]
   id: string
@@ -1521,7 +1544,7 @@ export type CodingAgentEvent = {
   redacted: boolean
 }
 
-export type CodingPermissionRequestStatus = 'pending' | 'approved' | 'rejected' | 'expired'
+export type CodingPermissionRequestStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'superseded'
 
 export type CodingPermissionRequest = {
   id: string
@@ -1556,11 +1579,12 @@ export type CodingPermissionRequest = {
 }
 
 export type CodingPermissionDecision = {
+  supersededBy?: { changeSetId: string }
   id: string
   requestId: string
   codingRunId: string
   decidedBy: string
-  decision: 'approved' | 'rejected' | 'expired'
+  decision: 'approved' | 'rejected' | 'expired' | 'superseded'
   comment: string
   decidedAt: string
   scope?: 'once' | 'session'

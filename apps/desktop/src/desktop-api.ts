@@ -1,3 +1,4 @@
+import type { BuildTestDesktopApi, CodingRetryContext } from '../electron/build-test-contract'
 import type { WorkbenchConversationApi } from '../electron/workbench-conversation-contract.js'
 import type {
   AgentEvent,
@@ -107,6 +108,7 @@ export type ProjectGitStatusInput = {
 export type ValidateTestCommandInput = SaveProjectTestCommandInput
 
 export type RunProjectTestsInput = {
+  completeOnPass?: boolean
   projectId: string
   runId: string
   nodeId: string
@@ -151,6 +153,8 @@ export type RequestClarificationChangesInput = ClarificationRevisionIdentity & {
   runId: string
   nodeId: string
   reason: string
+  /** Exact saved proposals of the revision list; [] means none. */
+  proposals?: DesignRevisionIdentity[]
 }
 
 export type RequestClarificationChangesResult = {
@@ -231,6 +235,7 @@ export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {
 }
 
 export type RunCodingAgentInput = {
+  context?: CodingRetryContext
   runId: string
   nodeId: string
   projectId: string
@@ -271,7 +276,7 @@ export type PairDesktopResult = {
   credential: DesktopPairingCredential
 }
 
-export type DevFlowDesktopApi = {
+export type DevFlowDesktopApi = Partial<BuildTestDesktopApi> & {
   codingHarness?: (command: import('@ai-devflow/shared').CodingHarnessCommand) => Promise<import('@ai-devflow/shared').CodingHarnessSnapshot>
   onCodingHarnessUpdated?: (listener: (codingRunId: string) => void) => () => void
   getModelCostRecovery: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
@@ -458,7 +463,8 @@ export type DevFlowDesktopApi = {
     requestId: string
     codingRunId: string
     decidedBy: string
-    decision: CodingPermissionDecision['decision']
+    expected?: import('../electron/build-test-contract').PermissionExpected
+    decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>
     comment: string
     scope?: 'once' | 'session'
   }) => Promise<CodingPermissionRequest>

@@ -75,9 +75,9 @@ async function retainAt(dbPath: string, version: number, dropped: string[]) {
 }
 
 describe('Native v3 schema after merging main', () => {
-  it('is migration 42, after main 39 (Hindsight), 40 (memory candidates) and 41 (project memory)', () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(42)
-    expect(schemaMigrations.slice(-4).map((migration) => migration.version)).toEqual([39, 40, 41, 42])
+  it('appends Native v3 after the released main migrations', () => {
+    expect(CURRENT_SCHEMA_VERSION).toBe(43)
+    expect(schemaMigrations.slice(-5).map((migration) => migration.version)).toEqual([39, 40, 41, 42, 43])
   })
 
   it('opens a database the draft branch wrote at its own schema 39 and adds what main 39 created', async () => {
@@ -107,7 +107,7 @@ describe('Native v3 schema after merging main', () => {
     draft.close()
 
     const store = await createLocalStore({ dbPath })
-    expect(await store.getSchemaVersion()).toBe(42)
+    expect(await store.getSchemaVersion()).toBe(43)
     expect(await store.listNativeCodingSessions('missing-project')).toEqual([])
     expect(await store.listHindsightConfigurations()).toEqual([])
     expect(await store.listProjectMemoryConfigurations()).toEqual([])
@@ -119,8 +119,8 @@ describe('Native v3 schema after merging main', () => {
   })
 
   it.each([
-    { from: 'schema 40, which runs main 41 and then 42', version: 40, dropped: [...NATIVE_SESSION_TABLES, 'project_memory_documents', 'project_memory_configurations'] },
-    { from: "main's schema 41, which runs only 42", version: 41, dropped: NATIVE_SESSION_TABLES },
+    { from: 'schema 40', version: 40, dropped: [...NATIVE_SESSION_TABLES, 'project_memory_documents', 'project_memory_configurations'] },
+    { from: "main's schema 41", version: 41, dropped: NATIVE_SESSION_TABLES },
     { from: "the draft branch's schema 41, which has the session table but skipped main 41", version: 41, dropped: ['project_memory_documents', 'project_memory_configurations'] },
   ])('upgrades a database at $from', async ({ version, dropped }) => {
     const seeded = await seededDatabase()
@@ -131,14 +131,14 @@ describe('Native v3 schema after merging main', () => {
     retained.close()
 
     const store = await createLocalStore({ dbPath: seeded.dbPath })
-    expect(await store.getSchemaVersion()).toBe(42)
+    expect(await store.getSchemaVersion()).toBe(43)
     expect(await store.listProjects()).toEqual([project])
     const keptSessions = dropped.includes('native_coding_sessions') ? [] : [seeded.session]
     const keptMemory = dropped.includes('project_memory_configurations') ? [] : [seeded.memory]
     expect(await store.listNativeCodingSessions(project.id)).toEqual(keptSessions)
     expect(await store.listProjectMemoryConfigurations()).toEqual(keptMemory)
     expect(await store.listProjectMemoryDocuments()).toEqual(keptMemory.length ? seeded.documents : [])
-    // The tables 42 created accept writes.
+    // The upgraded tables accept writes.
     expect(await store.saveNativeCodingSession(nativeSession('native-after-upgrade'), 0)).toBe(true)
     if (!keptMemory.length) await store.configureProjectMemory(projectMemorySetting(seeded.ownerUserId))
     expect(await store.listNativeCodingSessions(project.id)).toHaveLength(keptSessions.length + 1)
@@ -151,16 +151,16 @@ describe('Native v3 schema after merging main', () => {
     migrated.close()
   })
 
-  it('changes nothing when migration 42 runs again', async () => {
+  it('changes nothing when migration 43 runs again', async () => {
     const seeded = await seededDatabase()
     const SQL = await sql()
     const before = new SQL.Database(await readFile(seeded.dbPath))
     const objects = schemaObjects(before)
     before.close()
-    await retainAt(seeded.dbPath, 41, [])
+    await retainAt(seeded.dbPath, 42, [])
 
     const store = await createLocalStore({ dbPath: seeded.dbPath })
-    expect(await store.getSchemaVersion()).toBe(42)
+    expect(await store.getSchemaVersion()).toBe(43)
     expect(await store.getNativeCodingSession(seeded.session.id)).toEqual(seeded.session)
     expect(await store.listProjectMemoryConfigurations()).toEqual([seeded.memory])
     expect(await store.listProjectMemoryDocuments()).toEqual(seeded.documents)

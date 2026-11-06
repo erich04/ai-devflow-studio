@@ -1,3 +1,6 @@
+import type { BuildTestDesktopApi, CodingRetryContext } from './build-test-contract.js'
+import { parseCodingRetryContext } from './build-test-contract.js'
+import { boundedText, optionalBoolean, parsePermissionExpected, type PermissionExpected } from './build-test-contract.js'
 import type { CodingQuestionReceipt, CodingQuestionReply } from '@ai-devflow/shared'
 import type { WorkbenchConversationApi } from './workbench-conversation-contract.js'
 import type { CredentialAccessRecord } from './credential-access.js'
@@ -315,6 +318,14 @@ export const ipcChannels = {
   retryModelCostSettlements: 'devflow:model-costs:retry',
   saveCodingRuntimeBudgetPolicy: 'devflow:coding:runtime-budget-policy:save',
   createCodingRuntimeBudgetApproval: 'devflow:coding:runtime-budget-approval:create',
+  getCodingChangeHistory: 'devflow:coding:change-history:get',
+  reviseCodingChangeSet: 'devflow:coding:change-set:revise',
+  cancelCodingRevision: 'devflow:coding:change-set:revise-cancel',
+  startCodingChangeReview: 'devflow:coding:change-review:start',
+  cancelCodingChangeReview: 'devflow:coding:change-review:cancel',
+  getCodingActionCosts: 'devflow:coding:action-costs:get',
+  confirmTestEvidence: 'devflow:test-evidence:confirm',
+  codingChangeHistoryUpdated: 'devflow:coding:push:change-history',
   runCodingAgent: 'devflow:coding:agent:run',
   startRetryAttempt: 'devflow:remediation:retry:start',
   cancelCodingAgentRun: 'devflow:coding:agent:cancel',
@@ -349,6 +360,7 @@ export type TestEvidenceFreshnessInput = {
 export type ValidateTestCommandInput = SaveProjectTestCommandInput
 
 export type RunProjectTestsInput = {
+  completeOnPass?: boolean
   projectId: string
   runId: string
   nodeId: string
@@ -393,6 +405,8 @@ export type RequestClarificationChangesInput = ClarificationRevisionIdentity & {
   runId: string
   nodeId: string
   reason: string
+  /** Exact saved proposals of the revision list; [] means none. */
+  proposals?: DesignRevisionIdentity[]
 }
 
 export type RequestClarificationChangesResult = {
@@ -607,6 +621,7 @@ export type CreateCodingRuntimeBudgetApprovalInput = {
 }
 
 export type RunCodingAgentInput = {
+  context?: CodingRetryContext
   runId: string
   nodeId: string
   projectId: string
@@ -643,10 +658,11 @@ export type ReplyCodingQuestionInput = {
 }
 
 export type ReplyCodingPermissionInput = {
+  expected?: PermissionExpected
   requestId: string
   codingRunId: string
   decidedBy: string
-  decision: CodingPermissionDecision['decision']
+  decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>
   comment: string
   scope?: 'once' | 'session'
 }
@@ -696,7 +712,7 @@ export type PairDesktopResult = {
   credential: DesktopPairingCredential
 }
 
-export type DevFlowDesktopApi = {
+export type DevFlowDesktopApi = BuildTestDesktopApi & {
   codingHarness?: (command: import('@ai-devflow/shared').CodingHarnessCommand) => Promise<import('@ai-devflow/shared').CodingHarnessSnapshot>
   onCodingHarnessUpdated?: (listener: (codingRunId: string) => void) => () => void
   getModelCostRecovery: (input: GetCodingRuntimeConfigurationInput) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
@@ -1024,11 +1040,12 @@ export function parseRunProjectTestsInput(value: unknown): RunProjectTestsInput 
   }
   rejectUnexpectedFields(
     value,
-    ['projectId', 'runId', 'nodeId'],
+    ['projectId', 'runId', 'nodeId', 'completeOnPass'],
     'run project tests payload',
   )
 
   return {
+    ...(optionalBoolean(value.completeOnPass) === undefined ? {} : { completeOnPass: optionalBoolean(value.completeOnPass)! }),
     projectId: readRequiredString(value, 'projectId'),
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
@@ -1541,6 +1558,13 @@ export function parseCancelWorkflowAgentNodeInput(value: unknown): { runId: stri
   }
 }
 
+function readDesignInputIdentity(item: unknown): DesignRevisionIdentity {
+  if (!isRecord(item)) throw new Error('Invalid design input identity')
+  rejectUnexpectedFields(item, ['artifactId', 'updatedAt', 'contentDigest'], 'design input identity')
+  return { artifactId: readExactRequiredIdentifier(item, 'artifactId'), updatedAt: readExactTimestamp(item, 'updatedAt'),
+    contentDigest: readExactRequiredDigest(item, 'contentDigest') }
+}
+
 export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWorkflowAgentNodeInput {
   if (!isRecord(value)) {
     throw new Error('Invalid complete workflow agent node payload')
@@ -1553,20 +1577,21 @@ export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWor
   let designRevision: DesignRevisionRequest | undefined
   if (revision !== undefined) {
     if (!isRecord(revision)) throw new Error('Invalid design revision')
-    rejectUnexpectedFields(revision, ['expectedRunVersion', 'previous', 'proposals'], 'design revision')
-    const identity = (item: unknown): DesignRevisionIdentity => {
-      if (!isRecord(item)) throw new Error('Invalid design input identity')
-      rejectUnexpectedFields(item, ['artifactId', 'updatedAt', 'contentDigest'], 'design input identity')
-      return { artifactId: readExactRequiredIdentifier(item, 'artifactId'), updatedAt: readExactTimestamp(item, 'updatedAt'),
-        contentDigest: readExactRequiredDigest(item, 'contentDigest') }
+    rejectUnexpectedFields(revision, ['expectedRunVersion', 'previous', 'proposals', 'changeRequest'], 'design revision')
+    const changeRequest = revision['changeRequest']
+    if (changeRequest !== undefined && (typeof changeRequest !== 'string' || changeRequest.includes('\u0000') ||
+      !changeRequest.trim() || changeRequest.trim().length > 4000)) {
+      throw new Error('Invalid design revision')
     }
-    if (!Array.isArray(revision['proposals']) || revision['proposals'].length < 1 || revision['proposals'].length > 20) {
+    if (!Array.isArray(revision['proposals']) || revision['proposals'].length < (changeRequest === undefined ? 1 : 0) ||
+      revision['proposals'].length > 20) {
       throw new Error('Invalid design proposal selection')
     }
-    const proposals = revision['proposals'].map(identity)
+    const proposals = revision['proposals'].map(readDesignInputIdentity)
     if (new Set(proposals.map((item) => item.artifactId)).size !== proposals.length) throw new Error('Duplicate design proposal')
     designRevision = { expectedRunVersion: readExactPositiveVersion(revision, 'expectedRunVersion'),
-      previous: identity(revision['previous']), proposals }
+      previous: readDesignInputIdentity(revision['previous']), proposals,
+      ...(changeRequest === undefined ? {} : { changeRequest }) }
   }
 
   return {
@@ -1588,9 +1613,22 @@ export function parseRequestClarificationChangesInput(value: unknown): RequestCl
   if (!isRecord(value)) throw new Error('Invalid request clarification changes payload')
   rejectUnexpectedFields(
     value,
-    ['runId', 'nodeId', 'artifactId', 'revision', 'revisionDigest', 'reason'],
+    ['runId', 'nodeId', 'artifactId', 'revision', 'revisionDigest', 'reason', 'proposals'],
     'request clarification changes payload',
   )
+  let proposals: DesignRevisionIdentity[] | undefined
+  if (value['proposals'] !== undefined) {
+    const raw = value['proposals']
+    if (!Array.isArray(raw) || raw.length > 20) throw new Error('Invalid clarification proposal selection')
+    try {
+      proposals = raw.map(readDesignInputIdentity)
+    } catch {
+      throw new Error('Invalid clarification proposal selection')
+    }
+    if (new Set(proposals.map((item) => item.artifactId)).size !== proposals.length) {
+      throw new Error('Invalid clarification proposal selection')
+    }
+  }
   return {
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
@@ -1598,6 +1636,7 @@ export function parseRequestClarificationChangesInput(value: unknown): RequestCl
     revision: readExactPositiveVersion(value, 'revision'),
     revisionDigest: readExactRequiredDigest(value, 'revisionDigest'),
     reason: readRequiredString(value, 'reason'),
+    ...(proposals ? { proposals } : {}),
   }
 }
 
@@ -2146,7 +2185,7 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
   }
   rejectUnexpectedFields(
     value,
-    ['runId', 'nodeId', 'projectId', 'requestedBy', 'userInstruction', 'runtimeBudgetApprovalId', 'additionalAttemptAfterCount'],
+    ['runId', 'nodeId', 'projectId', 'requestedBy', 'userInstruction', 'runtimeBudgetApprovalId', 'additionalAttemptAfterCount', 'context'],
     'coding agent run payload',
   )
   const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
@@ -2156,6 +2195,7 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
   )) throw new Error('Invalid additional OpenCode attempt count')
 
   return {
+    ...(value['context'] === undefined ? {} : { context: parseCodingRetryContext(value['context']) }),
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
     projectId: readRequiredString(value, 'projectId'),
@@ -2230,6 +2270,7 @@ export function parseReplyCodingPermissionInput(value: unknown): ReplyCodingPerm
   if (!isRecord(value)) {
     throw new Error('Invalid coding permission reply payload')
   }
+  if (value.expected !== undefined) rejectUnexpectedFields(value, ['requestId', 'codingRunId', 'decidedBy', 'decision', 'comment', 'scope', 'expected'], 'coding permission reply')
   const decision = value['decision']
   if (decision !== 'approved' && decision !== 'rejected' && decision !== 'expired') {
     throw new Error('Invalid coding permission decision')
@@ -2244,7 +2285,8 @@ export function parseReplyCodingPermissionInput(value: unknown): ReplyCodingPerm
     decidedBy: readRequiredString(value, 'decidedBy'),
     decision,
     ...(scope ? { scope } : {}),
-    comment: typeof value['comment'] === 'string' ? value['comment'].trim() : '',
+    ...(value.expected === undefined ? {} : { expected: parsePermissionExpected(value.expected) }),
+    comment: value.expected === undefined ? (typeof value['comment'] === 'string' ? value['comment'].trim() : '') : boundedText(value.comment ?? '', 'comment', 1000, true),
   }
 }
 

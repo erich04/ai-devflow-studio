@@ -23,7 +23,7 @@ function api(initial: ProjectMemoryStatus) {
   return {
     getProjectMemoryStatus: vi.fn(async () => initial),
     configureProjectMemory: vi.fn(async (input: { enabled: boolean }) => status({ enabled: input.enabled })),
-    listProjectMemories: vi.fn(async () => page()),
+    listProjectMemories: vi.fn(async ({ kind }: { kind: 'observation' | 'world' | 'experience' }) => page({ items: page().items.map(item => ({ ...item, id: kind + '-1', kind })) })),
     updateProjectMemory: vi.fn(async () => status()),
     forgetProjectMemory: vi.fn(async () => status()),
     forgetProjectMemorySource: vi.fn(async () => status()),
@@ -54,14 +54,19 @@ describe('ProjectMemoryPanel', () => {
     const memory = api(status())
     render(<ProjectMemoryPanel projectId="project-1" api={memory} />)
     const panel = await screen.findByRole('region', { name: '项目记忆' })
+    const observations = await within(panel).findByRole('list', { name: '记忆列表' })
+    expect(within(observations).queryByRole('button', { name: '编辑' })).not.toBeInTheDocument()
+    expect(within(observations).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
+    fireEvent.click(within(panel).getByRole('tab', { name: '事实' }))
+    await within(panel).findByRole('button', { name: '编辑' })
     const item = (await within(panel).findByText('删除前必须弹出二次确认框。')).closest('li')!
     expect(item).toHaveTextContent('2026-10-28 · 讨论：删除确认')
     fireEvent.click(within(item).getByRole('button', { name: '编辑' }))
     fireEvent.change(within(item).getByRole('textbox', { name: '编辑记忆内容' }), { target: { value: '删除前必须确认，撤销窗口 10 秒。' } })
     fireEvent.click(within(item).getByRole('button', { name: '保存修改' }))
-    await waitFor(() => expect(memory.updateProjectMemory).toHaveBeenCalledWith({ projectId: 'project-1', memoryId: 'o1', text: '删除前必须确认，撤销窗口 10 秒。' }))
+    await waitFor(() => expect(memory.updateProjectMemory).toHaveBeenCalledWith({ projectId: 'project-1', memoryId: 'world-1', text: '删除前必须确认，撤销窗口 10 秒。' }))
     fireEvent.click(within(await within(panel).findByRole('list', { name: '记忆列表' })).getByRole('button', { name: '删除' }))
-    await waitFor(() => expect(memory.forgetProjectMemory).toHaveBeenCalledWith({ projectId: 'project-1', memoryId: 'o1' }))
+    await waitFor(() => expect(memory.forgetProjectMemory).toHaveBeenCalledWith({ projectId: 'project-1', memoryId: 'world-1' }))
     fireEvent.click(within(panel).getByRole('tab', { name: '事实' }))
     await waitFor(() => expect(memory.listProjectMemories).toHaveBeenLastCalledWith({ projectId: 'project-1', kind: 'world' }))
     fireEvent.change(within(panel).getByRole('searchbox', { name: '搜索记忆' }), { target: { value: ' 撤销 ' } })
@@ -95,10 +100,10 @@ describe('ProjectMemoryPanel', () => {
     render(<ProjectMemoryPanel projectId="project-1" api={memory} />)
     const section = await screen.findByLabelText('知识页')
     // The page every coding brief includes opens first and says so.
-    expect(await within(section).findByRole('article', { name: '每个任务都适用的约定' })).toHaveTextContent('这一页会放进每次编码简报')
+    expect(await within(section).findByRole('article', { name: '每个任务都适用的约定' })).toHaveTextContent('讨论、阶段 Agent 和 Gate 评审按剩余容量附上简版')
     fireEvent.click(within(section).getByRole('tab', { name: '约定与命令' }))
     const conventions = await within(section).findByRole('article', { name: '约定与命令' })
-    expect(conventions).not.toHaveTextContent('这一页会放进每次编码简报')
+    expect(conventions).not.toHaveTextContent('讨论、阶段 Agent 和 Gate 评审按剩余容量附上简版')
     expect(within(conventions).getByRole('heading', { name: '命令' })).toBeInTheDocument()
     expect(conventions).toHaveTextContent('有新记忆，稍后更新')
     fireEvent.click(within(conventions).getByRole('button', { name: '立即整理' }))
@@ -108,7 +113,8 @@ describe('ProjectMemoryPanel', () => {
     expect(within(await within(section).findByRole('article', { name: '用户偏好' })).getByText(/还没有内容/u)).toBeInTheDocument()
     // Deleting memory empties the pages in Main; the panel reads them again.
     const reads = memory.listProjectKnowledgePages.mock.calls.length
-    fireEvent.click(within(await screen.findByRole('list', { name: '记忆列表' })).getByRole('button', { name: '删除' }))
+    fireEvent.click(screen.getByRole('tab', { name: '事实' }))
+    fireEvent.click(await within(await screen.findByRole('list', { name: '记忆列表' })).findByRole('button', { name: '删除' }))
     await waitFor(() => expect(memory.listProjectKnowledgePages.mock.calls.length).toBeGreaterThan(reads))
   })
 

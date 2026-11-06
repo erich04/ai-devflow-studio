@@ -21,6 +21,7 @@ const hints = {
   repository_unavailable: '所选项目不是可读取的 Git 仓库根目录。请检查项目目录。',
   evidence_invalid: '仓库引用或执行证据校验失败，未生成正式产物。请检查引用范围。',
   input_limit: '阶段输入超过允许范围。请缩小输入后重试。',
+  revision_input_changed: '修订请求引用的答疑提案已变化，未生成新版本。请到「材料与版本」核对提案。',
   tool_limit: '只读执行的工具调用达到上限，未生成正式产物。',
   cancelled: '本次执行已停止。已发生的调用用量仍保留。',
   timeout: '本次执行超时。请检查执行记录后手动重试；已发生的调用用量仍保留。',

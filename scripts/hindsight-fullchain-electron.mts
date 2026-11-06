@@ -22,6 +22,7 @@ import type {
   RunProjectTestsResult,
 } from '../apps/desktop/src/desktop-api.ts'
 import { HINDSIGHT_PROTOCOL } from '../apps/desktop/electron/hindsight-client.ts'
+import { assertMemoryDelivery, exerciseCurationPanel, exerciseProjectMemoryChat } from './project-memory-electron-checks.mts'
 import { createHindsightTodoFixture } from './hindsight-todo-fixture.ts'
 import {
   createWorkspace, startTeamApi, createTeamProject, createPairingCode,
@@ -123,14 +124,17 @@ export async function verifyFullchainTodoBrowser(input: {
     await todo.getByLabel('新任务内容', { exact: true }).fill('新增中文任务丁')
     await todo.getByLabel('新任务内容', { exact: true }).press('Enter')
     await expect(todo.locator('.task-item')).toHaveCount(3)
-    const added = todo.getByRole('checkbox', { name: '标记“新增中文任务丁”为已完成', exact: true })
-    await added.check()
+    // A change rebuilds the list and changes the accessible action name. Assert the new element.
+    const added = todo.getByRole('checkbox', { name: /标记“新增中文任务丁”/u })
+    await added.click()
+    await expect(added).toBeChecked()
     await expect(clear).toBeEnabled()
-    await todo.getByRole('checkbox', { name: '标记“新增中文任务丁”为未完成', exact: true }).uncheck()
+    await added.click()
+    await expect(added).not.toBeChecked()
     await expect(clear).toBeDisabled()
     await todo.getByRole('button', { name: '删除“新增中文任务丁”', exact: true }).click()
     await expect(todo.locator('.task-item')).toHaveCount(2)
-    for (const checkbox of await todo.getByRole('checkbox').all()) await checkbox.check()
+    for (const checkbox of await todo.getByRole('checkbox').all()) { await checkbox.click(); await expect(checkbox).toBeChecked() }
     await clear.click()
     await expect(todo.getByText('已清除 2 项', { exact: true })).toBeVisible()
     await expect(todo.locator('#empty-state')).toBeVisible()
@@ -155,6 +159,8 @@ export async function runHindsightFullchainElectron() {
   assert.equal(process.env.DEVFLOW_FULLCHAIN_LIVE, '1', 'Explicit live synthetic project/provider/budget authorization is required')
   const hindsightEndpoint = loopbackEndpoint(process.env.HINDSIGHT_SMOKE_ENDPOINT, 'HINDSIGHT_SMOKE_ENDPOINT')
   const modelEndpoint = loopbackEndpoint(process.env.DEVFLOW_FULLCHAIN_MODEL_ENDPOINT, 'DEVFLOW_FULLCHAIN_MODEL_ENDPOINT')
+  const curationOnly = process.env.DEVFLOW_FULLCHAIN_PROJECT_MEMORY === 'curation'
+  const memoryMode = curationOnly || process.env.DEVFLOW_FULLCHAIN_PROJECT_MEMORY === '1'
   const workspace = await createWorkspace('devflow-hindsight-fullchain-')
   workspace.repoDir = path.join(workspace.tempRoot, 'todo')
   const output = path.resolve(process.env.DEVFLOW_FULLCHAIN_OUTPUT ?? path.join(workspace.tempRoot, 'evidence'))
@@ -195,6 +201,8 @@ export async function runHindsightFullchainElectron() {
       DEVFLOW_HINDSIGHT_PROTOCOL_VERIFIED: HINDSIGHT_PROTOCOL.commit,
       VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
     } })
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
     // This process only holds a synthetic gateway key and disposable isolated-Team pairing token.
     await app.evaluate(({ safeStorage }) => {
       safeStorage.isAsyncEncryptionAvailable = async () => true
@@ -218,8 +226,6 @@ export async function runHindsightFullchainElectron() {
         return originalFetch(input, init)
       }
     }, modelEndpoint)
-    const page = await app.firstWindow()
-    await page.waitForLoadState('domcontentloaded')
     async function ipc<T>(method: string, input?: unknown): Promise<T> {
       return page.evaluate(async ({ method, input }) => {
         const api = window.aiDevFlowDesktop as unknown as Record<string, (payload?: unknown) => Promise<unknown>>
@@ -243,26 +249,40 @@ export async function runHindsightFullchainElectron() {
     await ipc('saveCodingRuntimeBudgetPolicy', { projectId: project.id, enabled: true,
       monthlyLimitUsd: 1, warningThresholdUsd: 0.5 })
     await ipc('saveCodingRuntimeConfiguration', { projectId: project.id, executor: 'native-model', providerId })
-    await ipc('configureHindsight', { projectId: project.id, endpoint: hindsightEndpoint,
-      selectedPaths: fixture.selectedPaths, includeMemories: false, enabled: true, pairedProjectConsent: true })
-    await step('knowledge-sync:started', { selectedPaths: fixture.selectedPaths })
-    const syncDeadline = Date.now() + 10 * 60_000
-    let synced = false
-    while (Date.now() < syncDeadline) {
-      const status = await ipc<HindsightStatus>('getHindsightStatus', { projectId: project.id })
-      if (status.counts.ready === fixture.selectedPaths.length) {
-        report.evidence.hindsightStatus = status; synced = true; break
+    if (memoryMode) {
+      await step('project-memory:chat-and-capture')
+      report.evidence.discussion = await exerciseProjectMemoryChat(ipc, project.id, providerId, hindsightEndpoint)
+      await step('project-memory:ready')
+      if (curationOnly) {
+        report.evidence.curation = await exerciseCurationPanel(page, ipc, project.id)
+        await page.screenshot({ path: path.join(output, 'curation.png'), scale: 'css' })
+        report.passed = true
+        await step('project-memory:curation-passed')
+        return report
       }
-      assert(status.enabled && status.transportAvailable, status.note)
-      await delay(2_000)
+    } else {
+      await ipc('configureHindsight', { projectId: project.id, endpoint: hindsightEndpoint,
+        selectedPaths: fixture.selectedPaths, includeMemories: false, enabled: true, pairedProjectConsent: true })
+      await step('knowledge-sync:started', { selectedPaths: fixture.selectedPaths })
+      const syncDeadline = Date.now() + 10 * 60_000
+      let synced = false
+      while (Date.now() < syncDeadline) {
+        const status = await ipc<HindsightStatus>('getHindsightStatus', { projectId: project.id })
+        if (status.counts.ready === fixture.selectedPaths.length) {
+          report.evidence.hindsightStatus = status; synced = true; break
+        }
+        assert(status.enabled && status.transportAvailable, status.note)
+        await delay(2_000)
+      }
+      assert(synced, 'Hindsight did not synchronize the selected documents within ten minutes')
+      await step('knowledge-sync:ready')
     }
-    assert(synced, 'Hindsight did not synchronize the selected documents within ten minutes')
-    await step('knowledge-sync:ready')
     let run = await ipc<WorkflowRun>('createRun', { projectId: project.id, creatorId: userId,
       title: 'Hindsight Todo 全阶段知识验证', request, branchName: 'devflow/hindsight-todo-fullchain' })
     report.runId = run.id
     const nodes = run.nodes
     const receipt = async (phase: string, value: unknown, stage: string) => {
+      if (memoryMode) return // Project memory has separate typed receipts, checked below.
       report.evidence[phase] = await assertFullchainKnowledgeReceipt(value, {
         stage, projectId: project.id, repositoryPath: fixture.repositoryPath, selectedPaths: fixture.selectedPaths,
       })
@@ -273,6 +293,7 @@ export async function runHindsightFullchainElectron() {
         runId: run.id, nodeId, projectId: project.id, requestedBy: userId, runtime: 'electron', providerId,
       })
       assert(result.review?.id, `${phase} did not persist a report`)
+      if (memoryMode) report.evidence[phase] = assertMemoryDelivery(phase, result.review.contextManifest?.backgroundMemory?.memories)
       await receipt(phase, result.review, stage)
       await writeFile(path.join(output, `${phase}.json`), `${JSON.stringify(result.review, null, 2)}\n`)
       await step(`${phase}:complete`, { reviewId: result.review.id })
@@ -305,6 +326,10 @@ export async function runHindsightFullchainElectron() {
       }
       assert(completed, `${stage} did not produce a valid response`)
       run = completed.run
+      if (memoryMode) {
+        const artifact = completed.artifact
+        report.evidence[stage] = assertMemoryDelivery(stage, (artifact.clarificationRevision ?? artifact.designEvidence)?.executor.backgroundMemory?.memories)
+      }
       await receipt(stage, completed.artifact, stage)
       await writeFile(path.join(output, `${stage}.md`), completed.artifact.content)
       await review(`${stage}-review`, gate.id, stage)
@@ -326,6 +351,7 @@ export async function runHindsightFullchainElectron() {
     })
     const codingId = started.codingRun.id
     let state = await ipc<LocalExecutionState>('loadState')
+    if (memoryMode) assertMemoryDelivery('coding', started.codingRun.contextReceipt?.memories)
     await receipt('coding', started.codingRun.contextReceipt, 'build')
     // Native may propose one bounded repair after running the real configured tests.
     // Each diff, including a repair, requires independent review of its exact digest.
@@ -381,6 +407,7 @@ export async function runHindsightFullchainElectron() {
     })
     assert.equal(tested.evidence.status, 'passed')
     assert.equal(tested.evidence.exitCode, 0)
+    if (memoryMode) report.evidence.test = { status: tested.evidence.status, exitCode: tested.evidence.exitCode }
     await receipt('test', tested.evidence, 'test')
     await writeFile(path.join(output, 'tests.json'), `${JSON.stringify(tested.evidence, null, 2)}\n`)
     report.evidence.browser = await verifyFullchainTodoBrowser({
@@ -420,6 +447,12 @@ export async function runHindsightFullchainElectron() {
     }
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
+    if (memoryMode) {
+      await page.getByRole('button', { name: '知识', exact: true }).click()
+      const knowledgePage = page.getByRole('article', { name: '每个任务都适用的约定' })
+      await expect(knowledgePage).toContainText(/英文|English/iu)
+      await knowledgePage.scrollIntoViewIfNeeded()
+    }
     await page.screenshot({ path: path.join(output, 'desktop-final.png'), scale: 'css' })
     report.passed = true
     await step('electron-available-phases:passed', {
@@ -433,7 +466,7 @@ export async function runHindsightFullchainElectron() {
     // behind an operator's back; the caller separately runs the audited cleanup/ledger closure.
     await app?.close().catch(() => undefined)
     await stopProcess(team?.process)
-    report.evidence.coverage = {
+    report.evidence.coverage = curationOnly ? { curation: Boolean(report.evidence.curation) } : {
       clarification: Boolean(report.evidence.clarify),
       clarificationReview: Boolean(report.evidence['clarify-review']),
       design: Boolean(report.evidence.design),

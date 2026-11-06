@@ -37,9 +37,11 @@
 
 知识页的项目记忆面板可以开关、查看、编辑、删除、忘记来源和清空，还能阅读五个知识页（每个任务都适用的约定、约定与命令、决策与原因、问题与解决办法、用户偏好），规则见 ADR 0030「记忆页」；对应 IPC 为 `getProjectMemoryStatus`、`configureProjectMemory`、`listProjectMemories`、`updateProjectMemory`、`forgetProjectMemory`、`forgetProjectMemorySource`、`clearProjectMemory`、`listProjectKnowledgePages`、`refreshProjectKnowledgePage`。
 
+Hindsight 1.0.0 只接受对原始事实（world）和经历（experience）的编辑与删除；观察（observation）随来源重新归纳。记忆面板在事实和经历上提供修改操作。编辑或忘记后，早于本次变更且尚未重写的知识页会被隐藏，直至 Hindsight 返回更新的页面。
+
 知识页是 Hindsight 的 mental model，id 为 `devflow-<页面>`，由后台 worker 在中继运行时为每个开启的 bank 创建（每次启动检查一次）。阅读知识页不调用模型；Hindsight 归纳后改写（每页最多每 6 小时一次）和「立即整理」会调用模型并计入团队预算；2026-10-29 用 DeepSeek Flash 实测每页一次约 0.8 美分。
 
-「每个任务都适用的约定」（`devflow-essentials`，最多 700 tokens）是唯一进入提示词的知识页：每次编码时读取（不调用模型），脱敏后按整行截到 2,500 字节放进简报，不占召回预算；页面为空、读取失败或简报放不下时不带。2026-10-31 在评估 bank 上写出 15 条规则、1,271 字节，编码实测见[记忆优化验证](../validation/project-memory-optimization-20261031.md)第 5 节。
+「每个任务都适用的约定」（`devflow-essentials`，最多 700 tokens）是唯一进入提示词的知识页：每次编码时读取（不调用模型），脱敏后按整行截到 2,500 字节放进简报，不占召回预算；页面为空、读取失败或简报放不下时不带。讨论、阶段 Agent 和 Gate 在原有记忆预算内尝试附上同一页的短版（含标题最多 600 字节，按整行截取），首条相关记忆优先。2026-10-31 在评估 bank 上写出 15 条规则、1,271 字节，编码实测见[记忆优化验证](../validation/project-memory-optimization-20261031.md)第 5 节。
 
 代码位置：
 
@@ -49,7 +51,7 @@
 - `apps/desktop/electron/project-memory-store.ts`：开关和发件队列（schema 41）。
 - `apps/desktop/electron/project-memory-service.ts`：后台发送、查询、删除。
 - `apps/desktop/electron/memory-model-relay.ts`：Hindsight 抽取调用的预算中继。
-- `apps/desktop/electron/project-memory-recall.ts`：召回、`memory_search`、回执检查和读取约定页（`conventions`）；`coding-context.ts` 的 `recallScopedMemory` 只用它召回，`recallCodingMemory` 给编码简报加上约定页，`buildWithCodingMemory` 在简报放不下时去掉它。
+- `apps/desktop/electron/project-memory-recall.ts`：召回、`memory_search`、回执检查和读取约定页（`conventions`）；`coding-context.ts` 的 `recallScopedMemory` 为各入口选择记忆和可选的短约定页，`recallCodingMemory` 给编码简报加上约定页，`buildWithCodingMemory` 在简报放不下时去掉它。
 
 ## 配置
 

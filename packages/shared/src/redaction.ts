@@ -208,6 +208,9 @@ export function redactLocalAbsolutePaths(input: string): RedactionResult {
     offset: number,
     source: string,
   ) => {
+    // Bare comment delimiters contain no path; preserving them keeps code previews
+    // and model review inputs syntactically faithful. Paths inside comments still match.
+    if (pathValue === '/*' || pathValue === '/**') return match
     const pathOffset = offset + prefix.length
     const context = source.slice(Math.max(0, pathOffset - 48), pathOffset)
     if (isSafeApiRoute(pathValue, context)) {

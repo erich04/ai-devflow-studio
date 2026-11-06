@@ -1,3 +1,4 @@
+import { reconstructWholeFileDiff } from '@ai-devflow/shared'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import {
@@ -148,6 +149,7 @@ function canonicalChangeSetDigest(input: {
   configVersion: number
   providerId: string
   changes: CodingChangeSetChange[]
+  revision?: CodingChangeSet['revision']
 }): string {
   return sha256(JSON.stringify(input))
 }
@@ -215,6 +217,7 @@ export async function prepareCodingChangeSet(input: {
   createdAt: string
   expiresAt: string
   proposal: ChangeSetProposal
+  revision?: CodingChangeSet['revision']
 }): Promise<CodingChangeSet> {
   assertCanonicalIso(input.createdAt)
   assertCanonicalIso(input.expiresAt)
@@ -273,6 +276,7 @@ export async function prepareCodingChangeSet(input: {
     configVersion: input.configVersion,
     providerId: input.providerId,
     changes,
+    ...(input.revision ? { revision: input.revision } : {}),
   })
   return {
     id: input.id,
@@ -289,6 +293,7 @@ export async function prepareCodingChangeSet(input: {
     changes,
     unifiedDiff: diffs.join(''),
     changeSetDigest,
+    ...(input.revision ? { revision: input.revision } : {}),
   }
 }
 
@@ -302,10 +307,23 @@ export function verifyCodingChangeSetDigest(changeSet: CodingChangeSet): void {
     configVersion: changeSet.configVersion,
     providerId: changeSet.providerId,
     changes: changeSet.changes,
+    ...(changeSet.revision ? { revision: changeSet.revision } : {}),
   })
   if (digest !== changeSet.changeSetDigest) {
     throw new Error('Coding Change Set digest does not match its canonical modifications')
   }
+}
+
+/** Reconstruct the immutable proposal, never a later worktree diff. */
+export function verifyCodingChangeSetDisplay(changeSet: CodingChangeSet) {
+  verifyCodingChangeSetDigest(changeSet)
+  const files = reconstructWholeFileDiff(changeSet.unifiedDiff)
+  if (files.length !== changeSet.changes.length) throw new Error('Change display file count mismatch')
+  for (const change of changeSet.changes) {
+    const file = files.find(f => f.path === change.path)
+    if (!file || sha256(file.before) !== change.expectedFileDigest || applyExactReplacements(file.before, change.replacements) !== file.after) throw new Error('Change display does not match approved modifications')
+  }
+  return files
 }
 
 function transactionRoot(worktreePath: string, codingRunId: string, changeSetId: string): string {

@@ -4,6 +4,11 @@ import { codingHarnessSnapshot } from './native-coding-projection.js'
 import { cleanupNativeCodingSession } from './native-coding-retention.js'
 import { loadNativeCodingProfile } from './native-coding-profile.js'
 import { parseCodingHarnessCommand } from '@ai-devflow/shared'
+import { parseSingleId, parseReviseCodingChangeSet, parseChangeReviewStart, parseChangeReviewCancel, parseConfirmTestEvidence } from './build-test-contract.js'
+import { createCodingChangeHistoryReader } from './coding-change-history.js'
+import { getCodingActionCosts } from './coding-action-costs.js'
+import { confirmTestEvidence } from './test-evidence-confirmation.js'
+import { assertDeliveryTestEvidenceCurrent } from './delivery-test-freshness.js'
 import { createNativeRepositoryReviewProvider } from './knowledge-review-native.js'
 import {legacyChatBudget} from './legacy-chat-budget'
 import { createGovernedOpencodeProxy } from './governed-opencode-proxy.js'
@@ -234,7 +239,7 @@ import {
 } from './native-coding-executor-v2.js'
 import { verifyCodingChangeSetDigest } from './coding-change-set.js'
 import { createCodingRuntime } from './coding-runtime.js'
-import { codingPromptDigest, recallScopedMemory } from './coding-context.js'
+import { assertScopedMemoryCurrent, codingPromptDigest, recallScopedMemory } from './coding-context.js'
 import {
   createGitHubDeliveryRuntime,
   type GitHubDeliveryRuntime,
@@ -317,9 +322,9 @@ import { createCodingModelContext } from './coding-model-context'
 import { createHindsightClient, HINDSIGHT_PROTOCOL, normalizeHindsightEndpoint, type HindsightClient } from './hindsight-client'
 import { registerProjectMemoryRecall } from './coding-context'
 import { resolveProjectMemoryScope } from './project-memory-capture'
-import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
+import { emptyKnowledgePages, currentKnowledgePageText, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
 import { captureCommitProjectMemory } from './project-memory-commits'
-import { createProjectMemoryRecall, PROJECT_MEMORY_ESSENTIALS_ID, type ProjectMemoryRecallService } from './project-memory-recall'
+import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './project-memory-recall'
 import { hindsightPairingMatches } from './hindsight-store'
 import {
   activeProjectMemoryConfiguration, backfillConversationProjectMemory, conversationMemoryDocumentId, migrateLegacyProjectMemory, projectMemoryPairingBinding,
@@ -703,19 +708,9 @@ async function projectKnowledgePages(projectId: string): Promise<ProjectKnowledg
   const models = new Map((await client.listMentalModels(configuration.bankId)).map((model) => [model.id, model]))
   return { projectId, pages: PROJECT_KNOWLEDGE_PAGES.map((page) => {
     const model = models.get(knowledgePageModelId(page.id))
-    return { id: page.id, title: page.title, content: redactProjectMemoryText(model?.content ?? '').value, stale: model?.stale ?? false,
+    return { id: page.id, title: page.title, content: redactProjectMemoryText(currentKnowledgePageText(configuration, model)).value, stale: model?.stale ?? false,
       ...(model?.refreshedAt ? { refreshedAt: model.refreshedAt } : {}), ...(model?.failedAt ? { failedAt: model.failedAt } : {}) }
   }), ...(memoryRelay ? {} : { unavailableReason: '记忆模型中继未运行，知识页暂时不会更新。' }) }
-}
-/**
- * Editing or forgetting memory empties the knowledge pages, so they never show what was removed.
- * Marked after the clear: a coding run that read the essentials page before it was emptied sees it
- * as changed and stops at its next check.
- */
-async function emptyKnowledgePages(store: LocalStore, projectId: string, client: HindsightClient, bankId: string): Promise<void> {
-  try { await clearKnowledgePages(client, bankId) }
-  catch { console.warn('[project-memory] Knowledge pages were not emptied; they may show removed memory until refreshed.') }
-  await store.markProjectMemoryChanged(projectId, PROJECT_MEMORY_ESSENTIALS_ID)
 }
 async function listProjectMemories(input: ReturnType<typeof parseListProjectMemoriesInput>): Promise<ProjectMemoryPage> {
   const { store, configuration, client } = await ownedProjectMemory(input.projectId)
@@ -1229,6 +1224,7 @@ async function prepareGitHubDelivery(input: PrepareGitHubDeliveryInput) {
         throw new GitHubRepositoryBindingSyncError()
       }
       const runtime = await getGitHubDeliveryRuntime()
+      await assertDeliveryTestEvidenceCurrent(context.store, input)
       return runtime.prepare(input)
     })
   } finally {
@@ -1906,6 +1902,7 @@ async function createCodingRuntimeForRequest(
     getCodingExecutor(projectId),
   ])
   return createCodingRuntime({
+    autoChangeReview: true,
     store,
     ...(projectId ? { projectId } : {}),
     executor: selected.executor,
@@ -1983,6 +1980,7 @@ async function createCodingRuntimeForRequest(
     scheduleRunTimeout: (codingRun, expire) =>
       scheduleCodingRunTimeout(codingRun.id, expire),
     publisher: {
+      publishChangeHistory: runId => broadcastToRenderers(ipcChannels.codingChangeHistoryUpdated, { runId }),
       publishRunStatus: (run) => {
         broadcastToRenderers(ipcChannels.codingRunStatusUpdated, run)
         wakeRemoteSyncOutbox()
@@ -3175,6 +3173,13 @@ function registerIpcHandlers() {
           ...(testKnowledge ? { knowledgeContext: { retrievedKnowledge: testKnowledge.manifest } } : {}),
           createdAt,
         })
+        if (input.completeOnPass === false && evidence.status === 'passed') {
+          await store.saveTestEvidence(evidence)
+          const state = await store.loadState()
+          broadcastToRenderers(ipcChannels.localStateUpdated, state)
+          wakeRemoteSyncOutbox()
+          return { evidence, state }
+        }
         const artifact = createTestEvidenceArtifact(evidence)
         const event = createTestEvidenceEvent(
           evidence,
@@ -3494,6 +3499,7 @@ function registerIpcHandlers() {
         let executor: ReturnType<typeof createReadOnlyLocalStageAgentExecutor> | undefined
         let closeStageRelay: (() => Promise<void>) | undefined
         let activeStageKnowledge: RetrievedKnowledgeManifest | undefined
+        let verifySentStageMemory: (() => Promise<void>) | undefined
         if (executorKind === 'direct-provider') {
           if (!input.providerId) {
             throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
@@ -3529,7 +3535,10 @@ function registerIpcHandlers() {
             })
           if (!binding) throw new Error('请先保存项目所选 OpenCode Provider。')
           const budgetProxy=await createGovernedOpencodeProxy({binding,projectId:project.id,governance:await modelCallGovernance(store),
-            assertContextCurrent: async () => { if (activeStageKnowledge) await assertRetrievedKnowledgeCurrent(activeStageKnowledge) }})
+            assertContextCurrent: async () => {
+              if (activeStageKnowledge) await assertRetrievedKnowledgeCurrent(activeStageKnowledge)
+              await verifySentStageMemory?.()
+            } })
           closeStageRelay = budgetProxy.close
           const stageExecutor = createReadOnlyLocalStageAgentExecutor({
             projectId: project.id,
@@ -3568,10 +3577,10 @@ function registerIpcHandlers() {
             runtimeId: `agent-runtime-stage-${stageRuntimeKey}`,
             requestId: `stage-memory-${codingPromptDigest(`${stageRuntimeKey}\n${recalledAt}`).slice(0, 32)}`,
             query: [run.request, node.title, node.subtitle].join('\n'), intents: splitRecallIntents(run.request),
-            now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
+            now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET, includeCompactConventions: true,
           }).catch(() => {
             console.warn('[stage-agent] Memory recall failed; generating without recalled Memory.')
-            return { context: [] as Array<{ id: string; revision: number; statement: string }> }
+            return undefined
           })
           generated = await runWorkflowStageAgent({
             run,
@@ -3594,9 +3603,16 @@ function registerIpcHandlers() {
             requestedBy: actor.userId,
             runtime: 'electron',
             signal,
-            ...(stageMemory.context.length ? { memoryContext: stageMemory.context } : {}),
+            ...(stageMemory?.projectMemory ? {
+              memoryContext: stageMemory.context, omittedMemoryCount: stageMemory.omittedMemoryCount,
+              assertMemoryCurrent: async (identities) => {
+                verifySentStageMemory = () => assertScopedMemoryCurrent(store, stageMemory, identities)
+                await verifySentStageMemory()
+              },
+            } : {}),
           })
           signal.throwIfAborted()
+          await verifySentStageMemory?.()
           const usedKnowledge = generated.provenance.knowledgeContext?.retrievedKnowledge
           if (usedKnowledge) await assertRetrievedKnowledgeCurrent(usedKnowledge)
           if (input.designRevision) {
@@ -3712,6 +3728,7 @@ function registerIpcHandlers() {
       expectedRevision: input.revision,
       expectedRevisionDigest: input.revisionDigest,
       now: new Date().toISOString(),
+      ...(input.proposals ? { proposals: input.proposals } : {}),
     })
     const committed = await store.commitWorkflowMutation({
       expectedRun: run,
@@ -4407,6 +4424,48 @@ function registerIpcHandlers() {
     const input = parseListCodingAgentRunsInput(payload)
     const runtime = await createCodingRuntimeForRequest()
     return runtime.listCodingAgentRuns(input)
+  })
+
+  const changeHistoryReaders = new WeakMap<LocalStore, ReturnType<typeof createCodingChangeHistoryReader>>()
+  ipcMain.handle(ipcChannels.getCodingChangeHistory, async (_, payload: unknown) => {
+    const store = await getStore()
+    let reader = changeHistoryReaders.get(store)
+    if (!reader) { reader = createCodingChangeHistoryReader(store); changeHistoryReaders.set(store, reader) }
+    return reader(parseSingleId(payload, 'runId'))
+  })
+  async function trustedChangeRuntime(codingRunId: string) {
+    const store = await getStore()
+    const run = (await store.listCodingAgentRuns()).find(r => r.id === codingRunId)
+    if (!run) throw new Error('[coding_run_unavailable] 找不到这次开发。')
+    const actor = resolveTrustedCodingPermissionReply({ input: { requestId: 'change', codingRunId, decidedBy: '', decision: 'approved', comment: '' }, projectId: run.projectId, pairing: await store.getDesktopPairingCredential() })
+    return { runtime: await createCodingRuntimeForRequest(undefined, run.projectId), actor: actor.decidedBy }
+  }
+  ipcMain.handle(ipcChannels.reviseCodingChangeSet, async (_, payload: unknown) => {
+    const input = parseReviseCodingChangeSet(payload), { runtime, actor } = await trustedChangeRuntime(input.codingRunId)
+    return runtime.reviseCodingChangeSet({ ...input, requestedBy: actor })
+  })
+  ipcMain.handle(ipcChannels.cancelCodingRevision, async (_, payload: unknown) => {
+    const input = parseSingleId(payload, 'codingRunId'), { runtime } = await trustedChangeRuntime(input.codingRunId)
+    return { codingRun: await runtime.cancelCodingRevision(input) }
+  })
+  ipcMain.handle(ipcChannels.startCodingChangeReview, async (_, payload: unknown) => {
+    const input = parseChangeReviewStart(payload), { runtime } = await trustedChangeRuntime(input.codingRunId)
+    return { review: await runtime.startCodingChangeReview(input) }
+  })
+  ipcMain.handle(ipcChannels.cancelCodingChangeReview, async (_, payload: unknown) => {
+    const input = parseChangeReviewCancel(payload), { runtime } = await trustedChangeRuntime(input.codingRunId)
+    return { review: await runtime.cancelCodingChangeReview(input) }
+  })
+  ipcMain.handle(ipcChannels.getCodingActionCosts, async (_, payload: unknown) => {
+    const { projectId } = parseSingleId(payload, 'projectId')
+    const { executor } = await resolveCodingExecutorForProject(projectId)
+    return getCodingActionCosts({ projectId, store: await getStore(), executor, guard: createRuntimeBudgetGuard(await getProjectBoundRemoteSync(), true) })
+  })
+  ipcMain.handle(ipcChannels.confirmTestEvidence, async (_, payload: unknown) => {
+    const result = await confirmTestEvidence(parseConfirmTestEvidence(payload), { store: await getStore(), coordinator: workspaceOperationCoordinator })
+    broadcastToRenderers(ipcChannels.localStateUpdated, result.state)
+    wakeRemoteSyncOutbox()
+    return result
   })
 
   ipcMain.handle(ipcChannels.runCodingAgent, async (_, payload: unknown) => {

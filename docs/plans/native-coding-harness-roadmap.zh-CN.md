@@ -113,6 +113,7 @@ Native Coding v3 是 DevFlow 自己写的编码 Agent harness，没有使用 Ope
 | 条目 | 标题 | PR | 状态 |
 | --- | --- | --- | --- |
 | 1 | 合入 main | [#285](https://github.com/erich04/ai-devflow-studio/pull/285) | 已合入 v3 |
+| 1（第二次同步） | 合并 2026-11-06 的主干，兼容主干和 V3 两种数据库版本 42 | [#309](https://github.com/erich04/ai-devflow-studio/pull/309) | 合并版本 43，两个来源的数据库均已验证升级 |
 | 2 | 自动重试 | [#288](https://github.com/erich04/ai-devflow-studio/pull/288) | 已合入 v3 |
 | 3 | 只读工具并行 | [#292](https://github.com/erich04/ai-devflow-studio/pull/292) | 已合入 v3 |
 | 4 | 读文件提速 | [#287](https://github.com/erich04/ai-devflow-studio/pull/287) | 已合入 v3 |
