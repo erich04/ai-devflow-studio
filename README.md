@@ -156,34 +156,9 @@ DevFlow 是采用 TypeScript/pnpm 的单一仓库，围绕**本地执行、团�
 
 ### 系统与进程边界
 
-```mermaid
-flowchart TB
-    subgraph Local["开发者电脑"]
-        UI["Electron 渲染进程<br/>React + Vite 工作台"]
-        Main["Electron 主进程<br/>流程、执行与同步"]
-        SQLite[("SQLite / LocalStore<br/>本地状态与证据")]
-        Git["仓库与 Git 工作树<br/>代码、Markdown、差异、测试"]
-        UI -- "类型化 preload / IPC" --> Main
-        Main <--> SQLite
-        Main <--> Git
-    end
-    subgraph Team["团队服务"]
-        Web["Next.js Web 控制台<br/>请求、评审、策略、预算"]
-        API["Node.js Team API<br/>身份认证、协作、交付"]
-        Postgres[("PostgreSQL<br/>团队记录与摘要")]
-        Web -- "签名会话 / HTTP" --> API
-        API <--> Postgres
-    end
-    Models["已配置的模型提供方"]
-    GitHub["GitHub<br/>获准分支与草稿拉取请求"]
-    Main <-- "限定范围的 HTTP<br/>同步、领取、命令轮询" --> API
-    Main -- "选定的任务上下文" --> Models
-    API -- "服务端门禁审查" --> Models
-    Main -- "推送获准的精确提交" --> GitHub
-    API -- "核验远端分支头 / 创建草稿 PR" --> GitHub
-```
+![AI DevFlow Studio 系统与进程边界：开发者本机 Electron 客户端、团队自托管服务、本机 Hindsight 项目记忆、模型提供方、GitHub 最小权限交付与共享领域核心的实时进程通信与信任边界](docs/guides/diagrams/system-process-boundaries.svg)
 
-箭头表示运行时通信或本地访问。API 到桌面端的方向表示响应与轮询取得的命令。Desktop、Web、API 和 Worker 都导入 `@ai-devflow/shared`；它是代码库，无需作为服务部署。
+_动态箭头与脉冲光点表示运行时进程通信方向与本地/跨边界访问。API 到桌面端的方向表示响应、策略/预算决策与轮询取得的命令；本机 Hindsight 为可选模块，不持有模型密钥，其抽取与知识页整理调用经桌面中继（`:8891`）计入团队预算。Desktop、Web、API 和 Worker 编译时共同导入 `@ai-devflow/shared`；它是代码库，无需作为独立服务部署。_
 
 | 层次 | 职责 | 代码 |
 | --- | --- | --- |
