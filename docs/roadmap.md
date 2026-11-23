@@ -12,6 +12,8 @@
 
 逐项范围见 [Memory 收尾计划](plans/memory-p0-p2-completion.md)，本地实际结果见 [本地候选验收](validation/memory-p0-p2-20261004.md)，CI 与合并状态见对应 PR。代码合并不自动更新已发布安装包；发布覆盖仍以本文的当前发布记录与版本证据为准。历史真实模型报告不覆盖本次变更，不声称复杂任务完成率或缓存收益已改善。
 
+后续记忆架构按 [ADR 0030](adr/0030-hindsight-project-memory.md) 演进为由 Hindsight 统一自动学习的**项目记忆**（经 [PR #255](https://github.com/erich04/ai-devflow-studio/pull/255)、#262–#270、#272–#274、#280–#283 及收尾 [PR #308](https://github.com/erich04/ai-devflow-studio/pull/308) 合入 `main`），取代早期本地候选与业务规则待确认链路，并新增预算中继、多语言召回、多意图拆分、五张知识页与「每个任务都适用的约定」常驻注入；收尾验证见[项目记忆收尾验证](validation/project-memory-closeout-20261104.md)。
+
 <a id="documentation-map"></a>
 
 ## 文档职责图
@@ -88,7 +90,7 @@ DevFlow Studio 是**小团队自行托管的 AI 开发流程工作台**。外层
 | V1.5 产品契约 | `docs/product/prd/v1.5-github-delivery-prd.md` |
 | V1.5 执行历史 | `docs/plans/v1.5-github-delivery.md` 及四份不可变发布证据 |
 | 已完成版本线 | 1.x 受治理自托管交付 |
-| 发布后的修复 | #171–#177 的修复经 #178 合入；工作区改造 S0–S6 经 #183–#190 合入；均未形成新发布 |
+| 发布后的修复 | #171–#177 的修复经 #178 合入；工作区改造 S0–S6 经 #183–#190 合入；后续主干继续合入 Memory P0–P2（#222/#223）、原生对话（#236）、OpenCode 问答/有界子任务/公开文档（#241/#243/#244/#254）、Hindsight 项目记忆（#255、#262–#274、#280–#283、#308）、模型设置与定价治理（#227/#261/#290）及 UX 第 1 批/第 2a 批决定页（#279/#296）；均未形成新发布 |
 | 已完成 2.x 里程碑 | V2.0 原生 Agent 运行时基础；V2.1 经评估检索与记忆；V2.2 多 Agent 与执行租户隔离 |
 | 完成证据 | `docs/releases/v2.0.0/`；`docs/releases/v2.1.0/`；`docs/releases/v2.2.0/` |
 | 当前 2.x 状态 | V2.3 已发布；后续修复逐项验证 |
@@ -147,7 +149,15 @@ V2.0、V2.1 和 V2.2 均已完成，有限的已接受 2.x 线已结束。候选
 
 这些是里程碑完成证据；另行发布的 `v2.2.0` 使用 `docs/releases/v2.2.0/release-*` 及 `docs/plans/v2.2-release-signoff.md`，不重写任何记录。
 
-V2.3 已按 `docs/plans/v2.3-release-signoff.md` 和 `docs/guides/devflow-studio-v2.3-walkthrough.md` 完成独立发布，证据不重写。当前优先级是逐项修复并验证已报告的工作台布局、节点内容层级、会话用量、长时运行及中文文档问题，以真实仓库完整流程补齐证据，再关闭实质解决的 Issue。上述修复已经 #178 合入；随后按[任务中心化工作区改造方案](plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md)完成 S0–S6（#183–#190），各批次记录见 `docs/validation/workspace-redesign-s*-20260928.md`。#135 正式 Developer ID 签名安装验证按负责人决定保留待验证。此维护工作不新增多 Agent/公共 SaaS 范围，也不自动形成新发布。
+V2.3 已按 `docs/plans/v2.3-release-signoff.md` 和 `docs/guides/devflow-studio-v2.3-walkthrough.md` 完成独立发布，证据不重写。当前优先级是逐项修复并验证已报告的工作台布局、节点内容层级、会话用量、长时运行及中文文档问题，以真实仓库完整流程补齐证据，再关闭实质解决的 Issue。上述修复已经 #178 合入；随后按[任务中心化工作区改造方案](plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md)完成 S0–S6（#183–#190），各批次记录见 `docs/validation/workspace-redesign-s*-20260928.md`。
+
+截至 2026-11-05（`main` 至 #308），主干已完成并合入以下增量能力（均需从源码构建，未形成新发布安装包）：
+- **工作台决定页（UX 第 1 批 #279、第 2a 批 #296）**：01–04 阶段（需求澄清、方案设计、开发实现、测试证据）统一为顶部「你的决定」栏 + 原文/精确行级差异 + 卡片 + 版本化本机修订清单，右侧面板更名为「答疑」并与决定页联动；本地库升级至桌面 schema 42，支持不可覆盖改动修订、手动自检与显式测试证据确认。05/06 阶段的 UX 第 2b 批尚未合入。
+- **Hindsight 项目记忆（ADR 0030，#255、#262–#274、#280–#283、#308）**：六期全量合入并完成收尾验证，由本机中继计入团队预算，取代旧版候选队列和本地 BM25 召回。
+- **OpenCode 编码与交付加固（#241、#243、#244、#254、#256、#257）**：落地命令输入绑定授权、交互式问答协议、单层串行有界子任务（`devflow-worker`）、受控公开文档工具（`devflow_document`）及不依赖 OpenCode 的内置只读审查；完成 B 工作包真实 GitHub Draft PR 与重启复验（`docs/validation/devflow-b-delivery-20261024.md`）。
+- **设置、定价与启动体验（#227/#261、#253、#290）**：精简「模型与执行方式」设置页、独立核验 `deepseek-v4-pro` 定价与调用上限、完善专用本地 Postgres 角色与按需下载 Electron 二进制流程。
+
+仍在进行、尚未合入 `main` 的独立分支工作：多轮 Native Coding Harness v3（[PR #238](https://github.com/erich04/ai-devflow-studio/pull/238)，分支 `codex/native-coding-harness-v3`）仍在持续评测与收尾中；#135 正式 Developer ID 签名安装验证按负责人决定保留待验证。此维护工作不新增公共 SaaS 范围，也不自动形成新发布。
 
 V2.2 契约集已冻结于：
 
@@ -617,6 +627,7 @@ V2.2 只有在所选任务可衡量地优于单 Agent，同时不违反费用、
 - v0.4 引入 Git/Markdown 治理、片段、词法检索、引用及“检索命中不等于治理证据”的规则。
 - v1.4 将有界真实仓库 Markdown 接入本地 Gate、Review、Coding，不隐式上传原文。
 - v2.1 已增加经评估混合检索和 Agent 记忆，同时保留知识来源、权限、脱敏及删除语义。
+- V2.3 后的主干演进通过 [ADR 0025](adr/0025-resident-knowledge-context.md) 将仓库 `AGENTS.md` 与 `docs/knowledge/` 规范转为按阶段常驻的确定性上下文，并通过 [ADR 0030](adr/0030-hindsight-project-memory.md) 将项目记忆统一到受预算中继治理的本机 Hindsight 自动学习与知识页；两者均不替代证据或审批。
 
 Git 中 Markdown 仍是团队标准和可复用知识的可审查事实来源，DevFlow 索引并引用，不静默替换。Agent 和人工 Gate 可将检索知识用作上下文，但是否满足标准仍由证据与策略决定。
 

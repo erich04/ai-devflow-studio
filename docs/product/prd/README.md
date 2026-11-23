@@ -16,6 +16,9 @@
 - [当前产品 PRD](./current-product-prd.md)：自行部署的 AI 开发流程工作台产品基线。
 - [V1.4 试用信任边界](./v1.4-pilot-trust-boundary-prd.md)：付费运行时信任、持久化同步、仓库知识、Web 管理和试用生命周期的限定范围契约。
 - [V1.5 GitHub 交付](./v1.5-github-delivery-prd.md)：已实现的 1.x 最终功能契约，定义明确授权、限定仓库范围且可恢复的分支与草稿拉取请求交付；文档原有生命周期标记为“发布/验收待完成”，具体发布状态以路线图和发布记录为准。
+- [V2.0 原生 Agent 运行时](./v2.0-native-agent-runtime-prd.md)：有界自有 Agent 循环、原生工具/可信本地 MCP 与受治理编码执行器契约（已完成，证据见 `docs/releases/v2.0.0/`）。
+- [V2.1 经评估检索与记忆](./v2.1-evaluated-retrieval-memory-prd.md)：确定性混合检索评估、引用忠实度与限定范围记忆生命周期契约（已完成，证据见 `docs/releases/v2.1.0/`；后续项目记忆演进见 [ADR 0030](../../adr/0030-hindsight-project-memory.md)）。
+- [V2.2 多 Agent 与执行租户隔离](./v2.2-multi-agent-execution-tenancy-prd.md)：监督/专职 Agent 有界 DAG 协作、能力收窄、共享预算与租户隔离契约（已完成，证据见 `docs/releases/v2.2.0/`）。
 
 <a id="naming"></a>
 

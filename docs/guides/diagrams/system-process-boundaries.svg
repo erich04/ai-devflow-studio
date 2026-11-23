@@ -1,0 +1,702 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 792" width="1360" height="792" role="img" aria-labelledby="diagram-title diagram-desc">
+  <title id="diagram-title">AI DevFlow Studio 系统与进程边界</title>
+  <desc id="diagram-desc">展示开发者本机 Electron 客户端、团队自托管服务、本机 Hindsight 项目记忆、模型提供方、GitHub 最小权限交付以及共享领域核心之间的实时进程通信与信任边界。</desc>
+
+  <defs>
+    <!-- Canvas & Zone Gradients -->
+    <linearGradient id="canvasBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="55%" stop-color="#FAFBFD"/>
+      <stop offset="100%" stop-color="#F3F6FB"/>
+    </linearGradient>
+
+    <linearGradient id="localZoneBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F5F7FF"/>
+      <stop offset="100%" stop-color="#EEF2FF" stop-opacity="0.52"/>
+    </linearGradient>
+
+    <linearGradient id="teamZoneBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F0FDF8"/>
+      <stop offset="100%" stop-color="#ECFDF5" stop-opacity="0.52"/>
+    </linearGradient>
+
+    <linearGradient id="hubIndigoBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </linearGradient>
+
+    <linearGradient id="hubEmeraldBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#14B8A6"/>
+    </linearGradient>
+
+    <linearGradient id="bridgeGradLR" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="50%" stop-color="#0EA5E9"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+
+    <linearGradient id="bridgeGradRL" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="50%" stop-color="#0EA5E9"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </linearGradient>
+
+    <linearGradient id="sharedBarBg" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="50%" stop-color="#F1F5F9"/>
+      <stop offset="100%" stop-color="#F8FAFC"/>
+    </linearGradient>
+
+    <!-- Subtle Dot Matrix Pattern -->
+    <pattern id="dotGrid" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#CBD5E1" opacity="0.42"/>
+    </pattern>
+
+    <!-- Crisp Soft Card Shadows -->
+    <filter id="cardShadow" x="-12%" y="-14%" width="124%" height="136%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0F172A" flood-opacity="0.055"/>
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#0F172A" flood-opacity="0.035"/>
+    </filter>
+
+    <filter id="hubShadowIndigo" x="-14%" y="-18%" width="128%" height="148%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#4F46E5" flood-opacity="0.14"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0F172A" flood-opacity="0.05"/>
+    </filter>
+
+    <filter id="hubShadowEmerald" x="-14%" y="-18%" width="128%" height="148%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#059669" flood-opacity="0.14"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0F172A" flood-opacity="0.05"/>
+    </filter>
+
+    <filter id="pillShadow" x="-18%" y="-30%" width="136%" height="180%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0F172A" flood-opacity="0.055"/>
+    </filter>
+
+    <!-- Soft Glow for Animated Packets -->
+    <filter id="packetGlow" x="-140%" y="-140%" width="380%" height="380%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Crisp Arrow Markers -->
+    <marker id="arrowIndigo" viewBox="0 0 10 10" refX="7.5" refY="5" markerWidth="5.2" markerHeight="5.2" orient="auto-start-reverse">
+      <path d="M 1.5 2 L 8 5 L 1.5 8 z" fill="#4F46E5"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="7.5" refY="5" markerWidth="5.2" markerHeight="5.2" orient="auto-start-reverse">
+      <path d="M 1.5 2 L 8 5 L 1.5 8 z" fill="#2563EB"/>
+    </marker>
+    <marker id="arrowEmerald" viewBox="0 0 10 10" refX="7.5" refY="5" markerWidth="5.2" markerHeight="5.2" orient="auto-start-reverse">
+      <path d="M 1.5 2 L 8 5 L 1.5 8 z" fill="#059669"/>
+    </marker>
+    <marker id="arrowViolet" viewBox="0 0 10 10" refX="7.5" refY="5" markerWidth="5.2" markerHeight="5.2" orient="auto-start-reverse">
+      <path d="M 1.5 2 L 8 5 L 1.5 8 z" fill="#7C3AED"/>
+    </marker>
+    <marker id="arrowSlate" viewBox="0 0 10 10" refX="7.5" refY="5" markerWidth="5.2" markerHeight="5.2" orient="auto-start-reverse">
+      <path d="M 1.5 2 L 8 5 L 1.5 8 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="7.5" refY="5" markerWidth="5.2" markerHeight="5.2" orient="auto-start-reverse">
+      <path d="M 1.5 2 L 8 5 L 1.5 8 z" fill="#D97706"/>
+    </marker>
+
+    <!-- Motion & Visible Paths -->
+    <!-- Local internal links -->
+    <path id="p-ui-main" d="M 248 209 L 248 255"/>
+    <path id="p-main-ui" d="M 248 255 L 248 209"/>
+
+    <!-- Single clean local trunk + distinct non-overlapping spurs -->
+    <path id="v-local-trunk" d="M 248 359 L 248 604"/>
+    <path id="v-spur-sqlite" d="M 248 450 L 225 450"/>
+    <path id="v-spur-git" d="M 248 450 L 271 450"/>
+    <path id="v-spur-opencode" d="M 248 604 L 225 604"/>
+    <path id="v-spur-hindsight" d="M 255 604 L 271 604"/>
+
+    <!-- Full packet motion paths along local trunk -->
+    <path id="m-main-sqlite" d="M 248 359 L 248 442 Q 248 450 240 450 L 224 450"/>
+    <path id="m-sqlite-main" d="M 224 450 L 240 450 Q 248 450 248 442 L 248 359"/>
+    <path id="m-main-git" d="M 248 359 L 248 442 Q 248 450 256 450 L 272 450"/>
+    <path id="m-main-opencode" d="M 248 359 L 248 596 Q 248 604 240 604 L 224 604"/>
+    <path id="m-main-hindsight" d="M 248 359 L 248 596 Q 248 604 256 604 L 272 604"/>
+    <path id="m-hindsight-relay" d="M 272 604 L 256 604 Q 248 604 248 596 L 248 359"/>
+
+    <!-- Team internal links -->
+    <path id="p-web-api" d="M 1112 209 L 1112 255"/>
+    <path id="p-api-web" d="M 1112 255 L 1112 209"/>
+    <path id="p-api-pg" d="M 1112 361 L 1112 431"/>
+    <path id="p-pg-api" d="M 1112 431 L 1112 361"/>
+    <path id="p-pg-worker" d="M 1112 537 L 1112 572"/>
+
+    <!-- Cross-boundary Main <-> Team API (flush arrowheads outside hub borders) -->
+    <path id="p-main-api" d="M 450 286 L 911 286"/>
+    <path id="p-api-main" d="M 911 318 L 451 318"/>
+
+    <!-- Cross-boundary to External Model Providers -->
+    <path id="p-main-models" d="M 450 334 L 522 334 Q 536 334 536 348 L 536 374 Q 536 388 550 388 L 620 388 Q 632 388 632 400 L 632 419"/>
+    <path id="p-api-models" d="M 911 334 L 838 334 Q 824 334 824 348 L 824 374 Q 824 388 810 388 L 740 388 Q 728 388 728 400 L 728 419"/>
+
+    <!-- Cross-boundary to External GitHub (centered symmetrically in 468..564 and 796..892 corridors) -->
+    <path id="p-main-github" d="M 450 346 L 502 346 Q 516 346 516 360 L 516 608 Q 516 622 530 622 L 561 622"/>
+    <path id="p-api-github" d="M 911 346 L 858 346 Q 844 346 844 360 L 844 608 Q 844 622 830 622 L 799 622"/>
+  </defs>
+
+  <style>
+    text {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter", system-ui, sans-serif;
+    }
+    .mono {
+      font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+    }
+    .flow-line {
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 6 10;
+      animation: dashFlow 1.6s linear infinite;
+    }
+    .flow-line-slow {
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 5 11;
+      animation: dashFlow 2.3s linear infinite;
+    }
+    .flow-line-subtle {
+      fill: none;
+      stroke-width: 1.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 4 8;
+      animation: dashFlow 2.8s linear infinite;
+    }
+    .track-base {
+      fill: none;
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: 0.22;
+    }
+    .pulse-ring {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: pulseOut 2.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+    }
+    .pulse-ring-delay {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: pulseOut 2.6s cubic-bezier(0.22, 1, 0.36, 1) 1.1s infinite;
+    }
+    .breathe {
+      animation: breatheOpacity 3s ease-in-out infinite;
+    }
+
+    @keyframes dashFlow {
+      from { stroke-dashoffset: 32; }
+      to { stroke-dashoffset: 0; }
+    }
+    @keyframes pulseOut {
+      0% { transform: scale(0.9); opacity: 0.72; }
+      70% { transform: scale(2.4); opacity: 0; }
+      100% { transform: scale(2.4); opacity: 0; }
+    }
+    @keyframes breatheOpacity {
+      0%, 100% { opacity: 0.55; }
+      50% { opacity: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .flow-line, .flow-line-slow, .flow-line-subtle, .pulse-ring, .pulse-ring-delay, .breathe {
+        animation: none;
+      }
+    }
+  </style>
+
+  <!-- Outer Rounded Canvas -->
+  <rect x="4" y="4" width="1352" height="784" rx="22" fill="url(#canvasBg)" stroke="#E2E8F0" stroke-width="1.5"/>
+  <rect x="4" y="4" width="1352" height="784" rx="22" fill="url(#dotGrid)"/>
+
+  <!-- Header Bar -->
+  <g>
+    <rect x="28" y="20" width="34" height="34" rx="10" fill="#EEF2FF" stroke="#C7D2FE" stroke-width="1"/>
+    <path d="M 38 37 L 43 32 L 48 37 L 53 32" fill="none" stroke="#4F46E5" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="38" cy="37" r="2.2" fill="#4F46E5"/>
+    <circle cx="48" cy="37" r="2.2" fill="#0EA5E9"/>
+    <circle cx="53" cy="32" r="2.2" fill="#059669"/>
+
+    <text x="74" y="34" font-size="18" font-weight="700" fill="#0F172A" letter-spacing="-0.2">AI DevFlow Studio · 系统与进程边界</text>
+    <text x="74" y="52" font-size="10.5" font-weight="600" fill="#64748B" letter-spacing="0.9" class="mono">LOCAL-FIRST EXECUTION · SELF-HOSTED TEAM GOVERNANCE · MINIMAL-PRIVILEGE DELIVERY</text>
+
+    <!-- Live Status Badge -->
+    <rect x="1084" y="22" width="248" height="30" rx="15" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1" filter="url(#pillShadow)"/>
+    <circle cx="1103" cy="37" r="4" fill="#10B981" class="pulse-ring"/>
+    <circle cx="1103" cy="37" r="3.5" fill="#10B981"/>
+    <text x="1116" y="41" font-size="11.5" font-weight="600" fill="#334155">实时进程通信与信任边界拓扑</text>
+  </g>
+
+  <line x1="28" y1="68" x2="1332" y2="68" stroke="#E2E8F0" stroke-width="1"/>
+
+  <!-- ==================== ZONE 1: LOCAL MACHINE (LEFT) ==================== -->
+  <g id="zone-local">
+    <rect x="24" y="84" width="444" height="606" rx="20" fill="url(#localZoneBg)" stroke="#C7D2FE" stroke-width="1.25"/>
+    <rect x="44" y="99" width="8" height="8" rx="4" fill="#4F46E5"/>
+    <text x="60" y="107" font-size="12.5" font-weight="700" fill="#1E1B4B">开发者本机</text>
+    <text x="132" y="107" font-size="11" font-weight="500" fill="#6366F1">本地执行与状态权威</text>
+    <rect x="358" y="93" width="90" height="20" rx="10" fill="#EEF2FF" stroke="#C7D2FE" stroke-width="0.9"/>
+    <text x="403" y="106.5" text-anchor="middle" font-size="10" font-weight="600" fill="#4338CA" class="mono">Electron App</text>
+  </g>
+
+  <!-- ==================== ZONE 2: TEAM SERVICES (RIGHT) ==================== -->
+  <g id="zone-team">
+    <rect x="892" y="84" width="444" height="606" rx="20" fill="url(#teamZoneBg)" stroke="#A7F3D0" stroke-width="1.25"/>
+    <rect x="912" y="99" width="8" height="8" rx="4" fill="#059669"/>
+    <text x="928" y="107" font-size="12.5" font-weight="700" fill="#064E3B">团队服务</text>
+    <text x="988" y="107" font-size="11" font-weight="500" fill="#059669">自托管治理与协作面</text>
+    <rect x="1210" y="93" width="106" height="20" rx="10" fill="#ECFDF5" stroke="#A7F3D0" stroke-width="0.9"/>
+    <text x="1263" y="106.5" text-anchor="middle" font-size="10" font-weight="600" fill="#047857" class="mono">Docker Compose</text>
+  </g>
+
+  <!-- ==================== CENTER TOP: BOUNDARY LABEL & LIVE LEGEND CARD ==================== -->
+  <g id="zone-center-top">
+    <rect x="572" y="88" width="216" height="24" rx="12" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
+    <text x="680" y="103.5" text-anchor="middle" font-size="10.8" font-weight="600" fill="#475569">跨边界通信与受控外部服务</text>
+
+    <!-- Sleek Legend Card symmetrically aligned with top cards (y: 126..206) -->
+    <g filter="url(#cardShadow)">
+      <rect x="536" y="126" width="288" height="80" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.15"/>
+      <text x="554" y="146" font-size="10.5" font-weight="700" fill="#64748B" letter-spacing="0.4">链路图例 · SIGNAL LEGEND</text>
+
+      <!-- Row 1 -->
+      <line x1="554" y1="164" x2="582" y2="164" class="flow-line" stroke="#4F46E5"/>
+      <circle cx="568" cy="164" r="2.8" fill="#4F46E5"/>
+      <text x="590" y="167.5" font-size="10.8" fill="#334155">本地进程 / IPC</text>
+
+      <line x1="686" y1="164" x2="714" y2="164" class="flow-line" stroke="#059669"/>
+      <circle cx="700" cy="164" r="2.8" fill="#059669"/>
+      <text x="722" y="167.5" font-size="10.8" fill="#334155">团队服务链路</text>
+
+      <!-- Row 2 -->
+      <line x1="554" y1="186" x2="582" y2="186" class="flow-line" stroke="#7C3AED"/>
+      <circle cx="568" cy="186" r="2.8" fill="#7C3AED"/>
+      <text x="590" y="189.5" font-size="10.8" fill="#334155">受预算模型调用</text>
+
+      <rect x="686" y="179" width="28" height="13" rx="4" fill="#FFFBEB" stroke="#F59E0B" stroke-width="1.1" stroke-dasharray="3 2"/>
+      <text x="722" y="189.5" font-size="10.8" fill="#334155">可选 / 按需模块</text>
+    </g>
+
+    <!-- Subtle guide connecting top legend down to sync bridge -->
+    <line x1="680" y1="206" x2="680" y2="266" stroke="#CBD5E1" stroke-width="1.1" stroke-dasharray="3 5" opacity="0.65"/>
+  </g>
+
+  <!-- ==================== ALL CONNECTION TRACKS & ANIMATED STREAMS ==================== -->
+  <g id="connections">
+    <!-- 1. Local: UI <-> Main -->
+    <use href="#p-ui-main" class="track-base" stroke="#4F46E5"/>
+    <use href="#p-ui-main" class="flow-line" stroke="#4F46E5" marker-end="url(#arrowIndigo)" marker-start="url(#arrowIndigo)"/>
+
+    <!-- 2. Local: Clean Single Trunk + Individual Colored Spurs -->
+    <use href="#v-local-trunk" class="track-base" stroke="#4F46E5"/>
+    <use href="#v-local-trunk" class="flow-line-slow" stroke="#6366F1"/>
+
+    <use href="#v-spur-sqlite" class="track-base" stroke="#4F46E5"/>
+    <use href="#v-spur-sqlite" class="flow-line-slow" stroke="#4F46E5" marker-end="url(#arrowIndigo)"/>
+
+    <use href="#v-spur-git" class="track-base" stroke="#2563EB"/>
+    <use href="#v-spur-git" class="flow-line-slow" stroke="#2563EB" marker-end="url(#arrowBlue)"/>
+
+    <use href="#v-spur-opencode" class="track-base" stroke="#6366F1"/>
+    <use href="#v-spur-opencode" class="flow-line-slow" stroke="#6366F1" marker-end="url(#arrowIndigo)"/>
+
+    <use href="#v-spur-hindsight" class="track-base" stroke="#D97706"/>
+    <use href="#v-spur-hindsight" class="flow-line-slow" stroke="#D97706" marker-end="url(#arrowAmber)" marker-start="url(#arrowAmber)"/>
+
+    <!-- Crisp Trunk Junction Nodes -->
+    <circle cx="248" cy="450" r="4" fill="#FFFFFF" stroke="#4F46E5" stroke-width="1.8"/>
+    <circle cx="248" cy="604" r="4" fill="#FFFFFF" stroke="#6366F1" stroke-width="1.8"/>
+
+    <!-- 3. Team: Web <-> API <-> Postgres -> Worker -->
+    <use href="#p-web-api" class="track-base" stroke="#059669"/>
+    <use href="#p-web-api" class="flow-line" stroke="#059669" marker-end="url(#arrowEmerald)" marker-start="url(#arrowEmerald)"/>
+
+    <use href="#p-api-pg" class="track-base" stroke="#059669"/>
+    <use href="#p-api-pg" class="flow-line-slow" stroke="#059669" marker-end="url(#arrowEmerald)" marker-start="url(#arrowEmerald)"/>
+
+    <use href="#p-pg-worker" class="track-base" stroke="#64748B"/>
+    <use href="#p-pg-worker" class="flow-line-subtle" stroke="#64748B"/>
+
+    <!-- 4. Primary Cross-Boundary Bridge: Main <-> Team API -->
+    <use href="#p-main-api" class="track-base" stroke="#0284C7"/>
+    <use href="#p-main-api" class="flow-line" stroke="url(#bridgeGradLR)" marker-end="url(#arrowEmerald)"/>
+
+    <use href="#p-api-main" class="track-base" stroke="#0284C7"/>
+    <use href="#p-api-main" class="flow-line" stroke="url(#bridgeGradRL)" marker-end="url(#arrowIndigo)"/>
+
+    <!-- 5. Cross-Boundary to Model Providers -->
+    <use href="#p-main-models" class="track-base" stroke="#7C3AED"/>
+    <use href="#p-main-models" class="flow-line" stroke="#7C3AED" marker-end="url(#arrowViolet)"/>
+
+    <use href="#p-api-models" class="track-base" stroke="#7C3AED"/>
+    <use href="#p-api-models" class="flow-line-slow" stroke="#7C3AED" marker-end="url(#arrowViolet)"/>
+
+    <!-- 6. Cross-Boundary to GitHub -->
+    <use href="#p-main-github" class="track-base" stroke="#334155"/>
+    <use href="#p-main-github" class="flow-line" stroke="#334155" marker-end="url(#arrowSlate)"/>
+
+    <use href="#p-api-github" class="track-base" stroke="#0F766E"/>
+    <use href="#p-api-github" class="flow-line-slow" stroke="#0F766E" marker-end="url(#arrowEmerald)"/>
+  </g>
+
+  <!-- ==================== ANIMATED LUMINOUS DATA PACKETS ==================== -->
+  <g id="packets" filter="url(#packetGlow)">
+    <!-- UI <-> Main -->
+    <circle r="3.4" fill="#4F46E5">
+      <animateMotion dur="2.1s" repeatCount="indefinite"><mpath href="#p-ui-main"/></animateMotion>
+    </circle>
+    <circle r="3" fill="#38BDF8">
+      <animateMotion dur="2.1s" begin="1.05s" repeatCount="indefinite"><mpath href="#p-main-ui"/></animateMotion>
+    </circle>
+
+    <!-- Main <-> Local substrates -->
+    <circle r="3.2" fill="#4F46E5">
+      <animateMotion dur="2.8s" repeatCount="indefinite"><mpath href="#m-main-sqlite"/></animateMotion>
+    </circle>
+    <circle r="2.8" fill="#818CF8">
+      <animateMotion dur="3.1s" begin="1.2s" repeatCount="indefinite"><mpath href="#m-sqlite-main"/></animateMotion>
+    </circle>
+    <circle r="3.2" fill="#2563EB">
+      <animateMotion dur="2.9s" begin="0.4s" repeatCount="indefinite"><mpath href="#m-main-git"/></animateMotion>
+    </circle>
+    <circle r="3.1" fill="#6366F1">
+      <animateMotion dur="3.4s" begin="0.7s" repeatCount="indefinite"><mpath href="#m-main-opencode"/></animateMotion>
+    </circle>
+    <circle r="3.2" fill="#D97706">
+      <animateMotion dur="3.5s" begin="0.2s" repeatCount="indefinite"><mpath href="#m-main-hindsight"/></animateMotion>
+    </circle>
+    <circle r="3.0" fill="#F59E0B">
+      <animateMotion dur="3.5s" begin="1.95s" repeatCount="indefinite"><mpath href="#m-hindsight-relay"/></animateMotion>
+    </circle>
+
+    <!-- Team Web <-> API <-> Postgres -->
+    <circle r="3.4" fill="#059669">
+      <animateMotion dur="2.2s" repeatCount="indefinite"><mpath href="#p-web-api"/></animateMotion>
+    </circle>
+    <circle r="3" fill="#2DD4BF">
+      <animateMotion dur="2.2s" begin="1.1s" repeatCount="indefinite"><mpath href="#p-api-web"/></animateMotion>
+    </circle>
+    <circle r="3.2" fill="#059669">
+      <animateMotion dur="2.5s" begin="0.3s" repeatCount="indefinite"><mpath href="#p-api-pg"/></animateMotion>
+    </circle>
+    <circle r="2.9" fill="#34D399">
+      <animateMotion dur="2.5s" begin="1.55s" repeatCount="indefinite"><mpath href="#p-pg-api"/></animateMotion>
+    </circle>
+
+    <!-- Main <-> API Primary Bridge -->
+    <circle r="3.8" fill="#0EA5E9">
+      <animateMotion dur="2.8s" repeatCount="indefinite"><mpath href="#p-main-api"/></animateMotion>
+    </circle>
+    <circle r="3.1" fill="#4F46E5" opacity="0.85">
+      <animateMotion dur="2.8s" begin="1.4s" repeatCount="indefinite"><mpath href="#p-main-api"/></animateMotion>
+    </circle>
+    <circle r="3.8" fill="#10B981">
+      <animateMotion dur="3.0s" begin="0.5s" repeatCount="indefinite"><mpath href="#p-api-main"/></animateMotion>
+    </circle>
+    <circle r="3.1" fill="#0EA5E9" opacity="0.85">
+      <animateMotion dur="3.0s" begin="2.0s" repeatCount="indefinite"><mpath href="#p-api-main"/></animateMotion>
+    </circle>
+
+    <!-- To Model Providers -->
+    <circle r="3.4" fill="#7C3AED">
+      <animateMotion dur="3.1s" repeatCount="indefinite"><mpath href="#p-main-models"/></animateMotion>
+    </circle>
+    <circle r="3.2" fill="#A855F7">
+      <animateMotion dur="3.3s" begin="1.1s" repeatCount="indefinite"><mpath href="#p-api-models"/></animateMotion>
+    </circle>
+
+    <!-- To GitHub -->
+    <circle r="3.5" fill="#1E293B">
+      <animateMotion dur="3.8s" begin="0.4s" repeatCount="indefinite"><mpath href="#p-main-github"/></animateMotion>
+    </circle>
+    <circle r="3.4" fill="#0D9488">
+      <animateMotion dur="3.8s" begin="1.9s" repeatCount="indefinite"><mpath href="#p-api-github"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- ==================== LOCAL MACHINE CARDS ==================== -->
+  <!-- Card 1A: Electron Renderer -->
+  <g filter="url(#cardShadow)">
+    <rect x="44" y="126" width="404" height="80" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.2"/>
+    <rect x="58" y="142" width="36" height="36" rx="10" fill="#EEF2FF"/>
+    <rect x="67" y="151" width="18" height="16" rx="3" fill="none" stroke="#4F46E5" stroke-width="1.7"/>
+    <line x1="67" y1="156.5" x2="85" y2="156.5" stroke="#4F46E5" stroke-width="1.5"/>
+    <circle cx="70.5" cy="153.8" r="0.9" fill="#4F46E5"/>
+    <circle cx="74" cy="153.8" r="0.9" fill="#4F46E5"/>
+
+    <text x="106" y="157" font-size="14" font-weight="700" fill="#0F172A">Electron 渲染进程</text>
+    <rect x="348" y="143" width="84" height="20" rx="10" fill="#F1F5F9"/>
+    <text x="390" y="156.5" text-anchor="middle" font-size="10" font-weight="600" fill="#475569" class="mono">React + Vite</text>
+    <text x="106" y="176" font-size="11.5" fill="#475569">01–04 统一决定页 · 修订清单 · 右侧「答疑」</text>
+    <text x="106" y="193" font-size="11" fill="#64748B">无直接文件 / Shell / 凭据访问，全部经 IPC 桥接</text>
+  </g>
+
+  <!-- Card 1B: Electron Main Process (Primary Local Hub) -->
+  <g filter="url(#hubShadowIndigo)">
+    <rect x="44" y="258" width="404" height="100" rx="15" fill="#FFFFFF" stroke="url(#hubIndigoBorder)" stroke-width="1.8"/>
+    <rect x="58" y="275" width="38" height="38" rx="11" fill="#4F46E5"/>
+    <rect x="70" y="287" width="14" height="14" rx="2.5" fill="none" stroke="#FFFFFF" stroke-width="1.7"/>
+    <path d="M74 287v-3.5M80 287v-3.5M74 304.5V301M80 304.5V301M66.5 291H70M66.5 297H70M84 291h3.5M84 297h3.5" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
+
+    <text x="108" y="290" font-size="15" font-weight="700" fill="#0F172A">Electron 主进程</text>
+    <circle cx="228" cy="285" r="4" fill="#4F46E5" class="pulse-ring"/>
+    <circle cx="228" cy="285" r="3.2" fill="#4F46E5"/>
+
+    <rect x="334" y="275" width="98" height="21" rx="10.5" fill="#EEF2FF" stroke="#C7D2FE" stroke-width="0.9"/>
+    <text x="383" y="289" text-anchor="middle" font-size="10.5" font-weight="600" fill="#4338CA">可信执行权威</text>
+
+    <text x="108" y="311" font-size="11.5" fill="#334155">工作流状态机 · Coding Executor · 权限与预算守卫</text>
+    <text x="108" y="329" font-size="11.5" fill="#475569">凭据边界 · 持久化发件箱 · 记忆模型中继</text>
+    <rect x="336" y="317" width="96" height="19" rx="9.5" fill="#FEF3C7" stroke="#FDE68A" stroke-width="0.8"/>
+    <text x="384" y="330" text-anchor="middle" font-size="9.8" font-weight="600" fill="#B45309" class="mono">Relay :8891</text>
+  </g>
+
+  <!-- Card 1C: SQLite / LocalStore -->
+  <g filter="url(#cardShadow)">
+    <rect x="44" y="402" width="178" height="98" rx="13" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.15"/>
+    <rect x="56" y="414" width="28" height="28" rx="8" fill="#EEF2FF"/>
+    <ellipse cx="70" cy="423" rx="6.5" ry="2.6" fill="none" stroke="#4F46E5" stroke-width="1.5"/>
+    <path d="M63.5 423v10c0 1.5 2.9 2.6 6.5 2.6s6.5-1.1 6.5-2.6V423" fill="none" stroke="#4F46E5" stroke-width="1.5"/>
+    <path d="M63.5 428c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5" fill="none" stroke="#4F46E5" stroke-width="1.3"/>
+
+    <text x="92" y="426" font-size="12.8" font-weight="700" fill="#0F172A">SQLite 本地库</text>
+    <text x="92" y="440" font-size="9.6" font-weight="600" fill="#6366F1" class="mono">LocalStore · v42</text>
+    <text x="56" y="463" font-size="11" fill="#475569">权威 Run · 产物 · 自检</text>
+    <text x="56" y="481" font-size="11" fill="#64748B">不可变改动修订 · 私有答疑</text>
+  </g>
+
+  <!-- Card 1D: Repo & Git Worktree -->
+  <g filter="url(#cardShadow)">
+    <rect x="274" y="402" width="174" height="98" rx="13" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.15"/>
+    <rect x="286" y="414" width="28" height="28" rx="8" fill="#EFF6FF"/>
+    <circle cx="296" cy="422" r="2.2" fill="none" stroke="#2563EB" stroke-width="1.5"/>
+    <circle cx="296" cy="434" r="2.2" fill="none" stroke="#2563EB" stroke-width="1.5"/>
+    <circle cx="305" cy="425" r="2.2" fill="none" stroke="#2563EB" stroke-width="1.5"/>
+    <path d="M296 424.2v7.6M305 427.2c0 3-2.5 4.6-9 4.6" fill="none" stroke="#2563EB" stroke-width="1.5"/>
+
+    <text x="322" y="426" font-size="12.8" font-weight="700" fill="#0F172A">仓库与工作树</text>
+    <text x="322" y="440" font-size="9.6" font-weight="600" fill="#2563EB" class="mono">Managed Worktree</text>
+    <text x="286" y="463" font-size="11" fill="#475569">源码 · AGENTS.md · 知识</text>
+    <text x="286" y="481" font-size="11" fill="#64748B">行级 Diff · 本地测试命令</text>
+  </g>
+
+  <!-- Card 1E: OpenCode & Local MCP -->
+  <g filter="url(#cardShadow)">
+    <rect x="44" y="556" width="178" height="106" rx="13" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.15"/>
+    <rect x="56" y="568" width="28" height="28" rx="8" fill="#F5F3FF"/>
+    <rect x="62.5" y="575.5" width="15" height="13" rx="2.5" fill="none" stroke="#6366F1" stroke-width="1.5"/>
+    <path d="M66 580l2.8 2.2L66 584.4M71 584.4h3.5" fill="none" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <text x="92" y="580" font-size="12.8" font-weight="700" fill="#0F172A">受管本地执行器</text>
+    <text x="92" y="594" font-size="9.4" font-weight="600" fill="#6366F1" class="mono">OpenCode / stdio MCP</text>
+    <text x="56" y="618" font-size="11" fill="#475569">问答协议 · 有界子任务</text>
+    <text x="56" y="636" font-size="11" fill="#64748B">白名单公开文档 · 本地工具</text>
+    <text x="56" y="652" font-size="10" fill="#94A3B8">按需启动，主进程隔离配置</text>
+  </g>
+
+  <!-- Card 1F: Local Hindsight (Optional) -->
+  <g filter="url(#cardShadow)">
+    <rect x="274" y="556" width="174" height="106" rx="13" fill="#FFFFFF" stroke="#FCD34D" stroke-width="1.2" stroke-dasharray="5 3"/>
+    <rect x="286" y="568" width="28" height="28" rx="8" fill="#FFFBEB"/>
+    <path d="M300 576l7 3.5-7 3.5-7-3.5 7-3.5z" fill="none" stroke="#D97706" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M293 583.5l7 3.5 7-3.5M293 587l7 3.5 7-3.5" fill="none" stroke="#D97706" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <text x="322" y="580" font-size="12.8" font-weight="700" fill="#0F172A">本机 Hindsight</text>
+    <text x="322" y="594" font-size="9.5" font-weight="600" fill="#B45309" class="mono">可选 Docker · :8890</text>
+    <text x="286" y="618" font-size="11" fill="#475569">项目记忆 Bank · 5 知识页</text>
+    <text x="286" y="636" font-size="11" fill="#64748B">多语言召回 · 不持模型密钥</text>
+    <text x="286" y="652" font-size="10" fill="#B45309">抽取经 :8891 中继计入预算</text>
+  </g>
+
+  <!-- ==================== TEAM SERVICES CARDS ==================== -->
+  <!-- Card 2A: Next.js Web Console -->
+  <g filter="url(#cardShadow)">
+    <rect x="914" y="126" width="400" height="80" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.2"/>
+    <rect x="928" y="142" width="36" height="36" rx="10" fill="#ECFDF5"/>
+    <rect x="937" y="151" width="7.5" height="7.5" rx="1.6" fill="none" stroke="#059669" stroke-width="1.6"/>
+    <rect x="947.5" y="151" width="7.5" height="5" rx="1.6" fill="none" stroke="#059669" stroke-width="1.6"/>
+    <rect x="937" y="161.5" width="7.5" height="5" rx="1.6" fill="none" stroke="#059669" stroke-width="1.6"/>
+    <rect x="947.5" y="159" width="7.5" height="7.5" rx="1.6" fill="none" stroke="#059669" stroke-width="1.6"/>
+
+    <text x="976" y="157" font-size="14" font-weight="700" fill="#0F172A">Next.js Web 控制台</text>
+    <rect x="1224" y="143" width="76" height="20" rx="10" fill="#ECFDF5"/>
+    <text x="1262" y="156.5" text-anchor="middle" font-size="10" font-weight="600" fill="#047857" class="mono">Port :4311</text>
+    <text x="976" y="176" font-size="11.5" fill="#475569">我的待办 · 项目任务 · Gate 与交付审批</text>
+    <text x="976" y="193" font-size="11" fill="#64748B">团队策略 · 预算管理 · 桌面配对 · 多组织隔离</text>
+  </g>
+
+  <!-- Card 2B: Node.js Team API (Primary Team Hub) -->
+  <g filter="url(#hubShadowEmerald)">
+    <rect x="914" y="258" width="400" height="100" rx="15" fill="#FFFFFF" stroke="url(#hubEmeraldBorder)" stroke-width="1.8"/>
+    <rect x="928" y="275" width="38" height="38" rx="11" fill="#059669"/>
+    <path d="M947 284l8 3.5v5.5c0 4.8-3.4 8.7-8 10.2-4.6-1.5-8-5.4-8-10.2v-5.5l8-3.5z" fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M944 294l2.2 2.2 4.3-4.5" fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <text x="978" y="290" font-size="15" font-weight="700" fill="#0F172A">Node.js Team API</text>
+    <circle cx="1116" cy="285" r="4" fill="#059669" class="pulse-ring-delay"/>
+    <circle cx="1116" cy="285" r="3.2" fill="#059669"/>
+
+    <rect x="1220" y="275" width="80" height="21" rx="10.5" fill="#ECFDF5" stroke="#A7F3D0" stroke-width="0.9"/>
+    <text x="1260" y="289" text-anchor="middle" font-size="10.5" font-weight="600" fill="#047857" class="mono">Port :4310</text>
+
+    <text x="978" y="311" font-size="11.5" fill="#334155">身份认证 · 实时成员权限 · 协作命令收件箱</text>
+    <text x="978" y="329" font-size="11.5" fill="#475569">预算预留与结算 · 脱敏 Run 投影 · GitHub 核验</text>
+    <text x="978" y="346" font-size="10.2" fill="#059669">仅下发协作意图与授权，绝不直接操纵本机仓库</text>
+  </g>
+
+  <!-- Card 2C: PostgreSQL -->
+  <g filter="url(#cardShadow)">
+    <rect x="914" y="434" width="400" height="102" rx="14" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.2"/>
+    <rect x="928" y="450" width="36" height="36" rx="10" fill="#ECFDF5"/>
+    <ellipse cx="946" cy="461" rx="8.5" ry="3.2" fill="none" stroke="#059669" stroke-width="1.6"/>
+    <path d="M937.5 461v13c0 1.8 3.8 3.2 8.5 3.2s8.5-1.4 8.5-3.2V461" fill="none" stroke="#059669" stroke-width="1.6"/>
+    <path d="M937.5 467.5c0 1.7 3.8 3 8.5 3s8.5-1.3 8.5-3" fill="none" stroke="#059669" stroke-width="1.4"/>
+
+    <text x="976" y="465" font-size="14" font-weight="700" fill="#0F172A">PostgreSQL 数据库</text>
+    <rect x="1202" y="451" width="98" height="20" rx="10" fill="#ECFDF5"/>
+    <text x="1251" y="464.5" text-anchor="middle" font-size="10" font-weight="600" fill="#047857" class="mono">Schema v32</text>
+    <text x="976" y="487" font-size="11.5" fill="#475569">组织与成员 · 团队项目 · 策略快照 · 预算账本</text>
+    <text x="976" y="505" font-size="11" fill="#64748B">脱敏 Run / 测试 / 审查摘要 · 交付请求与审计记录</text>
+    <text x="976" y="523" font-size="10" fill="#94A3B8">不保存本地绝对路径、原始源码补丁、私有答疑或自检正文</text>
+  </g>
+
+  <!-- Card 2D: Worker (Optional standalone CLI) -->
+  <g filter="url(#cardShadow)">
+    <rect x="914" y="574" width="400" height="88" rx="13" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.15" stroke-dasharray="5 3"/>
+    <rect x="928" y="592" width="34" height="34" rx="9" fill="#F1F5F9"/>
+    <path d="M938 615v-6M945 615v-11M952 615v-8" stroke="#475569" stroke-width="2" stroke-linecap="round"/>
+
+    <text x="974" y="606" font-size="13.2" font-weight="700" fill="#1E293B">Worker 费用汇总入口</text>
+    <rect x="1208" y="592" width="92" height="20" rx="10" fill="#F1F5F9"/>
+    <text x="1254" y="605.5" text-anchor="middle" font-size="9.8" font-weight="600" fill="#64748B">独立按需执行</text>
+    <text x="974" y="626" font-size="11" fill="#475569">独立的项目 / 成员费用汇总任务（apps/worker）</text>
+    <text x="974" y="644" font-size="10.2" fill="#94A3B8">当前无常驻任务队列，不属于默认 Docker Compose 服务栈</text>
+  </g>
+
+  <!-- ==================== CENTER EXTERNAL CARDS & BRIDGE BADGE ==================== -->
+  <!-- Primary Sync Bridge Frosted Card -->
+  <g filter="url(#pillShadow)">
+    <rect x="572" y="266" width="216" height="72" rx="14" fill="#FFFFFF" stroke="#BAE6FD" stroke-width="1.3"/>
+    <circle cx="589" cy="285" r="3.2" fill="#0284C7" class="breathe"/>
+    <text x="600" y="289" font-size="11.5" font-weight="700" fill="#0369A1">限定范围 HTTP · 配对令牌</text>
+    <text x="680" y="308" text-anchor="middle" font-size="10.8" fill="#334155">发件箱脱敏同步 · 任务领取 · 命令轮询</text>
+    <text x="680" y="325" text-anchor="middle" font-size="10" font-weight="600" fill="#0284C7">仅传白名单摘要 · 不上传源码/路径</text>
+  </g>
+
+  <!-- External Card E1: Model Providers -->
+  <g filter="url(#cardShadow)">
+    <rect x="564" y="422" width="232" height="106" rx="15" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.4"/>
+    <rect x="578" y="436" width="32" height="32" rx="9" fill="#F5F3FF"/>
+    <path d="M594 443.5l1.9 5.6 5.6 1.9-5.6 1.9-1.9 5.6-1.9-5.6-5.6-1.9 5.6-1.9 1.9-5.6z" fill="none" stroke="#7C3AED" stroke-width="1.6" stroke-linejoin="round"/>
+
+    <text x="620" y="450" font-size="13.8" font-weight="700" fill="#0F172A">模型提供方</text>
+    <circle cx="778" cy="445" r="3.4" fill="#7C3AED" class="pulse-ring"/>
+    <circle cx="778" cy="445" r="2.8" fill="#7C3AED"/>
+    <text x="620" y="465" font-size="10" font-weight="600" fill="#7C3AED" class="mono">Model Providers</text>
+
+    <text x="578" y="489" font-size="11" fill="#475569">DeepSeek Flash / V4 Pro · 兼容端点</text>
+    <text x="578" y="507" font-size="10.5" fill="#64748B">调用前预留预算 · 版本化定价结算</text>
+  </g>
+
+  <!-- External Card E2: GitHub -->
+  <g filter="url(#cardShadow)">
+    <rect x="564" y="564" width="232" height="114" rx="15" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.4"/>
+    <rect x="578" y="578" width="32" height="32" rx="9" fill="#F1F5F9"/>
+    <circle cx="589" cy="587" r="2.3" fill="none" stroke="#1E293B" stroke-width="1.6"/>
+    <circle cx="589" cy="601" r="2.3" fill="none" stroke="#1E293B" stroke-width="1.6"/>
+    <circle cx="599" cy="601" r="2.3" fill="none" stroke="#1E293B" stroke-width="1.6"/>
+    <path d="M589 589.3v9.4M599 598.7v-7.2c0-2.4-1.8-4.5-4.5-4.5H593" fill="none" stroke="#1E293B" stroke-width="1.6" stroke-linecap="round"/>
+
+    <text x="620" y="592" font-size="13.8" font-weight="700" fill="#0F172A">GitHub 交付</text>
+    <circle cx="778" cy="587" r="3.4" fill="#334155" class="pulse-ring-delay"/>
+    <circle cx="778" cy="587" r="2.8" fill="#334155"/>
+    <text x="620" y="607" font-size="10" font-weight="600" fill="#475569" class="mono">Minimal GitHub App</text>
+
+    <text x="578" y="631" font-size="11" fill="#475569">获准 devflow/ 分支 · Draft PR</text>
+    <text x="578" y="649" font-size="10.5" fill="#64748B">独立签名 Web 批准 · 短期内存令牌</text>
+    <text x="578" y="666" font-size="10" font-weight="600" fill="#334155">永不自动合并 / 强推 / 删远端分支</text>
+  </g>
+
+  <!-- ==================== CONNECTOR LABELS (CLEAN FROSTED PILLS) ==================== -->
+  <g id="connector-labels" filter="url(#pillShadow)">
+    <!-- Local UI <-> Main -->
+    <rect x="180" y="220" width="136" height="23" rx="11.5" fill="#FFFFFF" stroke="#C7D2FE" stroke-width="1"/>
+    <text x="248" y="235" text-anchor="middle" font-size="10.5" font-weight="600" fill="#4338CA">类型化 Preload / IPC</text>
+
+    <!-- Local Tree Label -->
+    <rect x="184" y="370" width="128" height="22" rx="11" fill="#FFFFFF" stroke="#DBEAFE" stroke-width="1"/>
+    <text x="248" y="384.5" text-anchor="middle" font-size="10" font-weight="600" fill="#3B82F6">事务 · 工作树 · 本地进程</text>
+
+    <!-- Local Hindsight Relay Note -->
+    <rect x="180" y="518" width="136" height="22" rx="11" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+    <text x="248" y="532.5" text-anchor="middle" font-size="10" font-weight="600" fill="#B45309">采集召回 ↔ 预算中继</text>
+
+    <!-- Team Web <-> API -->
+    <rect x="1044" y="220" width="136" height="23" rx="11.5" fill="#FFFFFF" stroke="#A7F3D0" stroke-width="1"/>
+    <text x="1112" y="235" text-anchor="middle" font-size="10.5" font-weight="600" fill="#047857">签名会话 / HTTP</text>
+
+    <!-- Team API <-> Postgres -->
+    <rect x="1048" y="384" width="128" height="24" rx="12" fill="#FFFFFF" stroke="#A7F3D0" stroke-width="1"/>
+    <text x="1112" y="399.5" text-anchor="middle" font-size="10.5" font-weight="600" fill="#047857">持久化 / SQL 迁移</text>
+
+    <!-- Main -> Models -->
+    <rect x="526" y="375" width="122" height="24" rx="12" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1"/>
+    <text x="587" y="390.5" text-anchor="middle" font-size="10.3" font-weight="600" fill="#6D28D9">上下文 · 记忆中继</text>
+
+    <!-- API -> Models -->
+    <rect x="712" y="375" width="114" height="24" rx="12" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1"/>
+    <text x="769" y="390.5" text-anchor="middle" font-size="10.3" font-weight="600" fill="#6D28D9">服务端门禁审查</text>
+
+    <!-- Main -> GitHub (centered symmetrically in 468..564 corridor) -->
+    <rect x="472" y="514" width="88" height="36" rx="11" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="516" y="529" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">推送获准的</text>
+    <text x="516" y="543" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">精确提交</text>
+
+    <!-- API -> GitHub (centered symmetrically in 796..892 corridor) -->
+    <rect x="800" y="514" width="88" height="36" rx="11" fill="#FFFFFF" stroke="#A7F3D0" stroke-width="1"/>
+    <text x="844" y="529" text-anchor="middle" font-size="10" font-weight="600" fill="#047857">核验分支头</text>
+    <text x="844" y="543" text-anchor="middle" font-size="10" font-weight="600" fill="#047857">创建草稿 PR</text>
+  </g>
+
+  <!-- ==================== BOTTOM SHARED FOUNDATION BAR ==================== -->
+  <g id="shared-core" filter="url(#cardShadow)">
+    <rect x="24" y="708" width="1312" height="60" rx="15" fill="url(#sharedBarBg)" stroke="#CBD5E1" stroke-width="1.2"/>
+
+    <!-- Subtle upward connectors linking shared lib to Local & Team -->
+    <line x1="248" y1="690" x2="248" y2="708" stroke="#94A3B8" stroke-width="1.3" stroke-dasharray="3 3"/>
+    <line x1="1112" y1="690" x2="1112" y2="708" stroke="#94A3B8" stroke-width="1.3" stroke-dasharray="3 3"/>
+    <circle cx="248" cy="690" r="3" fill="#6366F1"/>
+    <circle cx="248" cy="708" r="3" fill="#64748B"/>
+    <circle cx="1112" cy="690" r="3" fill="#059669"/>
+    <circle cx="1112" cy="708" r="3" fill="#64748B"/>
+
+    <rect x="42" y="721" width="34" height="34" rx="9" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1"/>
+    <path d="M59 730l8 4.2v8.4L59 747l-8-4.4v-8.4L59 730z" fill="none" stroke="#334155" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M51 734.2L59 738.5l8-4.3M59 738.5V747" fill="none" stroke="#334155" stroke-width="1.4"/>
+
+    <text x="88" y="735" font-size="13.5" font-weight="700" fill="#0F172A" class="mono">@ai-devflow/shared</text>
+    <text x="256" y="735" font-size="12" font-weight="600" fill="#334155">共享领域核心</text>
+    <text x="88" y="753" font-size="11" fill="#64748B">由 Desktop、Web、API 与 Worker 编译时共同导入（纯代码库，无需作为独立服务部署）</text>
+
+    <rect x="852" y="725" width="102" height="26" rx="13" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="903" y="741.5" text-anchor="middle" font-size="10.8" font-weight="600" fill="#334155">确定性状态机</text>
+
+    <rect x="966" y="725" width="106" height="26" rx="13" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="1019" y="741.5" text-anchor="middle" font-size="10.8" font-weight="600" fill="#334155">策略与证据规则</text>
+
+    <rect x="1084" y="725" width="112" height="26" rx="13" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="1140" y="741.5" text-anchor="middle" font-size="10.8" font-weight="600" fill="#334155">脱敏与版本契约</text>
+
+    <rect x="1208" y="725" width="108" height="26" rx="13" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="1262" y="741.5" text-anchor="middle" font-size="10.8" font-weight="600" fill="#334155">费用与定价目录</text>
+  </g>
+</svg>
