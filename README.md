@@ -6,9 +6,11 @@
 
 [快速开始](#quick-start) · [完整流程](#from-request-to-acceptance) · [架构](#architecture) · [文档](#documentation) · [项目简介](docs/product/project-introduction.zh-CN.md)
 
-![Electron 任务页：前四个阶段已通过，PR 交付步骤的状态行写明“可以准备交付”与主动作](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/doc-tour-task-current-work-1440x900.jpg)
+<a id="architecture-overview-diagram"></a>
 
-_2026 年 9 月 28 日工作区改造基线的 Electron 任务页，内容区 1440 × 900。左侧是任务、知识、团队、设置四个入口；标题下是六个阶段；下方是「当前工作」「材料与版本」「执行记录」三个页签。此后 `main` 已进一步将前四个阶段（需求澄清、方案设计、开发实现、测试证据）升级为统一的决定页（顶部「你的决定」栏、正文/差异、右侧审查/自检卡片与修订清单），并将右侧会话面板更名为「答疑」。示例在隔离环境中用 Deterministic Fake Provider 和模拟编码推进，正文为模拟模板。[截图来源与范围](docs/guides/screenshots/workspace-redesign-20260928/README.md)。_
+![AI DevFlow Studio 系统与进程边界：开发者本机 Electron 客户端、团队自托管服务、本机 Hindsight 项目记忆、模型提供方、GitHub 最小权限交付与共享领域核心的实时进程通信与信任边界](docs/guides/diagrams/system-process-boundaries.svg)
+
+_系统与进程边界动态拓扑图：动态箭头与脉冲光点表示运行时进程通信方向与本地/跨边界访问；本机 Hindsight 为可选模块，不持有模型密钥，其抽取与知识页整理调用经桌面中继（`:8891`）计入团队预算。各层次职责与代码入口详见[系统与进程边界](#system-and-process-boundaries)。_
 
 > **发布与路线图状态**：最新已发布版本是 [`v2.3.0`](https://github.com/erich04/ai-devflow-studio/releases/tag/v2.3.0)，发布时间为 2026 年 9 月 14 日。本 README 介绍当前 `main` 源码，包括此后完成的工作台决定页改版（UX 第 1 批与第 2a 批）、Hindsight 项目记忆（ADR 0030）、常驻阶段知识上下文（ADR 0025）、OpenCode 问答与有界子任务、模型设置与定价治理，以及多组织改动。使用这些改动需要从源码构建，已发布安装包不会自动包含后续源码变化。多轮 Native Coding Harness v3 仍在独立分支（[PR #238](https://github.com/erich04/ai-devflow-studio/pull/238)）开发与评测，尚未合入 `main`。详见 [V2.3 发布说明](docs/releases/v2.3.0/notes.md)与[路线图](docs/roadmap.md)。候选版本验证、正式验收和已发布安装包分别记录。
 
@@ -30,6 +32,10 @@ _2026 年 9 月 28 日工作区改造基线的 Electron 任务页，内容区 14
 前四个阶段（需求澄清、方案设计、开发实现、测试证据）采用统一的**决定页**布局：顶部「你的决定」栏固定在页签上方、滚动区之外，汇总当前结论、进度、阻断原因与动作；左侧展示材料原文或精确行级差异，右侧并排展示审查意见、待确认问题、自检与权限卡片；用户采纳意见、回答问题或从右侧「答疑」加入建议形成按精确版本绑定的本机**修订清单**，一次提交生成新版本（窄窗口下自动切换为标记与弹出卡片）。
 
 浏览阶段不会推进 Run。任务页区分“正在查看”与“实际进度”：浏览已完成、历史版本或尚未开始的步骤时，页面保持只读、同时写明实际进度，并提供「返回当前工作」或返回当前版本。决定栏的结论与按钮来自纯函数状态投影；仅警告的策略不显示为阻断，停止、取消和拒绝始终可见。
+
+![Electron 任务页：前四个阶段已通过，PR 交付步骤的状态行写明“可以准备交付”与主动作](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/doc-tour-task-current-work-1440x900.jpg)
+
+_2026 年 9 月 28 日工作区改造基线的 Electron 任务页，内容区 1440 × 900。左侧是任务、知识、团队、设置四个入口；标题下是六个阶段；下方是「当前工作」「材料与版本」「执行记录」三个页签。此后 `main` 已进一步将前四个阶段（需求澄清、方案设计、开发实现、测试证据）升级为统一的决定页，并将右侧会话面板更名为「答疑」。示例在隔离环境中用 Deterministic Fake Provider 和模拟编码推进，正文为模拟模板。[截图来源与范围](docs/guides/screenshots/workspace-redesign-20260928/README.md)。_
 
 <details>
 <summary>Electron 阶段图集（2026-09-28 工作区改造基线）：需求确认 → 方案评审 → 开发权限 → 浏览历史步骤</summary>
@@ -156,9 +162,7 @@ DevFlow 是采用 TypeScript/pnpm 的单一仓库，围绕**本地执行、团�
 
 ### 系统与进程边界
 
-![AI DevFlow Studio 系统与进程边界：开发者本机 Electron 客户端、团队自托管服务、本机 Hindsight 项目记忆、模型提供方、GitHub 最小权限交付与共享领域核心的实时进程通信与信任边界](docs/guides/diagrams/system-process-boundaries.svg)
-
-_动态箭头与脉冲光点表示运行时进程通信方向与本地/跨边界访问。API 到桌面端的方向表示响应、策略/预算决策与轮询取得的命令；本机 Hindsight 为可选模块，不持有模型密钥，其抽取与知识页整理调用经桌面中继（`:8891`）计入团队预算。Desktop、Web、API 和 Worker 编译时共同导入 `@ai-devflow/shared`；它是代码库，无需作为独立服务部署。_
+完整动态拓扑见文首的[系统与进程边界图](#architecture-overview-diagram)。API 到桌面端的方向表示响应、策略/预算决策与轮询取得的命令；本机 Hindsight 为可选模块，经桌面中继（`:8891`）计入团队预算；Desktop、Web、API 和 Worker 编译时共同导入 `@ai-devflow/shared`（纯代码库，无需作为独立服务部署）。
 
 | 层次 | 职责 | 代码 |
 | --- | --- | --- |
