@@ -8,9 +8,9 @@
 
 ![Electron 任务页：前四个阶段已通过，PR 交付步骤的状态行写明“可以准备交付”与主动作](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/doc-tour-task-current-work-1440x900.jpg)
 
-_2026 年 9 月 28 日工作区改造后的 Electron 任务页，内容区 1440 × 900。左侧是任务、知识、团队、设置四个入口；标题下是六个阶段；状态行给出当前结论与主动作；下方是「当前工作」「材料与版本」「执行记录」三个页签。示例在隔离环境中用 Deterministic Fake Provider 和模拟编码推进，正文为模拟模板。[截图来源与范围](docs/guides/screenshots/workspace-redesign-20260928/README.md)。_
+_2026 年 9 月 28 日工作区改造基线的 Electron 任务页，内容区 1440 × 900。左侧是任务、知识、团队、设置四个入口；标题下是六个阶段；下方是「当前工作」「材料与版本」「执行记录」三个页签。此后 `main` 已进一步将前四个阶段（需求澄清、方案设计、开发实现、测试证据）升级为统一的决定页（顶部「你的决定」栏、正文/差异、右侧审查/自检卡片与修订清单），并将右侧会话面板更名为「答疑」。示例在隔离环境中用 Deterministic Fake Provider 和模拟编码推进，正文为模拟模板。[截图来源与范围](docs/guides/screenshots/workspace-redesign-20260928/README.md)。_
 
-> **发布与路线图状态**：最新已发布版本是 [`v2.3.0`](https://github.com/erich04/ai-devflow-studio/releases/tag/v2.3.0)，发布时间为 2026 年 9 月 14 日。本 README 介绍当前 `main` 源码，包括此后完成的工作台、记忆、模型治理和多组织改动。使用这些改动需要从源码构建，已发布安装包不会自动包含后续源码变化。详见 [V2.3 发布说明](docs/releases/v2.3.0/notes.md)与[路线图](docs/roadmap.md)。候选版本验证、正式验收和已发布安装包分别记录。
+> **发布与路线图状态**：最新已发布版本是 [`v2.3.0`](https://github.com/erich04/ai-devflow-studio/releases/tag/v2.3.0)，发布时间为 2026 年 9 月 14 日。本 README 介绍当前 `main` 源码，包括此后完成的工作台决定页改版（UX 第 1 批与第 2a 批）、Hindsight 项目记忆（ADR 0030）、常驻阶段知识上下文（ADR 0025）、OpenCode 问答与有界子任务、模型设置与定价治理，以及多组织改动。使用这些改动需要从源码构建，已发布安装包不会自动包含后续源码变化。多轮 Native Coding Harness v3 仍在独立分支（[PR #238](https://github.com/erich04/ai-devflow-studio/pull/238)）开发与评测，尚未合入 `main`。详见 [V2.3 发布说明](docs/releases/v2.3.0/notes.md)与[路线图](docs/roadmap.md)。候选版本验证、正式验收和已发布安装包分别记录。
 
 <a id="from-request-to-acceptance"></a>
 
@@ -20,17 +20,19 @@ _2026 年 9 月 28 日工作区改造后的 Electron 任务页，内容区 1440 
 
 | 阶段 | 主要工作 | 结果 |
 | --- | --- | --- |
-| **需求澄清** | 将请求整理为需求、验收标准和非目标，并评审需求确认 Gate。 | 澄清产物与人工决策。 |
-| **方案设计** | 阅读项目上下文，提出实现方案，并评审方案 Gate。 | 设计产物、参考依据与开发批准。 |
-| **开发实现** | 在受管理的 Git 工作树中运行 Native Coding 或 OpenCode，并检查权限。 | 可审查的变更、执行轨迹与用量记录。 |
-| **测试证据** | 执行项目保存的测试命令，保留实际结果。 | 绑定 Run 和节点的测试证据（Test Evidence）。 |
+| **需求澄清** | 将请求整理为需求、验收标准和非目标；在门禁决定页审阅原文、处理审查意见与待确认问题，并通过修订清单生成新版本或确认需求 Gate。 | 版本化澄清产物、修订记录与人工决策。 |
+| **方案设计** | 结合常驻项目知识与上下文提出实现方案；在同一套门禁决定页按版本审阅、汇总修订清单生成新版或批准方案 Gate。 | 版本化设计产物、参考依据与开发批准。 |
+| **开发实现** | 在受管理的 Git 工作树中运行 Native Coding（v2）或 OpenCode；在决定页审阅精确行级差异、权限/问答/自检卡片，支持 Native 按清单修订与手动自检。 | 可审查的不可变变更修订、执行轨迹与用量记录。 |
+| **测试证据** | 执行项目保存的测试命令，将通过结果绑定精确已批准改动指纹，并由用户显式确认测试证据后再进入交付。 | 绑定 Run、节点与精确改动指纹的测试证据（Test Evidence）。 |
 | **PR 交付** | 准备交付包，取得独立的 Web 批准后发布获准的提交。 | 经核验的分支头与 Draft pull request。 |
 | **业务验收** | 对照需求目标，核对交付结果与证据。 | 明确的业务验收结论。 |
 
-浏览阶段不会推进 Run。任务页区分“正在查看”与“实际进度”：浏览已完成或尚未开始的步骤时，页面同时写明实际进度，并提供「返回当前工作」。状态行的结论与按钮来自同一份状态投影；仅警告的策略不显示为阻断，停止、取消和拒绝始终在状态行上。
+前四个阶段（需求澄清、方案设计、开发实现、测试证据）采用统一的**决定页**布局：顶部「你的决定」栏固定在页签上方、滚动区之外，汇总当前结论、进度、阻断原因与动作；左侧展示材料原文或精确行级差异，右侧并排展示审查意见、待确认问题、自检与权限卡片；用户采纳意见、回答问题或从右侧「答疑」加入建议形成按精确版本绑定的本机**修订清单**，一次提交生成新版本（窄窗口下自动切换为标记与弹出卡片）。
+
+浏览阶段不会推进 Run。任务页区分“正在查看”与“实际进度”：浏览已完成、历史版本或尚未开始的步骤时，页面保持只读、同时写明实际进度，并提供「返回当前工作」或返回当前版本。决定栏的结论与按钮来自纯函数状态投影；仅警告的策略不显示为阻断，停止、取消和拒绝始终可见。
 
 <details>
-<summary>Electron 阶段图集：需求确认 → 方案评审 → 开发权限 → 浏览历史步骤</summary>
+<summary>Electron 阶段图集（2026-09-28 工作区改造基线）：需求确认 → 方案评审 → 开发权限 → 浏览历史步骤</summary>
 
 **1. 需求确认 Gate：策略仅警告、尚未运行门禁审查**
 
@@ -64,13 +66,13 @@ _在历史步骤上的操作不会改变实际进度。「材料与版本」按�
 
 | 能力 | 当前实现 |
 | --- | --- |
-| **澄清与设计** | Direct Provider 或只读 OpenCode 分析生成正式阶段产物；可以为当前节点选择模型。 |
-| **独立对话** | Direct Provider 或 OpenCode 可查询 Run、节点、产物、仓库文件及已配置的知识。每个会话分别保存历史、草稿、问题和执行方式。 |
-| **编码** | 共享的编码执行器（Coding Executor）契约支持 OpenCode 和有明确边界的 Native Coding。Native v2 支持仓库调查、多文件变更集（Change Set）、明确批准、受管理工作树内的修改、已保存的测试命令及有限次数修复。 |
-| **门禁审查（Gate Review）** | 根据知识提出意见、证据缺口、建议测试和策略建议，帮助人工判断是否批准。模型不会批准 Gate。 |
+| **澄清与设计** | Direct Provider 或只读 OpenCode 分析生成正式阶段产物；支持基于修订清单生成需求与方案新版本，并记录实际送出的知识与记忆回执。 |
+| **独立对话（答疑）** | Direct Provider 或 OpenCode 可查询 Run、节点、产物、仓库文件、知识、项目记忆（`memory_search`）以及待批准改动与受管工作区。每个会话分别保存历史、草稿、问题和执行方式。 |
+| **编码** | 共享编码执行器（Coding Executor）契约同时支持 **OpenCode** 与 **Native Coding**。OpenCode（核对版本 1.18.15）支持命令输入绑定授权、交互式[问答](docs/engineering/opencode-question-protocol.md)、单层串行[有界子任务](docs/engineering/opencode-bounded-tasks.md)（`devflow-worker`）和白名单只读[公开文档读取](docs/engineering/opencode-public-documents.md)（`devflow_document`）。`main` 当前内置 Native v2，支持仓库调查、多文件变更集、明确批准、按清单修订（最多 3 次）与手动自检（最多 2 次）、受管理工作树修改、已保存测试命令及有限次数修复。 |
+| **门禁审查（Gate Review）** | 支持内置仓库只读审查（无需 OpenCode）或 Direct Provider；依据常驻阶段知识与已有证据提出带级别标记的意见、证据缺口、建议测试和策略建议，并可与待确认问题合并呈现。模型不会批准 Gate。 |
 | **有界协作** | 高级 Supervisor/Specialist 运行时采用预先定义的任务依赖图、共享预算、限定能力和工作区单写入者租约。详见 [V2.2 契约与评估范围](docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md)。 |
 
-项目讨论默认收起，在任务标题行点「讨论」后在任务页右侧展开，收起再打开时草稿仍在。新建会话时可选择执行方式，也可从历史记录重新打开会话，或通过会话页签菜单查看详情和模型调用记录。讨论可以保存为**待确认的节点提案**；保存本身不会修改代码、批准 Gate 或发布 PR。
+右侧独立的项目会话面板现称「**答疑**」（默认收起，点标题行或卡片上的「讨论」展开并直接显示待发送输入框，无需弹窗；收起再打开时草稿仍在），自动展示当前查看的任务、步骤与材料版本，并在消息中以简洁引用标签替代展开的完整引用头。答疑中的建议可直接**加入当前版本的修订清单**，或保存为**待确认的节点提案**；保存或加入清单本身不会修改代码、批准 Gate 或发布 PR。
 
 新建 Direct Provider 对话使用官方 `deepseek-flash` 时，普通回答直接显示 Markdown，读取操作使用原生 Function Calling。提案先保存候选再独立核对；核对失败或发现问题时，用户可以查看意见、重新核对，或明确确认后保存为尚未通过 AI 核对的待评审提案。旧会话保持原协议和进度；使用新版请新建独立对话。启用范围与回滚见 [ADR 0028](docs/adr/0028-native-conversations-and-proposal-review.md)。
 
@@ -80,15 +82,15 @@ _在历史步骤上的操作不会改变实际进度。「材料与版本」按�
 
 ## 知识、记忆与证据
 
-- **仓库知识**：Git 管理的 Markdown 是规范、决策、检查清单和项目上下文的可审查来源。检索结果带有引用；知识关系视图连接文档、术语和流程证据。
-- **Hindsight 试验接入**：选定知识可用于讨论、需求、设计、评审、编码和测试来源核验，支持配对项目显式启用本机私有知识投影。使用版本化语义模型、可恢复投影与当前原文回读；正式记忆仍做影子评估。网络默认关闭，小语料评测尚未证明混合检索优于词法。见[接入说明](docs/engineering/hindsight-integration.md)与[全链路验证记录](docs/validation/hindsight-fullchain-validation-20261020.md)。
-- **智能体记忆（Agent Memory）**：项目一次启用后，完成的聊天、编码验证及阶段材料进入 Hindsight 后台学习；有依据的支持类型自动保存，业务规则与冲突集中处理。测试命令可由受限策略保存为本人项目私有、30 天记忆；改动位置与修复经验仍需人工审阅。保留离线手动记住、固定、修订和删除，无 Run 的聊天也可使用。Native / OpenCode 编码、阶段生成、评审和讨论共用有界召回，检查作用范围、修订版本、过期和删除状态。见[自动记忆实现与使用说明](docs/engineering/automatic-memory.md)。
-- **有界上下文**：Native Coding 和 OpenCode 共用编码任务简报（Coding Brief）。已有摘要与明确约束用于压缩较早上下文，同时保留当前请求和选定的记忆。讨论长历史生成可追溯的确定性摘要，保留完整原文与配对工具记录，重启后重新加载当前材料、项目说明与有效记忆。上下文使用提供方相关的 Token 估算和字符/字节硬限制；不自动调用收费摘要模型。
-- **真实证据**：编码完成时，系统对照当前产物、代码差异和实际执行的测试记录检查结果。成功的评估样例不能替代缺失或过期的证据。记忆和模型建议均不能满足 Gate 条件或授权操作。
+- **仓库知识与常驻上下文（ADR 0025）**：仓库根目录的 `AGENTS.md`（无则 `CLAUDE.md`，上限 32 KiB）作为 L0 项目说明随各阶段调用一致提供；项目知识目录（默认 `docs/knowledge/`）按 front matter 的 `stages` 与 `gate` 组装为 L1 阶段知识上下文，Gate 治理检查仅针对声明覆盖当前阶段的规范文档。旧词法检索仅保留给显式调用方与评估基线。详见 [ADR 0025](docs/adr/0025-resident-knowledge-context.md)。
+- **Hindsight 仓库知识投影（试验）**：选定知识可用于讨论、需求、设计、评审、编码和测试来源核验，支持配对项目显式启用本机私有知识投影。采用版本化语义模型、可恢复投影与当前原文回读；本地 Compose 使用自带 `intfloat/multilingual-e5-small` 的多语言镜像，网络闸门默认关闭。见[接入说明](docs/engineering/hindsight-integration.md)与[全链路验证记录](docs/validation/hindsight-fullchain-validation-20261020.md)。
+- **项目记忆（Project Memory / Hindsight，ADR 0030）**：项目记忆是 DevFlow 当前唯一的活跃记忆系统；未开启项目记忆时没有记忆，旧版候选队列、业务规则待确认队列、「记住这条」与本地 BM25 召回已在 ADR 0030 第四期移除（历史旧方案见[自动经验记忆](docs/engineering/automatic-memory.md)）。
+  - **自动整段采集与预算中继**：每个已配对团队项目与记忆归属用户在 Hindsight 中拥有独立 bank，自动脱敏写入公开讨论（长讨论按 46 KiB 分段写入与补发）、结束的 Coding Run（非 `fake`）、已批准的澄清/设计/验收产物、Gate 评审结果，以及当前分支最近 30 天的 Git 提交信息（开启时一次性迁移旧版本地有效记忆 `legacy:agent-memory`）。Hindsight 不持有 Provider 密钥，抽取、观察归纳与知识页整理调用经 Electron 本机中继（`127.0.0.1:8891`）转发并按调用计入团队项目预算。
+  - **多语言召回、多意图拆分与知识页**：编码简报、阶段 Agent、Gate 评审与答疑共用 Hindsight 多语言召回（关闭重排和图扩展，按向量/关键词/时间倒数排名融合）；多子句请求自动拆分子意图召回并轮流合并；事实标注记录日期与距今天数并提醒先对照当前代码与已批准材料核对；沟通偏好单独召回置尾。每个 bank 维护五张 Hindsight 知识页，其中「每个任务都适用的约定」（`devflow-essentials`）自动注入编码简报（简版注入答疑、阶段与评审）。知识页的「项目记忆」面板支持开关、分页搜索查看、编辑/删除原始事实与经历、按来源忘记、清空与整理知识页；答疑另提供只读 `memory_search` 工具。每次发送或继续前核验记忆开关、归属及编辑/删除/清空回执状态。见 [ADR 0030](docs/adr/0030-hindsight-project-memory.md)、[项目记忆说明](docs/engineering/project-memory.md)与[收尾验证记录](docs/validation/project-memory-closeout-20261104.md)。
+- **有界上下文**：Native Coding 和 OpenCode 共用编码任务简报（Coding Brief）。已有摘要与明确约束用于压缩较早上下文，同时保留当前请求、选定记忆与常驻约定页（超出容量时先省略约定页或背景记忆，不截断必要输入）。讨论长历史生成可追溯的确定性摘要，保留完整原文与配对工具记录，压缩后在容量允许时重新附带沟通偏好与背景记忆；上下文使用提供方相关的 Token 估算和字符/字节硬限制，不自动调用收费摘要模型。
+- **真实证据**：编码完成时，系统对照当前产物、精确代码差异和实际执行的测试记录检查结果；测试阶段通过的报告需绑定已批准改动指纹并经人工显式确认才进入 PR 交付。成功的评估样例不能替代缺失或过期的证据，记忆和模型建议均不能满足 Gate 条件或授权操作。
 
-实现边界与实验记录见[记忆与上下文验证](docs/engineering/memory-context-execution-validation.md)、[记忆生命周期 ADR](docs/adr/0018-scoped-agent-memory-lifecycle.md)和[编码上下文 ADR](docs/adr/0021-coding-memory-context-and-evidence-evaluation.md)。
-
-记忆大小提示、讨论轮内新鲜度和持久压缩的整合基线与本地验证见 [P0/P1/P2 收尾记录](docs/validation/memory-p0-p2-20261004.md)，代码集成与 CI 结果见 [Memory PR #223](https://github.com/erich04/ai-devflow-studio/pull/223)。安装包是否包含这些变化，以[路线图的发布记录](docs/roadmap.md#当前发布)和对应版本证据为准。
+早期记忆生命周期基线与实验记录见[记忆与上下文验证](docs/engineering/memory-context-execution-validation.md)、[记忆生命周期 ADR](docs/adr/0018-scoped-agent-memory-lifecycle.md)、[编码上下文 ADR](docs/adr/0021-coding-memory-context-and-evidence-evaluation.md)与 [P0/P1/P2 收尾记录](docs/validation/memory-p0-p2-20261004.md)（[PR #223](https://github.com/erich04/ai-devflow-studio/pull/223)）。安装包是否包含这些变化，以[路线图的发布记录](docs/roadmap.md#当前发布)和对应版本证据为准。
 
 ![Electron 知识页：仓库 Markdown 索引已更新，同一份文档的引用按任务、材料与 Gate 分组列出](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/doc-tour-knowledge-1440x900.jpg)
 
@@ -103,7 +105,7 @@ _知识页展示仓库 Markdown 索引与当前任务的引用。同一份文档
 - **项目与请求**：创建团队项目（Team Project），在「项目任务」中提交团队请求（Work Request），再由已配对桌面端明确领取。有效项目成员可以在「设置 › 桌面连接」为自己生成有期限、仅能使用一次的桌面配对码。
 - **Web 审批**：需求确认与方案评审绑定桌面端上传的材料版本；材料版本未同步或已变化时不能批准，但仍可驳回。没有审批权限的成员看到“等待负责人审批”，不显示按钮。
 - **组织**：独立组织、成员关系、邀请、切换、归档/恢复和限定组织范围的 GitHub 仓库分配已实现，由 `DEVFLOW_MULTI_ORGANIZATION_ENABLED=true` 开启。默认入门流程仍为单团队模式。详见[部署指南](docs/guides/multi-organization-deployment.md)。
-- **预算与策略**：在 Web「设置」中查看用量、配置项目策略和预算、创建一次性预算批准；桌面端只读显示团队预算。当权威预算上下文不可用或超出作用范围时，付费 Coding 与 Gate Review 运行时在调用提供方前拒绝继续；受治理的模型调用也覆盖阶段生成和工作台对话。
+- **预算与策略**：在 Web「设置」中查看用量、配置项目策略和预算、创建一次性预算批准；桌面端「设置 › 模型与执行方式」按提供方 → 执行方式 → 团队预算的依赖顺序组织，仅突出阻断项与下一步动作，只读显示团队预算。当权威预算上下文不可用或超出作用范围时，付费 Coding 与 Gate Review 运行时在调用提供方前拒绝继续；受治理的模型调用也覆盖阶段生成、工作台对话与 Hindsight 项目记忆中继。版本化[运行费用目录](docs/engineering/runtime-pricing-catalog.md)已单独核验并覆盖 `deepseek-flash`、`deepseek-v4-flash` 与 `deepseek-v4-pro` 的费率及调用前上限。
 
 费用待确认的调用有可靠上界时按上界占用预算；否则当前操作会展示继续确认卡，由 Lead/Owner 明确勾选有限授权。它不修改历史账单，也不关闭预算。对话按步骤保留查询进展，每步最多自动重试两次。完整策略与容量、私有内容备份及会话工具授权见 [ADR 0027](docs/adr/0027-request-recovery-and-budget-continuation.md)；原生对话的后续决定见 [ADR 0028](docs/adr/0028-native-conversations-and-proposal-review.md)。
 
@@ -200,10 +202,10 @@ flowchart TB
 
 | 子系统 | 在架构中的作用 | 实现入口 |
 | --- | --- | --- |
-| **阶段生成与对话** | 澄清/设计生成正式产物；项目对话通过有限定范围的只读工具调查流程、产物、仓库文件和知识。Direct Provider 与只读 OpenCode 是两种执行选择。 | [`workflow-agent.ts`](packages/shared/src/workflow-agent.ts)、[`workbench-conversation-service.ts`](apps/desktop/electron/workbench-conversation-service.ts) |
-| **编码编排** | `coding-runtime` 准备受管理工作树和 Coding Brief，检查权限与预算，调用选定执行器，归档差异、测试、用量和结果。Native Coding 与 OpenCode 共用 Coding Executor 契约。 | [`coding-runtime.ts`](apps/desktop/electron/coding-runtime.ts)、[`coding-executor.ts`](apps/desktop/electron/coding-executor.ts)、[`native-coding-executor-v2.ts`](apps/desktop/electron/native-coding-executor-v2.ts) |
+| **阶段生成、决定页与对话** | 澄清/设计生成正式产物；纯函数投影驱动 01–04 统一决定页与本机修订清单；「答疑」通过受限只读工具调查流程、产物、仓库文件、知识、项目记忆与待批准改动。Direct Provider 与只读 OpenCode 是两种执行选择。 | [`workflow-agent.ts`](packages/shared/src/workflow-agent.ts)、[`gate-decision/`](apps/desktop/src/app/gate-decision)、[`build-test/`](apps/desktop/src/app/build-test)、[`workbench-conversation-service.ts`](apps/desktop/electron/workbench-conversation-service.ts) |
+| **编码编排** | `coding-runtime` 准备受管理工作树和 Coding Brief，检查权限与预算，调用选定执行器，归档不可变变更修订、自检历史、差异、测试、用量和结果（桌面 schema 42）。Native Coding（v2）与 OpenCode（支持问答、有界子任务与公开文档工具）共用 Coding Executor 契约。 | [`coding-runtime.ts`](apps/desktop/electron/coding-runtime.ts)、[`coding-executor.ts`](apps/desktop/electron/coding-executor.ts)、[`native-coding-executor-v2.ts`](apps/desktop/electron/native-coding-executor-v2.ts) |
 | **有界运行时与协作** | 观察、行动、评估、检查点保存组成有明确限制及恢复能力的执行循环。Supervisor/Specialist 协作增加预定义任务依赖、限定权限、共享预算与工作区归属；与单次阶段生成或审查调用分别建模。 | [`agent-runtime-runtime.ts`](apps/desktop/electron/agent-runtime-runtime.ts)、[`specialist-runtime-coordinator.ts`](apps/desktop/electron/specialist-runtime-coordinator.ts) |
-| **知识与记忆** | 仓库 Markdown 建立索引用于检索和引用。限定范围的记忆经人工或受限测试命令策略提升后可进入上下文。私有会话历史、工具事件和派生摘要单独保存。 | [`repository-knowledge.ts`](apps/desktop/electron/repository-knowledge.ts)、[`coding-context.ts`](apps/desktop/electron/coding-context.ts)、[`agent-memory-human-actions.ts`](apps/desktop/electron/agent-memory-human-actions.ts) |
+| **知识与项目记忆** | `AGENTS.md` 与 `docs/knowledge/` 按阶段常驻组装（ADR 0025）。Hindsight 项目记忆由本地采集队列自动写入，经桌面中继计入项目预算，并向编码简报、阶段、评审和答疑提供多语言召回与知识页（ADR 0030）。私有会话历史、工具事件和派生摘要单独保存。 | [`repository-knowledge.ts`](apps/desktop/electron/repository-knowledge.ts)、[`project-memory-service.ts`](apps/desktop/electron/project-memory-service.ts)、[`memory-model-relay.ts`](apps/desktop/electron/memory-model-relay.ts)、[`coding-context.ts`](apps/desktop/electron/coding-context.ts) |
 | **工具与 MCP** | 主进程管理的注册表校验工具定义与执行权限。可信本地 stdio MCP 安装与 OpenCode 对话临时只读 MCP 桥接各有边界。 | [`native-tool-registry.ts`](apps/desktop/electron/native-tool-registry.ts)、[`local-mcp-client.ts`](apps/desktop/electron/local-mcp-client.ts)、[`workbench-mcp-bridge.ts`](apps/desktop/electron/workbench-mcp-bridge.ts) |
 | **模型调用治理** | 每次请求预留预算并保存用量；结算上传失败保留有效结果，重放账本。未知费用保留为未知，有可靠上界时占用预算，否则使用明确的有限继续授权；运行时与权限限制仍独立生效。 | [`governed-provider.ts`](packages/shared/src/governed-provider.ts)、[`model-call-budget.ts`](apps/api/src/repositories/model-call-budget.ts) |
 
@@ -213,7 +215,8 @@ flowchart TB
 
 | 数据或决策 | 权威归属 | 跨边界传递的内容 |
 | --- | --- | --- |
-| 权威 Run、完整节点图、产物、执行/检查点状态、差异、测试输出、私有对话与记忆正文 | **Electron / 本地 SQLite 与文件** | 白名单内的 Run、测试、审查、编码、运行时、记忆和协作摘要；不包含对话。 |
+| 权威 Run、完整节点图、产物、变更修订与自检、执行/检查点状态、差异、测试输出、私有答疑对话 | **Electron / 本地 SQLite 与文件** | 白名单内的 Run、测试、审查、编码、运行时、记忆和协作摘要；不包含对话、自检正文或本地路径。 |
+| 项目记忆 bank 与 Hindsight 知识页 | **本机 Hindsight 服务 + Electron 本地队列与预算中继** | 抽取/归纳调用经本机中继走团队预算预留与结算；记忆正文与来源文档不上传 Team API。 |
 | 组织、成员关系、团队项目、工作请求、Gate 命令、策略、预算、仓库绑定与交付批准 | **Team API / PostgreSQL** | 向配对桌面端下发项目范围内的领取结果、命令、策略快照、预算决策与交付授权。 |
 | 团队 Run 投影与管理概览 | **API 根据桌面摘要派生的读取模型** | 供 Web 使用的版本化、脱敏、有损视图；不复制完整本地 Run，也不独立管理流程。 |
 | 已发布分支头与 Draft PR | **GitHub**，辅以本地/团队审计记录 | 桌面端推送获准提交；API 核验 GitHub 的实际分支头并记录 Draft PR 结果。 |
@@ -278,7 +281,7 @@ docs/adr/         架构决策与权限边界
 scripts/          集成冒烟测试、评估与发布检查
 ```
 
-首次阅读代码，建议依次查看 **[`domain.ts`](packages/shared/src/domain.ts) → [`workflow-transition.ts`](packages/shared/src/workflow-transition.ts) → [`workflow-runtime.ts`](apps/desktop/electron/workflow-runtime.ts) → [`main.ts`](apps/desktop/electron/main.ts) → [`server-request.ts`](apps/api/src/server-request.ts)**，再查看相关桌面或 Web 视图。设计理由可从[数据归属](docs/adr/0003-postgres-sqlite-data-boundary.md)、[有界运行时](docs/adr/0014-bounded-agent-runtime.md)、[记忆生命周期](docs/adr/0018-scoped-agent-memory-lifecycle.md)、[多智能体协作](docs/adr/0019-bounded-multi-agent-coordination.md)和[组织隔离](docs/adr/0023-independent-organizations.md)开始。
+首次阅读代码，建议依次查看 **[`domain.ts`](packages/shared/src/domain.ts) → [`workflow-transition.ts`](packages/shared/src/workflow-transition.ts) → [`workflow-runtime.ts`](apps/desktop/electron/workflow-runtime.ts) → [`main.ts`](apps/desktop/electron/main.ts) → [`server-request.ts`](apps/api/src/server-request.ts)**，再查看相关桌面或 Web 视图。设计理由可从[数据归属](docs/adr/0003-postgres-sqlite-data-boundary.md)、[有界运行时](docs/adr/0014-bounded-agent-runtime.md)、[多智能体协作](docs/adr/0019-bounded-multi-agent-coordination.md)、[组织隔离](docs/adr/0023-independent-organizations.md)、[常驻知识上下文](docs/adr/0025-resident-knowledge-context.md)和[Hindsight 项目记忆](docs/adr/0030-hindsight-project-memory.md)开始。
 
 [AI 原生软件生命周期对照](docs/engineering/anthropic-ai-native-sdlc-alignment-2026-09-10.zh-CN.md)记录了阶段交接、配置评估与维护反馈的历史分析和增量建议。当前交付边界到经核验的 Draft PR 与业务验收；生产部署、回滚和持续维护需要独立设计与授权。其他代码阅读资料见[研究索引](docs/research/README.md)，当前能力与发布状态仍以本 README 和路线图为准。
 
@@ -312,8 +315,8 @@ corepack pnpm dev:electron
 
 1. 在顶栏的项目菜单中选择一个已提交的小型 Git 仓库，在**设置 › 本地项目**保存检测到的测试命令。
 2. 点击**新建任务**，填写具体请求和验收标准。
-3. 在任务页生成需求澄清与方案，阅读材料，按状态行确认需求与方案 Gate。
-4. 在开发实现步骤运行编码，在状态行处理权限请求，查看工作树差异，再到测试步骤运行检查。
+3. 在任务页生成需求澄清与方案，在门禁决定页阅读材料、整理修订清单并按「你的决定」栏确认需求与方案 Gate。
+4. 在开发实现步骤运行编码，在决定页处理权限请求与精确差异，再到测试步骤运行检查并显式确认测试证据。
 5. 在「材料与版本」和「执行记录」中核对材料、测试、轨迹与用量。真实 GitHub 发布还需要团队配置、仓库绑定和独立交付批准。
 
 日常使用时，省略演示标志，在**设置 › 模型与执行方式**中配置所需提供方与执行器，并在付费模型调用前于**设置 › 团队连接**连接团队项目（顶栏的「团队连接」弹层显示连接状态），由团队在 Web「设置 › 预算」中配置预算。凭据和执行方式需要明确配置；安装 DevFlow 不会自动配置模型提供方。
@@ -370,9 +373,12 @@ corepack pnpm verify
 | `corepack pnpm test:e2e` | 使用隔离演示服务验证浏览器工作台与 Web 交互。 |
 | `corepack pnpm test:electron-smoke` | 真实 Electron 主进程/preload、本地 SQLite 与流程操作。 |
 | `corepack pnpm test:native-coding-electron-smoke` | 通过受控本地模型服务验证 Native Coding 批准、工作树修改、测试与证据。 |
-| `corepack pnpm test:workbench-conversation-electron-smoke` | 真实 Electron 中验证对话、逐步骤恢复、预算继续、原生工具、候选人工确认保存与重启历史；模型端点为本地模拟。 |
+| `corepack pnpm test:build-test-electron-smoke` | 通过本机模型替身与真实 Electron 验证开发/测试决定页、修订清单、自动修复、证据失效与显式确认。 |
+| `corepack pnpm test:workbench-conversation-electron-smoke` | 真实 Electron 中验证答疑对话、逐步骤恢复、预算继续、原生工具、候选人工确认保存与重启历史；模型端点为本地模拟。 |
 | `corepack pnpm test:native-conversation-live` | 显式选择既有授权凭证，在隔离 Electron 中验证官方 flash 的原生协议和提案；会真实计费，配置与证据见 [#231 验证记录](docs/validation/issue-231-native-conversation-20261010.md)。 |
 | `corepack pnpm test:stage-agent-design-electron` | 真实 OpenCode 与 Electron 生成及修订方案、取消、重试和重启；模型端点为本地模拟。 |
+| `corepack pnpm test:opencode-question-electron` / `corepack pnpm test:opencode-task-electron` | 真实 OpenCode 与 Electron 验证交互式问答、单层串行有界子任务、命令审批、预算拦截、取消与刷新/重启边界；模型端点为本地合成服务。 |
+| `corepack pnpm hindsight:up` + `corepack pnpm test:hindsight-electron` | 启动本机多语言 Hindsight 服务，或在关闭网络闸门下验证 Electron Hindsight 配置、持久化和来源核验。项目记忆验证入口见[项目记忆说明](docs/engineering/project-memory.md)。 |
 | `corepack pnpm test:postgres-smoke` | Postgres 迁移、持久化、策略、批准与脱敏同步。 |
 | `corepack pnpm test:organization-postgres` | 在专用测试数据库中验证组织成员、隔离、配对与仓库分配。 |
 | `DEVFLOW_BUDGET_TEST_DATABASE_URL=... corepack pnpm test:budget-postgres` | 在专用 Postgres 的临时 schema 验证并发预算预留、继续授权、重启与迟到用量；需数据库建 schema 权限。 |
@@ -390,11 +396,11 @@ corepack pnpm verify
 ## 当前边界
 
 - 产品面向自行部署的团队工作台；运营托管公共 SaaS 尚不属于当前发布范围。
-- 本地执行由 Electron 负责。Web 批准不提供远程 Shell 能力，对话也不能绕过流程权限。
-- 记忆具有版本和作用范围；新增长期记忆仍需明确提升。会话历史与智能体记忆分别保存。
-- 已实现经过评估的混合检索路径与可信本地 stdio MCP 执行；外部向量提供方集成和远程 MCP 传输仍延期处理。
-- 有界协作具备明确限制。编码记忆集成没有扩展阶段/专家智能体的记忆路由。
-- 草稿 PR 交付和业务验收不包含自动合并、生产部署或生产运维。
+- 本地执行由 Electron 负责。Web 批准不提供远程 Shell 能力，答疑对话也不能绕过流程权限。
+- 项目记忆由已配对项目在 Hindsight 中的独立 bank 自动采集并经本机中继计入团队预算（ADR 0030），未配对项目暂不启用项目记忆；记忆仅作低信任背景，不能满足 Gate 条件或授权操作。会话历史与项目记忆分别保存。
+- 已实现常驻阶段知识、经过评估的混合检索路径、本机 Hindsight 接入与可信本地 stdio MCP 执行；外部托管向量服务集成和远程 MCP 传输仍延期处理。
+- 任务页 01–04 阶段已统一为决定页，05 PR 交付与 06 业务验收的决定页改造留待后续 UX 第 2b 批；多轮 Native Coding Harness v3 仍在独立分支（[PR #238](https://github.com/erich04/ai-devflow-studio/pull/238)）开发验证，尚未合入 `main`。
+- 有界协作具备明确限制。草稿 PR 交付和业务验收不包含自动合并、生产部署或生产运维。
 - macOS 已有真实窗口验证和未签名试用包；Windows 具备 CI/源码兼容性覆盖。签名安装包与完整平台发布验收仍需单独完成。
 
 <a id="documentation"></a>
@@ -405,8 +411,10 @@ corepack pnpm verify
 | --- | --- |
 | 项目简介 | [项目简介](docs/product/project-introduction.zh-CN.md) |
 | 产品术语与历史设计 | [产品定义](docs/product/product-definition.md)、[上下文术语表](CONTEXT.md)、[架构决策](docs/adr/) |
-| 任务页与 Web 控制台的结构 | [工作区改造方案](docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md)、[界面设计理由](docs/product/details/ui-design-rationale.md)、[对话架构](docs/engineering/workbench-conversations.md) |
-| 记忆、上下文与真实证据检查 | [实现验证](docs/engineering/memory-context-execution-validation.md) |
+| 任务页、决定页与 Web 控制台结构 | [工作区改造方案](docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md)、[UX 第 1 批（澄清/设计）](docs/plans/ux-batch1-clarify-design-2026-10-30.zh-CN.md)、[UX 第 2a 批（开发/测试）](docs/plans/ux-batch2a-build-test-2026-10-31.zh-CN.md)、[界面设计理由](docs/product/details/ui-design-rationale.md)、[对话架构](docs/engineering/workbench-conversations.md) |
+| 知识、项目记忆与上下文 | [常驻知识上下文（ADR 0025）](docs/adr/0025-resident-knowledge-context.md)、[项目记忆（Hindsight）](docs/engineering/project-memory.md)、[ADR 0030](docs/adr/0030-hindsight-project-memory.md)、[Hindsight 接入](docs/engineering/hindsight-integration.md)、[项目记忆收尾验证](docs/validation/project-memory-closeout-20261104.md)、[早期记忆与上下文验证](docs/engineering/memory-context-execution-validation.md) |
+| OpenCode 编码扩展 | [问答协议](docs/engineering/opencode-question-protocol.md)、[有界子任务](docs/engineering/opencode-bounded-tasks.md)、[公开文档读取](docs/engineering/opencode-public-documents.md)、[B 工作包交付验收](docs/validation/devflow-b-delivery-20261024.md) |
+| 模型设置、费用与定价目录 | [运行费用目录](docs/engineering/runtime-pricing-catalog.md)、[预算继续与恢复（ADR 0027）](docs/adr/0027-request-recovery-and-budget-continuation.md) |
 | 组织与租户隔离 | [部署](docs/guides/multi-organization-deployment.md)、[ADR 0023](docs/adr/0023-independent-organizations.md)、[验证](docs/validation/multi-organization-20260921.md) |
 | 桌面配对 | [配对权限与诊断](docs/engineering/desktop-pairing-security.md) |
 | 自行部署团队环境 | [试用部署指南](docs/guides/devflow-studio-self-hosted-pilot.md) |
